@@ -289,7 +289,7 @@ an explicit per-environment Vault value.
 
 | Class | Services | Compose value | Value in the container | Issued by | Reader |
 |---|---|---|---|---|---|
-| `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `common/deploy/sync_pipeline.py`, `common/core/service_identity.py` | `platform/30.todo/app.py` shows the first 7 characters. `platform/alerting` has no reader. |
+| `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `common/deploy/sync_pipeline.py`, `common/core/service_identity.py` | The Canary Todo page (infra2-sdk, canary/todo/app.py) shows the first 7 characters. `platform/30.todo/probe_health.py` compares its `git_sha` with the deployed commit in the staging gate. `platform/alerting` has no reader. |
 | `app` | `finance_report/app`, `truealpha/app`, `truealpha/data_engine` | `${GIT_COMMIT_SHA:-unknown}` | The image tag. It is a release tag such as `v0.1.74`, or a 7-hex short SHA for a preview from a commit, branch or pull request. | `common/deploy/promote.py`, `common/deploy/preview.py` | The `git_sha` and `version` fields of the app health payload. The `finance_report/app` preview readiness probe compares them with the image tag (`common/deploy/preview.py`, `common/deploy/env_config.py`). |
 
 An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy sets `GIT_COMMIT_SHA` and `IMAGE_TAG` to the same value.

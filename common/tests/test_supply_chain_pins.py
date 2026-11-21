@@ -156,7 +156,6 @@ def test_python_lockfile_and_dockerfiles_enforce_sha256_hashes() -> None:
     sdk_dockerfiles = [
         REPO_ROOT / "bootstrap/06.iac_runner/Dockerfile",
         REPO_ROOT / "platform/12.alerting/Dockerfile",
-        REPO_ROOT / "platform/30.todo/Dockerfile",
     ]
     for df in sdk_dockerfiles:
         text = df.read_text(encoding="utf-8")

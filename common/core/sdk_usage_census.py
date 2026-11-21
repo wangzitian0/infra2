@@ -168,6 +168,11 @@ def default_consumers(root: Path = REPO_ROOT) -> dict[str, Path]:
             or (sub / "apps" / "backend" / "pyproject.toml").is_file()
         ):
             consumers[name] = sub
+    # The Canary Todo app moved into infra2-sdk canary/todo (infra2-sdk#247). It stays a
+    # production consumer of the SDK surface; read it from the SDK submodule checkout.
+    canary = root / "repos" / "infra2-sdk" / "canary" / "todo"
+    if (canary / "app.py").is_file():
+        consumers["canary_todo"] = canary
     return consumers
 
 
@@ -1184,6 +1189,14 @@ def _consumer_lock_candidates(consumer_name: str = "") -> tuple[str, ...]:
 
 def consumer_pinned_version(root: Path, *, consumer_name: str = "") -> str | None:
     """Extract the pinned infra2-sdk version from a consumer repository."""
+    if consumer_name == "canary_todo":
+        # The Canary runs the SDK of its image tag; infra2 pins it in the todo compose (#247).
+        from common.deploy.canary_pin import CanaryPinError, canary_sdk_version
+
+        try:
+            return canary_sdk_version()
+        except (OSError, CanaryPinError):
+            return None
     for rel in _consumer_lock_candidates(consumer_name):
         lock_path = root / rel
         if lock_path.is_file():

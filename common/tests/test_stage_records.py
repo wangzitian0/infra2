@@ -6,7 +6,6 @@ import io
 import json
 import urllib.error
 import zipfile
-from importlib.metadata import version as metadata_version
 from pathlib import Path
 
 import pytest
@@ -118,7 +117,10 @@ def test_writer_emits_three_valid_records(monkeypatch, tmp_path) -> None:
     assert loaded["post"].checks[0].detail == "[v3.1.23] ok"
     assert "infra:platform/alerting" in loaded["post"].units
     assert loaded["post"].uncovered == ()
-    assert f"sdk:{metadata_version('infra2-sdk')}" in loaded["post"].units
+    # sdk:X is the Canary image pin, not the runner's SDK (infra2-sdk#247)
+    from common.deploy.canary_pin import canary_sdk_version
+
+    assert f"sdk:{canary_sdk_version()}" in loaded["post"].units
     assert {r.verdict for r in loaded.values()} == {"pass"}
 
 
@@ -903,8 +905,6 @@ def test_the_sdk_unit_never_raises(monkeypatch, capsys) -> None:
     monkeypatch.setattr(writer, "version", missing)
     assert writer.sdk_unit() == "sdk:unknown"
     assert "::warning::" in capsys.readouterr().out
-    plan = reconcile.build_plan(["platform/12.alerting/compose.yaml"])
-    assert "sdk:unknown" in reconcile.plan_units(plan)
 
 
 def test_every_record_upload_step_is_allowed_to_fail() -> None:

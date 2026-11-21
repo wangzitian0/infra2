@@ -162,8 +162,8 @@ entries:
     summary: Canary Todo 平台基建校验工具
     description: Canary Todo service for platform infrastructure acceptance and physical runtime verification.
     proofs:
-      - platform/30.todo/app.py
       - platform/30.todo/compose.yaml
+      - common/deploy/canary_pin.py
       - platform/30.todo/deploy.py
       - platform/30.todo/env.manifest.json
       - platform/30.todo/runtime-hooks.manifest.json

@@ -134,7 +134,8 @@ def test_every_python_image_reference_has_the_version_of_the_file() -> None:
         ):
             refs.append((rel, tag))
     dockerfiles = {rel for rel, _ in refs if "Dockerfile" in rel}
-    assert len(dockerfiles) >= 4, f"the scan found too few Python base images: {refs}"
+    # 3 Dockerfiles since the Canary Todo image moved to infra2-sdk (#247): vault, iac_runner, alerting.
+    assert len(dockerfiles) >= 3, f"the scan found too few Python base images: {refs}"
     wrong = [
         (rel, tag)
         for rel, tag in refs

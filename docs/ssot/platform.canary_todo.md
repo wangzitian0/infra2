@@ -8,12 +8,13 @@
 
 ## 1. Source of Truth
 
+> **Split (infra2-sdk#247, infra2#1823 Step 0).** The app code lives in infra2-sdk `canary/todo/`. infra2 keeps the deploy declaration (`platform/30.todo/*`), the probes and the staging gate. A new SDK version reaches the Canary by a change of the image pin in `platform/30.todo/compose.yaml`; the train records `sdk:X` from that pin (`plan_units` -> `canary_sdk_unit`), and `tools/canary_verify.py` checks that the running container reports the same SDK.
+
 | Dimension | Location | Role |
 |-----------|----------|------|
-| Service code and probes | `platform/30.todo/app.py` | Probes, status document, startup `validate_startup_environment`, custom OTel metrics, telemetry bootstrap |
-| Web UI & capability matrix | `platform/30.todo/ui.py` | HTML UI rendering and capability matrix view |
+| Service code, probes and UI | infra2-sdk `canary/todo/app.py`, `canary/todo/ui.py` | Probes, status document, startup `validate_startup_environment`, custom OTel metrics, telemetry bootstrap, HTML UI. Their tests are in infra2-sdk `canary/todo/tests/` (infra2-sdk#247). |
 | Container topology | `platform/30.todo/compose.yaml` | App container, vault-agent sidecar, Traefik routers, `IAC_MOUNT_SHA256_*` fingerprint env vars |
-| Image | `platform/30.todo/Dockerfile` | Python image of the version in `.python-version`, pinned by digest. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
+| Image | `ghcr.io/wangzitian0/infra2-canary-todo:vX.Y.Z@sha256:...` | infra2-sdk `release.yml` builds it from `canary/todo` at tag `vX.Y.Z` and installs the SDK from the same source, so the tag is the SDK version the Canary proves. The `todo` service of `platform/30.todo/compose.yaml` holds the one pin; `common/deploy/canary_pin.py` is its one reader. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role, `rendered_mount_fingerprints()` |
 | Secret & env contract | `platform/30.todo/env.manifest.json` | Enforced at startup via `assert_environment` and used to generate `secrets.ctmpl` and `vault-policy.hcl` |
 | Runtime verification hooks | `platform/30.todo/runtime-hooks.manifest.json` | 5-slot schema v2 runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`), executed by `tools/reconcile_iac_inputs.py` |
@@ -88,7 +89,7 @@ A deploy restart therefore clears as soon as subsequent healthy probe ticks land
 
 ## 3A. Runtime Hooks & Mount Fingerprints
 
-- **Startup environment validation**: `validate_startup_environment()` in `platform/30.todo/app.py` calls `assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)` during `main()` startup so missing required variables in `platform/30.todo/env.manifest.json` fail closed before Uvicorn binds.
+- **Startup environment validation**: `validate_startup_environment()` in infra2-sdk `canary/todo/app.py` calls `assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)` during `main()` startup so missing required variables in `platform/30.todo/env.manifest.json` fail closed before Uvicorn binds.
 - **Mount fingerprints**: `TodoDeployer.rendered_mount_fingerprints()` in `platform/30.todo/deploy.py` computes SHA-256 digests of the rendered `vault-agent.hcl` and `secrets.ctmpl` files and injects `IAC_MOUNT_SHA256_VAULT_AGENT_HCL` and `IAC_MOUNT_SHA256_SECRETS_CTMPL` into `platform/30.todo/compose.yaml`, forcing container recreation when secret templates change.
 - **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the 5-slot schema v2 verification contract (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`). `staging_gate` and `prod_gate` pass only when the `/api/health` body has `canary.ok` true and `git_sha` equal to the commit of `EXPECTED_SHA`. A verdict older than 180 s fails the gate. `smoke` reads the HTTP status only. The manifest is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
 - **Dashboard & custom OTel metrics**: `platform/30.todo/dashboard.json` defines the SigNoz v5 dashboard discovered by `common/observability_dashboards.py`, charting `canary.probe.duration_ms` and `canary.probe.outcomes`, plus four LLM panels: `todo-llm-token-usage` (`gen_ai.client.token.usage.sum`), `todo-llm-operation-duration` (`gen_ai.client.operation.duration.bucket`), `todo-llm-cost-by-call-site` (`chat` span `operation.cost`) and `todo-llm-tokens-by-call-site` (`chat` span `gen_ai.usage.*_tokens`). `common/tests/test_observability_dashboards.py` pins the panel list.
@@ -138,7 +139,7 @@ Without step 3 the `s3` check reports `unconfigured`, with the names of the miss
 
 Each run emits one `canary.run` span with one `canary.check.<name>` child span per check, and logs the outcome. SigNoz separates the environments by `deployment.environment.name`.
 
-**Log lines (#1436).** A run where every check passes logs one INFO line, `canary run ok: 3 write paths passed`. A run with a failed or unconfigured gating check logs `canary run red: ...` at ERROR. A check that does not pass logs a WARNING, `canary check <name> is <status>: <reason>`. `app.py` sets the `httpx` and `httpcore` loggers to WARNING after `init_service`. Before this, `httpx` logged one INFO line for each successful probe request, so the root level INFO exported three such lines for each run. They were 75% of the exported log lines (24 h, SigNoz ClickHouse, 2026-11-05). A successful probe request now logs nothing. A WARNING or ERROR record of these libraries is still exported. `httpx` logs no WARNING for a refused connection or an HTTP 5xx response, so the service line `canary check <name> is fail: <reason>` is the log of a failed probe. `common/tests/test_todo_probe_log_noise.py` loads the real app and proves each rule.
+**Log lines (#1436).** A run where every check passes logs one INFO line, `canary run ok: 3 write paths passed`. A run with a failed or unconfigured gating check logs `canary run red: ...` at ERROR. A check that does not pass logs a WARNING, `canary check <name> is <status>: <reason>`. `app.py` sets the `httpx` and `httpcore` loggers to WARNING after `init_service`. Before this, `httpx` logged one INFO line for each successful probe request, so the root level INFO exported three such lines for each run. They were 75% of the exported log lines (24 h, SigNoz ClickHouse, 2026-11-05). A successful probe request now logs nothing. A WARNING or ERROR record of these libraries is still exported. `httpx` logs no WARNING for a refused connection or an HTTP 5xx response, so the service line `canary check <name> is fail: <reason>` is the log of a failed probe. infra2-sdk canary/todo/tests/test_probe_log_noise.py loads the real app and proves each rule.
 
 ## 5A. Preview slot (#1647)
 

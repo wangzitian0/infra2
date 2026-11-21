@@ -71,7 +71,8 @@ from common.deploy.env_config import (
     preview_service_config,
 )
 from common.deploy.github_api import API as GITHUB_API, github_headers
-from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
+from common.deploy.stage_record import utc_now, write_stage_record
+from common.deploy.canary_pin import APP_SDK_RANGE, canary_sdk_unit, in_app_sdk_range
 from common.deploy.stage_record_reader import verified_sdk_versions
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
@@ -998,6 +999,12 @@ def assert_app_sdk_version_verified(
             repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
         )
     )
+    if not in_app_sdk_range(sdk_ver):
+        low, high = APP_SDK_RANGE
+        raise UnverifiedSdkError(
+            f"{service}@{app_tag} pins infra2-sdk {sdk_ver}, outside the accepted app "
+            f"range [{low}, {high}) of common/deploy/canary_pin.py"
+        )
     if sdk_ver not in verified:
         raise UnverifiedSdkError(
             f"{service}@{app_tag} pins infra2-sdk {sdk_ver}, which has not passed "
@@ -2884,12 +2891,14 @@ _HARNESS_DIRS = frozenset({"tools", "common", "harness", ".github"})
 
 
 def plan_units(plan: ReconcilePlan) -> tuple[str, ...]:
-    """The units of a stage record: services of the plan, changed harness trees and the SDK pin."""
+    """The units of a stage record: services of the plan, changed harness trees and the SDK
+    version of the Canary image (``common/deploy/canary_pin.py``), so ``sdk:X`` names the SDK
+    that the Canary ``staging_gate`` proved, not the SDK of this runner (infra2-sdk#247)."""
     harness = {f.split("/", 1)[0] for f in plan.dropped if "/" in f} & _HARNESS_DIRS
     return (
         *(f"{'app' if s in APP_SOURCES else 'infra'}:{s}" for s in plan.services),
         *(f"harness:{d}" for d in sorted(harness)),
-        sdk_unit(),
+        canary_sdk_unit(),
     )
 
 

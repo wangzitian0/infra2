@@ -82,7 +82,7 @@ Budgets come from the Workspace tier "Pipeline time contract", not from this fil
 | Artifact | app image and app tag | wheel version | infra2 release tag | rendered rule commit; gate or release-code commit |
 | Blast radius | one app | every service that pins the version | every app on the host | every pipeline and every agent |
 | Own environment | exists: yes | exists: no, the Canary, then the apps | exists: yes | target: no, a replay, then the next real run |
-| Door into the train | exists: a bot PR moves the app pin in `harness/repos.yaml` | target: a bot PR moves the Canary pin; app pin PRs open after the Canary passes | exists: merge, then a release tag | target: release code rides its own release tag. target: rules and skills use one render PR per repository |
+| Door into the train | exists: a bot PR moves the app pin in `harness/repos.yaml` | exists: the Canary image pin in `platform/30.todo/compose.yaml` (infra2-sdk publishes `infra2-canary-todo:<tag>`, infra2-sdk#247). target: a bot PR moves that pin; app pin PRs open after the Canary passes | exists: merge, then a release tag | target: release code rides its own release tag. target: rules and skills use one render PR per repository |
 | Proved by | exists: its own hook checks | exists: the Canary Todo `staging_gate` | exists: the `staging_gate` of each deployed unit. target: every app's `staging_gate`; the changed units from zero first. | target: a replay on recorded inputs, then the record of the next run |
 
 **Rules**
@@ -93,6 +93,7 @@ Budgets come from the Workspace tier "Pipeline time contract", not from this fil
 4. A stage that passes pre and operation lets the chain go on. Its post runs on its own and can run again with no deploy. Preview is the one exception: it is torn down at once, so its post runs before the teardown and holds the merge.
 5. Proof isolation grows with the blast radius: App < Infra < SDK < Harness. A harness or release-code change rides its own release tag. An SDK version goes to the Canary first. An infra change deploys from zero in a Preview slot. App and infra changes may share a release tag (at most 4 PRs).
 6. A kind with no environment of its own uses its consumers in a fixed order. SDK: Canary, then the apps. Harness: replay, then its own tag, then every later run. No step skips the order.
+6a. infra2 accepts ranges, not one SDK version (#1823). An app SDK version must lie in `APP_SDK_RANGE` of `common/deploy/canary_pin.py` and in the Canary-verified set (`verified_sdk_versions`). The hook manifest schema range is the set of schemas that the SDK pinned by infra2 itself reads (`infra2_sdk.manifests`). The infra2 own SDK pin (`uv.lock`) is a library pin of its tools; it does not choose the Canary SDK. The `sdk:X` unit of a staging train record is the Canary image pin.
 7. One train reaches Staging and Prod: the infra2 release tag. Each kind enters it through one door. A bot opens each pin PR and each render PR. The bot closes a PR that a newer PR replaces. A green PR merges through the merge gate.
 8. Budgets come from the Workspace tier, not from the SDK `stages.yaml`.
 9. Alert is event-driven. Report is time-driven ([ops.observability.md](./ops.observability.md) section 2, `docs/ssot/watchdog-signals.yaml`).

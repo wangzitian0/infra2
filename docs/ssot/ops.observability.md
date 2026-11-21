@@ -601,10 +601,10 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 | synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
 | IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `common/tests/test_service_identity*.py` | ✅ |
 | truealpha 端点与身份签发(llm 容器拿到 collector 端点 + 各入口签发的身份;端点不无身份出现、不进 host 网络、不进 web;sync 与 promote/preview 同名)(#906) | `common/tests/test_truealpha_app.py`, `test_deploy_primitive.py`, `test_preview_lifecycle.py` | ✅ |
-| Canary Todo depth: real Redis/Postgres/S3 write paths fail on NOAUTH, `E`, denied write; the probe consumer, the SSO-only routing, the telemetry bootstrap and the issued identity (#991, #1242) | `common/tests/test_todo_canary_depth.py`, `common/tests/test_todo_service.py`, `common/tests/test_todo_issued_identity.py` | ✅ |
+| Canary Todo depth: real Redis/Postgres/S3 write paths fail on NOAUTH, `E`, denied write; the probe consumer, the SSO-only routing, the telemetry bootstrap and the issued identity (#991, #1242) | `common/tests/test_todo_canary_depth.py`, `common/tests/test_todo_service.py`, infra2-sdk canary/todo/tests/test_issued_identity.py | ✅ |
 | Every `init_service` caller under `platform/` ships OpenTelemetry end to end: the Deployer issues the identity, the compose passes it with the endpoint, the image installs the packages, the app has one bootstrap (#1209) | `common/tests/test_platform_otel_adoption.py` | ✅ |
 | Every `init_service` caller passes the literal `strict_otel` value its service needs: alerting `False`, todo `True` (#1238) | `common/tests/test_platform_otel_adoption.py` | ✅ |
-| `clear_telemetry_env` removes every SDK contract variable, every alias and every `OTEL_*` name from the environment of a test (#1238) | `common/tests/test_ambient_env.py`, `common/tests/test_todo_logging_order.py` | ✅ |
+| `clear_telemetry_env` removes every SDK contract variable, every alias and every `OTEL_*` name from the environment of a test (#1238) | `common/tests/test_ambient_env.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---

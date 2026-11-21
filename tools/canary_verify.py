@@ -259,10 +259,53 @@ def _parse_sdk_version_from_lock_text(lock_text: str) -> str:
     return parse_wheel_version(lock_text)
 
 
+def _parse_canary_sdk_version_from_compose_text(compose_text: str) -> str:
+    """SDK version of the Canary image pin (common/deploy/canary_pin.py), or "" (infra2-sdk#247)."""
+    from common.deploy.canary_pin import CanaryPinError, canary_image_from_compose_text
+
+    try:
+        return canary_image_from_compose_text(compose_text)[1]
+    except (CanaryPinError, AttributeError, TypeError):
+        return ""
+
+
 def _read_locked_sdk_version_file(path: Path) -> str:
     if not path.exists():
         return ""
     return _parse_sdk_version_from_lock_text(path.read_text(encoding="utf-8"))
+
+
+def _sdk_version_of_checkout(root: Path) -> str:
+    """The Canary SDK of a checkout: the compose image pin, else (releases before #247) uv.lock."""
+    compose = root / "platform/30.todo/compose.yaml"
+    if compose.exists():
+        version_str = _parse_canary_sdk_version_from_compose_text(
+            compose.read_text(encoding="utf-8")
+        )
+        if version_str:
+            return version_str
+    return _read_locked_sdk_version_file(root / "uv.lock")
+
+
+def _sdk_version_at_ref(root: Path, ref: str, runner) -> tuple[bool, str]:
+    """``(found, version)`` of the Canary SDK at ``ref``: the compose pin, else uv.lock."""
+    compose = runner(
+        ["git", "-C", str(root), "show", f"{ref}:platform/30.todo/compose.yaml"],
+        capture_output=True,
+        text=True,
+    )
+    if compose.returncode == 0:
+        version_str = _parse_canary_sdk_version_from_compose_text(compose.stdout)
+        if version_str:
+            return True, version_str
+    lock = runner(
+        ["git", "-C", str(root), "show", f"{ref}:uv.lock"],
+        capture_output=True,
+        text=True,
+    )
+    if lock.returncode != 0:
+        return False, ""
+    return True, _parse_sdk_version_from_lock_text(lock.stdout)
 
 
 def _resolve_locked_sdk_version(
@@ -272,7 +315,11 @@ def _resolve_locked_sdk_version(
     repo_root: Path | None = None,
     runner=subprocess.run,
 ) -> str:
-    """Read the infra2-sdk package version pinned in the release's uv.lock (#1289)."""
+    """The SDK version the deployed Canary must run (#1289, infra2-sdk#247).
+
+    It reads the release that the environment serves: the Canary image pin of
+    ``platform/30.todo/compose.yaml``, else ``uv.lock`` for a release before #247.
+    """
     if lock_path is not None:
         return _read_locked_sdk_version_file(lock_path)
     root = repo_root or Path(__file__).resolve().parents[1]
@@ -288,12 +335,8 @@ def _resolve_locked_sdk_version(
             remote_ver = remote_production_marker(repo_root=root, runner=runner)
             if remote_ver:
                 marker_ref = f"{PRODUCTION_MARKER_PREFIX}{remote_ver}"
-                proc = runner(
-                    ["git", "-C", str(root), "show", f"{marker_ref}:uv.lock"],
-                    capture_output=True,
-                    text=True,
-                )
-                if proc.returncode != 0:
+                found, version_str = _sdk_version_at_ref(root, marker_ref, runner)
+                if not found:
                     fetched = runner(
                         [
                             "git",
@@ -308,36 +351,28 @@ def _resolve_locked_sdk_version(
                         text=True,
                     )
                     if fetched.returncode == 0:
-                        proc = runner(
-                            ["git", "-C", str(root), "show", f"{marker_ref}:uv.lock"],
-                            capture_output=True,
-                            text=True,
+                        found, version_str = _sdk_version_at_ref(
+                            root, marker_ref, runner
                         )
-                if proc.returncode != 0:
-                    proc = runner(
-                        ["git", "-C", str(root), "show", f"{remote_ver}:uv.lock"],
-                        capture_output=True,
-                        text=True,
-                    )
-                if proc.returncode == 0:
-                    version_str = _parse_sdk_version_from_lock_text(proc.stdout)
-                    if version_str:
-                        return version_str
+                if not found:
+                    found, version_str = _sdk_version_at_ref(root, remote_ver, runner)
+                if found and version_str:
+                    return version_str
             ref = production_marker(repo_root=root, runner=runner)
         else:
             ref = newest_release_tag(repo_root=root, runner=runner)
-        proc = runner(
-            ["git", "-C", str(root), "show", f"{ref}:uv.lock"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        version_str = _parse_sdk_version_from_lock_text(proc.stdout)
-        if version_str:
+        found, version_str = _sdk_version_at_ref(root, ref, runner)
+        if found and version_str:
             return version_str
     except Exception:
         pass
-    version_str = _read_locked_sdk_version_file(root / "uv.lock")
+    # Production still serves a host-built Canary until a promotion carries the pin: its
+    # last fallback is uv.lock, never the checkout's new pin.
+    version_str = (
+        _read_locked_sdk_version_file(root / "uv.lock")
+        if environment == "production"
+        else _sdk_version_of_checkout(root)
+    )
     if version_str:
         return version_str
     try:

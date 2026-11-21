@@ -42,14 +42,13 @@ ROOT = Path(__file__).resolve().parents[2]
 PLATFORM = ROOT / "platform"
 COLLECTOR_OTLP_HTTP = "http://platform-signoz-otel-collector:4318"
 #: The callers that exist today. They prove that the scanner finds something.
-KNOWN_CALLERS = {"platform/12.alerting/app.py", "platform/30.todo/app.py"}
+#: The Canary Todo is a caller too; it lives in infra2-sdk canary/todo (#247).
+KNOWN_CALLERS = {"platform/12.alerting/app.py"}
 #: The `strict_otel` value each caller passes (#1238).
 #: The SDK default turns strict in 3.4.0. A caller that states no value follows it.
 #: The bridge pages people: a bad `OTEL_*` value is logged and never stops it.
-#: The Canary Todo is strict: a bad `OTEL_*` value stops it.
 STRICT_OTEL_POLICY = {
     "platform/12.alerting/app.py": False,
-    "platform/30.todo/app.py": True,
 }
 
 

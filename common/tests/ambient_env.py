@@ -1,6 +1,6 @@
 """Clear the telemetry variables of the developer shell before a test loads an app.
 
-`platform/30.todo/app.py` and `platform/12.alerting/app.py` call `init_service` when the module
+`platform/12.alerting/app.py` calls `init_service` when the module
 loads. `init_service` reads the service name, the version and the `OTEL_*` variables of the SDK
 contract. In its default mode it also reads the tier variables and checks each alias pair.
 The todo app uses the identity mode, which skips the tier variables and still checks
