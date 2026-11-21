@@ -715,13 +715,30 @@ def schema3_empty_cells(manifest: RuntimeHooksManifest, slot: str) -> tuple[str,
 
     ``run_cell`` fails a cell with 0 active checks, so an empty cell would fail its stage.
     """
-    filled = {cell for check in manifest.checks for cell in resolve_check_cells(check)}
+    filled = {
+        cell
+        for check in manifest.checks
+        if check.off is None
+        for cell in resolve_check_cells(check)
+    }
     return tuple(cell for cell in _SLOT_CELLS.get(slot, ()) if cell not in filled)
+
+
+def schema3_required_env(manifest: RuntimeHooksManifest, slot: str) -> tuple[str, ...]:
+    """Required env names of a schema 3 ``slot``: the manifest list plus each active check
+    of its cells."""
+    cells = set(_SLOT_CELLS.get(slot, ()))
+    names = list(manifest.required_env)
+    for check in manifest.checks:
+        if check.off is None and cells & set(resolve_check_cells(check)):
+            names.extend(check.required_env)
+    return tuple(dict.fromkeys(names))
 
 
 def _schema3_env(
     manifest: RuntimeHooksManifest,
     *,
+    slot: str = "",
     app_url: str,
     environment: str,
     version_ref: str,
@@ -740,6 +757,14 @@ def _schema3_env(
     for env_key, default_val in _hook_context_env(app_url, environment, version_ref):
         if not str(effective_ambient.get(env_key, "")).strip():
             effective_ambient[env_key] = default_val
+    missing = [
+        name
+        for name in schema3_required_env(manifest, slot)
+        if not str(effective_ambient.get(name, "")).strip()
+    ]
+    if missing:
+        # The same message as build_hook_env for schema 2, so _missing_env_errors sees it.
+        raise ValueError(f"missing required hook env: {', '.join(missing)}")
     optional = tuple(
         dict.fromkeys([*manifest.optional_env, *_HOOK_OPTIONAL_CONTEXT_ENV])
     )
@@ -772,6 +797,7 @@ def hook_env_for_slot(
     if manifest.schema_version == 3:
         return _schema3_env(
             manifest,
+            slot=slot,
             app_url=app_url.strip(),
             environment=environment,
             version_ref=version_ref,

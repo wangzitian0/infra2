@@ -53,6 +53,7 @@ from common.deploy.app_contract import (
     hook_env_for_slot,
     fetch_hooks_manifest,
     schema3_empty_cells,
+    schema3_required_env,
     git_url,
     load_hooks_manifest,
     next_app_release_tag,
@@ -1665,7 +1666,7 @@ def audit_app_hooks(
                     slot_errors.append(
                         f"no check runs in cell {cell!r} (slot {slot_name!r})"
                     )
-                for env_name in manifest.required_env:
+                for env_name in schema3_required_env(manifest, slot_name):
                     if env_name not in supplied:
                         message = f"unsupplied required_env {env_name!r}"
                         if message not in slot_errors:
@@ -2289,7 +2290,8 @@ def run_scheduled_app_audits(
             if not local_path.is_file():
                 local_path = REPO_ROOT / rel_local
             manifest = load_hooks_manifest(local_path)
-            if slot not in manifest.slots:
+            # Schema 3 never skips a slot: an empty cell runs and fails (run_cell, #1849).
+            if manifest.schema_version == 2 and slot not in manifest.slots:
                 continue
             version_ref = "main"
             source_sha = "local"
@@ -2313,7 +2315,8 @@ def run_scheduled_app_audits(
                 source_sha,
                 manifest_fetcher=manifest_fetcher,
             )
-            if slot not in manifest.slots:
+            # Schema 3 never skips a slot: an empty cell runs and fails (run_cell, #1849).
+            if manifest.schema_version == 2 and slot not in manifest.slots:
                 continue
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,

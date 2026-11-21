@@ -152,3 +152,128 @@ def test_audit_app_hooks_accepts_schema_3_and_reports_an_empty_cell(
     errors = json.dumps(bad["errors"])
     assert "no check runs in cell 'prod.post' (slot 'prod_gate')" in errors
     assert "unsupplied required_env 'UNSUPPLIED_X'" in errors
+
+
+def test_an_off_check_fills_no_cell() -> None:
+    off = {"reason": "paused", "issue": "infra2#1823"}
+    manifest = _v3(*(_row(name, off=off) for name in ALL_SLOTS))
+    assert schema3_empty_cells(manifest, "prod_gate") == ("prod.post",)
+
+
+def test_check_level_required_env_is_audited_and_a_missing_value_raises() -> None:
+    from common.deploy.app_contract import schema3_required_env
+
+    manifest = _v3(
+        *(_row(name) for name in ALL_SLOTS if name != "staging_gate"),
+        _row("staging_gate", required_env=["TA_PASSWORD"]),
+    )
+    assert "TA_PASSWORD" in schema3_required_env(manifest, "staging_gate")
+    with pytest.raises(ValueError, match="missing required hook env: TA_PASSWORD"):
+        hook_env_for_slot(
+            manifest,
+            "staging_gate",
+            app_url="https://a",
+            environment="staging",
+            version_ref="v1",
+            ambient_env={"PATH": "/usr/bin"},
+        )
+    _m, env = hook_env_for_slot(
+        manifest,
+        "staging_gate",
+        app_url="https://a",
+        environment="staging",
+        version_ref="v1",
+        ambient_env={"TA_PASSWORD": "x"},
+    )
+    assert env["TA_PASSWORD"] == "x"
+
+
+def test_the_scheduled_audit_runs_and_fails_a_schema_3_app_with_an_empty_cell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Review of #1849 (severity: high): schema 3 builds slots only for cells that have a
+    check. `if slot not in manifest.slots: continue` in run_scheduled_app_audits skipped such
+    an app and recorded nothing; schema 2 made every slot mandatory. The audit must run the
+    slot, and run_cell fails the empty cell."""
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\nrepositories:\n"
+        "  - id: finance-report\n    role: external-application\n    release_tag: v0.2.92\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha="a" * 40, image_ref=ref, form="tag"),
+    )
+    monkeypatch.setattr(
+        reconcile, "resolve_app_hook_cwd", lambda *_a, **_k: (tmp_path, None)
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-test")
+    off = {"reason": "paused", "issue": "infra2#1823"}
+    manifest = _v3(*(_row(name, off=off) for name in ALL_SLOTS))
+    assert "scheduled_audit" not in manifest.slots
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+
+    def runner(argv, **_kw):
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    results = reconcile.run_scheduled_app_audits(
+        tmp_path,
+        services=["finance_report/app"],
+        runner=runner,
+        verdict_cache_path=tmp_path / "cache.json",
+    )
+    assert [r.get("service") for r in results] == ["finance_report/app"], results
+    assert results[0]["ok"] is False
+    assert "0 active checks" in json.dumps(results[0])
+
+
+def test_the_train_runs_and_fails_a_schema_3_slot_with_an_empty_cell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Review of #1849 (severity: high): schema 3 builds slots only for cells that have a
+    check, so a `slot not in manifest.slots: continue` would skip an empty prod.post and
+    record nothing. The train must run it, and run_cell fails it."""
+    from infra2_sdk.refs import ResolvedRef
+
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha="a" * 40, image_ref=ref, form="tag"),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-test")
+    manifest = _writing_only()
+    assert "prod_gate" not in manifest.slots
+    plan = reconcile.build_plan(
+        ["finance_report/finance_report/10.app/compose.yaml"],
+        app_release_tags={"finance_report/app": "v0.2.92"},
+    )
+    applied = [
+        reconcile.DeployCommand(
+            service="finance_report/app", deploy_type="prod", argv=["true"]
+        )
+    ]
+
+    def runner(argv, **_kw):
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        reconcile, "resolve_app_hook_cwd", lambda *_a, **_k: (tmp_path, None)
+    )
+    results = reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=tmp_path,
+        after="v3.1.130",
+        target_env="production",
+        slot="prod_gate",
+        manifest_fetcher=lambda _url: json.dumps(manifest.to_dict()).encode("utf-8"),
+        runner=runner,
+    )
+    assert [r["slot"] for r in results] == ["prod_gate"], results
+    assert results[0]["ok"] is False
+    assert "0 active checks" in json.dumps(results[0])
