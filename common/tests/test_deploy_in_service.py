@@ -1046,3 +1046,89 @@ def test_wait_for_rollout_and_failure_snapshot_surface_dokploy_log_tail(
 
     bad_snapshot = build_snapshot(NonDictClient(), "cmp-bad")
     assert bad_snapshot["platform_failure_domain"] == "dokploy-api-unreachable"
+
+
+_LABELS = (
+    "infra2.vault.config.sha256=" + "c" * 64,
+    "infra2.vault.template.sha256=" + "d" * 64,
+)
+
+
+def test_a_raw_stack_proves_its_identity_from_the_compose_dokploy_wrote(
+    deployer, monkeypatch
+):
+    """#1822 (v3.1.144): a raw stack has no git checkout, so the #629 HEAD proof read
+    'no readable HEAD' and failed a good deploy. A raw stack proves the written file."""
+    monkeypatch.setattr(
+        deployer, "_raw_identity_labels", classmethod(lambda cls: _LABELS)
+    )
+    written = "services:\n  vault-agent:\n    labels:\n" + "".join(
+        f"    - {label}\n" for label in _LABELS
+    )
+    assert (
+        deployer._verify_raw_identity(
+            deployer_module._HostStack(
+                "vps", "platform-app-abc123", lambda cmd: _Run(True, written)
+            ),
+            _LABELS,
+        )
+        is None
+    )
+    missing = deployer._verify_raw_identity(
+        deployer_module._HostStack(
+            "vps", "platform-app-abc123", lambda cmd: _Run(False, "", "No such file")
+        ),
+        _LABELS,
+    )
+    assert missing and "no raw compose file" in missing
+    other = written.replace("d" * 64, "e" * 64)
+    stale = deployer._verify_raw_identity(
+        deployer_module._HostStack(
+            "vps", "platform-app-abc123", lambda cmd: _Run(True, other)
+        ),
+        _LABELS,
+    )
+    assert stale and "lacks this deploy's identity" in stale and "template" in stale
+
+
+def test_verify_checkout_identity_routes_a_raw_stack_and_keeps_head_for_github(
+    deployer, monkeypatch
+):
+    seen: list[str] = []
+
+    def run(cmd):
+        seen.append(cmd)
+        return _Run(True, "".join(f"- {label}\n" for label in _LABELS))
+
+    stack = deployer_module._HostStack("vps", "platform-app-abc123", run)
+    monkeypatch.setattr(
+        deployer, "_raw_identity_labels", classmethod(lambda cls: _LABELS)
+    )
+    assert deployer._verify_checkout_identity(stack) is None
+    assert seen and seen[0].startswith("cat ") and "code/docker-compose.yml" in seen[0]
+    assert not any("rev-parse" in cmd for cmd in seen)
+
+    seen.clear()
+    monkeypatch.setattr(deployer, "_raw_identity_labels", classmethod(lambda cls: None))
+    deployer._verify_checkout_identity(stack)
+    assert any("rev-parse HEAD" in cmd for cmd in seen)
+
+
+def test_the_real_todo_stack_is_raw_with_both_identity_labels() -> None:
+    """The real platform/30.todo deployer takes the raw proof, with both labels."""
+    todo = deployer_module.load_deployer_class("platform/todo")
+    labels = todo._raw_identity_labels()
+    assert labels is not None and len(labels) == 2
+    assert {label.split("=")[0] for label in labels} == {
+        "infra2.vault.config.sha256",
+        "infra2.vault.template.sha256",
+    }
+
+
+def test_a_raw_stack_without_identity_labels_fails_closed(deployer) -> None:
+    """Review of #1892: with no label, the file-exists check alone proves nothing."""
+    stack = deployer_module._HostStack(
+        "vps", "platform-app-abc123", lambda cmd: _Run(True, "services: {}\n")
+    )
+    message = deployer._verify_raw_identity(stack, ())
+    assert message and "no identity label" in message
