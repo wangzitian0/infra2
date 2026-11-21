@@ -400,12 +400,23 @@ _APP_METRICS: dict[str, dict[str, set[str]]] = {
     "finance.outbox.dead_letter": {},
     "finance.market_data.sync_failure": {},
     "finance.storage_sweep.failure": {},
-    # #1816: the outcome values are the ClassifyOutcome enum of the pinned finance_report.
-    "finance.statement_classification.outcome": {
-        "outcome": fr.classify_outcomes(fr.read_pinned(fr.CLASSIFICATION_RUN))
-    },
+    # #1816: `_emitted` reads the outcome values from the pinned ClassifyOutcome enum.
+    "finance.statement_classification.outcome": {},
     "canary.probe.outcomes": {"canary.status": {"pass", "fail", "unconfigured"}},
 }
+
+
+def _emitted(metric: str, label: str) -> set[str]:
+    """Label values the app emits. The classification outcomes come from the pinned enum,
+    read when a test asks for them (#1816)."""
+    if (metric, label) == ("finance.statement_classification.outcome", "outcome"):
+        return fr.pinned_classify_outcomes()
+    if metric.startswith("http.server.request.duration.") and label == "http.route":
+        static = _APP_METRICS[metric].get(label, set())
+        return static | fr.pinned_openapi_routes()
+    return _APP_METRICS[metric].get(label, set())
+
+
 _SELECTOR = re.compile(r"\{([^{}]*)\}")
 _MATCHER = re.compile(r'"([^"]+)"\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
 
@@ -478,7 +489,7 @@ def test_promql_selectors_reach_series_the_app_exports() -> None:
 
     assert value_filters  # the parse-failure outcome filter at least
     for alert_name, metric, label, value in value_filters:
-        emitted = _APP_METRICS[metric].get(label, set())
+        emitted = _emitted(metric, label)
         assert any(re.fullmatch(value, v) for v in emitted), (alert_name, value)
 
 
@@ -600,13 +611,12 @@ def test_p95_rule_pages_only_on_a_sustained_non_probe_breach(
     assert threshold["matchType"] == "2"  # all_times
     assert threshold["target"] == 3000.0
     assert payload["evaluation"]["spec"]["evalWindow"] == "10m0s"
-    assert [name for name, _ in selectors] == [metric]
+    assert {name for name, _ in selectors} == {metric}
     assert probes in selectors[0][1]
     assert ("service.name", "=", service) in selectors[0][1]
     assert re.fullmatch(
-        r"\(histogram_quantile\(0\.95, sum by \(le\) \(rate\(\{[^{}]*\}\[5m\]\)\)\)"
-        + scale
-        + r" >= 0\)"
+        r"\(histogram_quantile\(0\.95, sum by \(le\) \(rate\(\{[^{}]*\}\[5m\]\)"
+        r"(?: or rate\(\{[^{}]*\}\[5m\]\))?\)\)" + scale + r" >= 0\)"
         r" or on\(\) vector\(0\)",
         promql,
     )
@@ -830,8 +840,11 @@ _SERVICE_FILTER = re.compile(r"service\.name\s*(?:=\s*'([^']+)'|IN\s*\[([^\]]*)\
 # 2026-11-10 (read-only): truealpha-app uses the old HTTP semantic convention, the
 # platform services the new one, truealpha-data-engine exports logs and traces only.
 # finance-report-* come from the pinned finance_report telemetry_metrics.py (#1816).
+# `_exported_by` reads that file when a test asks for a finance-report service.
 _NEW_HTTP = set(fr.OTEL_HTTP_SERVER_METRICS)
-_FINANCE_REPORT_METRICS = fr.service_metrics(fr.read_pinned(fr.TELEMETRY_METRICS))
+_FINANCE_REPORT_SERVICES = frozenset(
+    {"finance-report-backend", "finance-report-worker", "finance-report-frontend"}
+)
 SERVICE_METRICS = {
     "truealpha-app": _NEW_HTTP | {"http.server.active_requests"},
     "truealpha-data-engine": set(),
@@ -845,8 +858,16 @@ SERVICE_METRICS = {
         "gen_ai.client.token.usage.sum",
         "gen_ai.client.operation.duration.bucket",
     },
-    **_FINANCE_REPORT_METRICS,
 }
+KNOWN_SERVICES = SERVICE_METRICS.keys() | _FINANCE_REPORT_SERVICES
+
+
+def _exported_by(service: str) -> set[str]:
+    if service in _FINANCE_REPORT_SERVICES:
+        return fr.pinned_service_metrics()[service]
+    return SERVICE_METRICS[service]
+
+
 all_dashboards = pytest.mark.parametrize(
     "path", DASHBOARD_FILES, ids=lambda p: p.relative_to(ROOT).as_posix()
 )
@@ -889,10 +910,10 @@ def _service_problems(dashboard: dict) -> list[str]:
     problems = []
     for wid, query in _queries(dashboard):
         services = _services(query["filter"]["expression"])
-        if not services or not services <= SERVICE_METRICS.keys():
+        if not services or not services <= KNOWN_SERVICES:
             problems.append(f"widget {wid} queries unknown services {sorted(services)}")
             continue
-        exported = set().union(*(SERVICE_METRICS[s] for s in services))
+        exported = set().union(*(_exported_by(s) for s in services))
         names = _metric_names(query) if query["dataSource"] == "metrics" else []
         problems += [
             f"widget {wid}: metric {name} is not exported by {sorted(services)}"
@@ -942,7 +963,7 @@ def _alert_metric_problems(rules: list[dict]) -> list[str]:
                 name
                 for label, op, value in matchers
                 if label == "service.name"
-                for name in SERVICE_METRICS
+                for name in KNOWN_SERVICES
                 if (op == "=" and name == value)
                 or (op == "=~" and re.fullmatch(value, name))
             }
@@ -953,7 +974,7 @@ def _alert_metric_problems(rules: list[dict]) -> list[str]:
             problems += [
                 f"{rule['alert_name']}: {metric} is not exported by {service}"
                 for service in sorted(services)
-                if metric not in SERVICE_METRICS[service]
+                if metric not in _exported_by(service)
             ]
     return problems
 
@@ -1009,7 +1030,7 @@ def test_finance_report_metric_contract_fails_on_a_metric_the_app_does_not_expor
     assert _alert_metric_problems(http_on_worker) == [
         "FinanceReportP95LatencyHigh: http.server.request.duration.bucket is not exported "
         "by finance-report-worker"
-    ]
+    ] * 2  # the route-exclusion selector and the GET-read selector
 
 
 def test_finance_report_service_metrics_come_from_the_pinned_telemetry_source() -> None:
@@ -1021,10 +1042,10 @@ def test_finance_report_service_metrics_come_from_the_pinned_telemetry_source() 
         "finance.extraction.confidence_tier",
         "finance.correction_loop.low_confidence_proportion.bucket",
     ):
-        assert metric in SERVICE_METRICS["finance-report-backend"], metric
-        assert metric in SERVICE_METRICS["finance-report-worker"], metric
-    assert SERVICE_METRICS["finance-report-frontend"] == set()
-    assert not _NEW_HTTP & SERVICE_METRICS["finance-report-worker"]
+        assert metric in _exported_by("finance-report-backend"), metric
+        assert metric in _exported_by("finance-report-worker"), metric
+    assert _exported_by("finance-report-frontend") == set()
+    assert not _NEW_HTTP & _exported_by("finance-report-worker")
 
 
 @all_dashboards
@@ -3929,28 +3950,85 @@ def test_apply_observability_preflight_blocks_when_alerting_code_leads_productio
     )
 
 
-def test_finance_p95_rule_excludes_slow_ai_and_upload_routes() -> None:
-    """#1708 / #1816: FinanceReportP95LatencyHigh excludes the active slow upload, approval,
-    run, chat, and SSE routes."""
-    promql = _promql_rules()["FinanceReportP95LatencyHigh"]
-    (value,) = {
-        value
-        for _metric, matchers in _selectors(promql)
-        for label, _op, value in matchers
-        if label == "http.route"
+def _selects(
+    selectors: list[tuple[str, list[tuple[str, str, str]]]], labels: dict
+) -> bool:
+    """True when one selector keeps a series with ``labels`` (a missing label is "")."""
+
+    def keeps(label: str, op: str, value: str) -> bool:
+        actual = labels.get(label, "")
+        return {
+            "=": actual == value,
+            "!=": actual != value,
+            "=~": re.fullmatch(value, actual) is not None,
+            "!~": re.fullmatch(value, actual) is None,
+        }[op]
+
+    return any(all(keeps(*m) for m in matchers) for _metric, matchers in selectors)
+
+
+def _finance_p95_kept(promql: str) -> dict[tuple[str, str], bool]:
+    base = {
+        "service.name": "finance-report-backend",
+        "deployment.environment.name": "production",
     }
-    tokens = value.removeprefix("^(").removesuffix(")$").split("|")
-    for slow_route in (
-        "/statements",
-        "/statements/[^/]+/approvals",
-        "/statements/[^/]+/runs",
-        "/reconciliation/runs",
-        "/chat",
-        "/chat/suggestions",
-        "/workflow/events",
-        "/workflow/status",
-    ):
-        assert slow_route in tokens
+    cases = [
+        ("POST", "/statements"),
+        ("GET", "/statements"),
+        ("POST", "/statements/{statement_id}/runs"),
+        ("GET", "/statements/{statement_id}/runs"),
+        ("POST", "/statements/{statement_id}/approvals"),
+        ("POST", "/reconciliation/runs"),
+        ("POST", "/chat"),
+        ("GET", "/chat/suggestions"),
+        ("GET", "/workflow/events"),
+        ("GET", "/workflow/status"),
+        ("GET", "/livez"),
+        ("GET", "/accounts"),
+        ("POST", "/accounts"),
+    ]
+    selectors = _selectors(promql)
+    return {
+        (method, route): _selects(
+            selectors, {**base, "http.request.method": method, "http.route": route}
+        )
+        for method, route in cases
+    }
+
+
+_FINANCE_P95_KEPT = {
+    ("POST", "/statements"): False,
+    ("GET", "/statements"): True,
+    ("POST", "/statements/{statement_id}/runs"): False,
+    ("GET", "/statements/{statement_id}/runs"): True,
+    ("POST", "/statements/{statement_id}/approvals"): False,
+    ("POST", "/reconciliation/runs"): False,
+    ("POST", "/chat"): False,
+    ("GET", "/chat/suggestions"): False,
+    ("GET", "/workflow/events"): False,
+    ("GET", "/workflow/status"): False,
+    ("GET", "/livez"): False,
+    ("GET", "/accounts"): True,
+    ("POST", "/accounts"): True,
+}
+
+
+def test_finance_p95_rule_excludes_slow_post_chat_and_sse_routes_only() -> None:
+    """#1708 / #1816: the p95 rule leaves out the slow upload, approval, run, chat, and SSE
+    routes. `/statements` and `/statements/{id}/runs` also serve fast GET reads, and the
+    rule keeps those reads through a second selector on `http.request.method`."""
+    promql = _promql_rules()["FinanceReportP95LatencyHigh"]
+    assert _finance_p95_kept(promql) == _FINANCE_P95_KEPT
+
+
+def test_finance_p95_route_check_fails_when_the_method_selector_is_lost() -> None:
+    """Mutation proof: without the GET selector, GET /statements leaves the alert."""
+    promql = _promql_rules()["FinanceReportP95LatencyHigh"]
+    one_selector = promql.split(" or rate(", 1)[0] + ")) * 1000 >= 0) or on() vector(0)"
+    kept = _finance_p95_kept(one_selector)
+    assert kept[("GET", "/statements")] is False
+    assert kept[("GET", "/statements/{statement_id}/runs")] is False
+    assert kept != _FINANCE_P95_KEPT
 
 
 _TODO_LLM_PANELS = {

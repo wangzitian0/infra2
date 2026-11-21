@@ -1684,7 +1684,7 @@ def _active_routes() -> set[str]:
 
     from common.tests import finance_report_sources as fr
 
-    return fr.openapi_routes(fr.read_pinned(fr.OPENAPI)) | set(PROBE_PATHS)
+    return fr.pinned_openapi_routes() | set(PROBE_PATHS)
 
 
 def test_finance_report_route_tokens_match_active_openapi_or_probe_routes() -> None:
@@ -1697,7 +1697,7 @@ def test_finance_report_route_tokens_match_active_openapi_or_probe_routes() -> N
         for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
         for token in _route_tokens(op, value)
     ]
-    assert len(tokens) == 20  # 3 probes in each of 3 5xx selectors + 11 p95 tokens
+    assert len(tokens) == 22  # 3 probes in 3 5xx selectors, 11 + 2 p95 tokens
     assert _route_token_problems(rules, _active_routes()) == []
 
 
@@ -1787,4 +1787,106 @@ def test_finance_report_contracts_fail_on_a_stale_route_or_an_unalerted_counter(
     assert grown != source
     assert _unalerted_counters(rules, fr.failure_counter_names(grown)) == [
         "finance.ledger_post.failure"
+    ]
+
+
+# The tests that read a pinned finance_report source. Each other test of the two modules
+# must pass when every read fails (#1816 review).
+_READS_FINANCE_REPORT_SOURCES = [
+    "common/tests/test_alerting.py::test_ci_reads_only_the_local_finance_report_checkout",
+    "common/tests/test_alerting.py::test_every_finance_report_failure_counter_has_an_alert_rule",
+    "common/tests/test_alerting.py::test_finance_report_classification_rule_selects_only_failure_outcomes",
+    "common/tests/test_alerting.py::test_finance_report_contracts_fail_on_a_stale_route_or_an_unalerted_counter",
+    "common/tests/test_alerting.py::test_finance_report_route_tokens_match_active_openapi_or_probe_routes",
+    "common/tests/test_observability_dashboards.py::test_every_widget_names_its_service_and_a_metric_it_exports[finance_report/finance_report/observability/dashboard.json]",
+    "common/tests/test_observability_dashboards.py::test_finance_report_alert_rules_select_metrics_the_pinned_app_exports",
+    "common/tests/test_observability_dashboards.py::test_finance_report_metric_contract_fails_on_a_metric_the_app_does_not_export",
+    "common/tests/test_observability_dashboards.py::test_finance_report_service_metrics_come_from_the_pinned_telemetry_source",
+    "common/tests/test_observability_dashboards.py::test_promql_selectors_reach_series_the_app_exports",
+    "common/tests/test_observability_dashboards.py::test_the_dashboard_checks_fail_on_the_change_each_one_guards[finance_report/finance_report/observability/dashboard.json]",
+]
+
+_UNREADABLE_SOURCE_PLUGIN = """
+def pytest_configure(config):
+    from common.tests import finance_report_sources as fr
+
+    def unreadable(relative_path):
+        raise OSError("simulated outage of " + relative_path)
+
+    fr._read = unreadable
+"""
+
+
+def test_an_unreadable_finance_report_source_fails_only_its_contract_tests(
+    tmp_path: Path,
+) -> None:
+    """#1816 review: an import never reads a pinned source. With every read failing, both
+    modules still collect, and only the tests that read finance_report sources fail."""
+    (tmp_path / "fr_unreadable.py").write_text(_UNREADABLE_SOURCE_PLUGIN)
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(tmp_path), str(ROOT), os.environ.get("PYTHONPATH", "")]
+        ),
+    }
+    files = [
+        "common/tests/test_observability_dashboards.py",
+        "common/tests/test_alerting.py",
+    ]
+    base = [sys.executable, "-m", "pytest", "-p", "fr_unreadable", "-o", "addopts="]
+    base += ["-n0", "-p", "no:cacheprovider", "-q"]
+    collected = subprocess.run(
+        [*base, "--collect-only", *files],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert collected.returncode == 0, collected.stdout[-2000:] + collected.stderr
+    assert "error" not in collected.stdout.lower().splitlines()[-1]
+
+    this = "common/tests/test_alerting.py::" + sys._getframe().f_code.co_name
+    ran = subprocess.run(
+        [*base, "-rf", "--deselect", this, *files],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    failed = sorted(
+        line.split(" ", 2)[1]
+        for line in ran.stdout.splitlines()
+        if line.startswith("FAILED ")
+    )
+    assert failed == _READS_FINANCE_REPORT_SOURCES, ran.stdout[-3000:]
+    assert "PinnedSourceUnavailable" in ran.stdout
+    assert "simulated outage of apps/" in ran.stdout
+
+
+def test_ci_reads_only_the_local_finance_report_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1816 review: with CI set and no checkout at the pin, the reader names the infra-ci
+    step and never fetches. Without CI, the same state fetches at the pinned commit."""
+    from common.tests import finance_report_sources as fr
+
+    fetched: list[str] = []
+    monkeypatch.setattr(fr, "ROOT", tmp_path)  # no checkout under tmp_path
+    monkeypatch.setattr(fr, "_READS", {})
+    monkeypatch.setattr(fr, "http_get", lambda url: fetched.append(url) or b"text")
+
+    monkeypatch.setenv("CI", "true")
+    with pytest.raises(fr.PinnedSourceUnavailable) as raised:
+        fr.read_pinned(fr.OPENAPI)
+    assert "Check out the pinned finance_report contract files" in str(raised.value)
+    assert fetched == []
+
+    monkeypatch.delenv("CI")
+    monkeypatch.setattr(fr, "_READS", {})
+    assert fr.read_pinned(fr.OPENAPI) == "text"
+    assert fetched == [
+        f"https://raw.githubusercontent.com/wangzitian0/finance_report/{fr.pinned_sha()}/"
+        "apps/frontend/openapi.json"
     ]

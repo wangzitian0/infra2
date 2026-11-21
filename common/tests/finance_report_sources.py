@@ -1,14 +1,21 @@
 """Read the pinned finance_report sources that the alert and dashboard contracts check (#1816).
 
-The pin is the `repos/finance_report` gitlink of this checkout. A local submodule checkout at
-the pinned commit supplies the files. Infra CI does not check out submodules (#506), so the
-reader then fetches the files at the pinned commit from the public repository.
+The pin is the `repos/finance_report` gitlink of this checkout. A local checkout at the
+pinned commit supplies the files. Infra CI checks out only PINNED_FILES in the step "Check out
+the pinned finance_report contract files" of infra-ci.yml (#506). With `CI` set, the reader
+uses only that checkout. A local run without a checkout at the pin fetches the files at the
+pinned commit from the public repository.
+
+Every read is lazy: a test calls the reader, an import never does. An unreadable source fails
+only the tests that read it, with one PinnedSourceUnavailable message, and the reader keeps
+that message, so the failure costs one fetch attempt.
 """
 
 from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
 from functools import lru_cache
@@ -24,6 +31,8 @@ OPENAPI = "apps/frontend/openapi.json"
 CLASSIFICATION_RUN = (
     "apps/backend/src/extraction/extension/statement_classification_run.py"
 )
+# The infra-ci.yml step checks out these files and no others.
+PINNED_FILES = (TELEMETRY_METRICS, OPENAPI, CLASSIFICATION_RUN)
 
 # The OTel FastAPI HTTP server metrics, as SigNoz stores them (#1465).
 OTEL_HTTP_SERVER_METRICS = frozenset(
@@ -33,6 +42,10 @@ OTEL_HTTP_SERVER_METRICS = frozenset(
 _HISTOGRAM_SERIES = (".bucket", ".count", ".sum")
 # A counter whose name ends in one of these words counts a failure.
 _FAILURE_COUNTER = re.compile(r"(?:^|[._])(failure|violation|dead_letter|rejected)$")
+
+
+class PinnedSourceUnavailable(RuntimeError):
+    """A pinned finance_report source cannot be read."""
 
 
 def _git(*args: str, cwd: Path) -> str:
@@ -45,22 +58,45 @@ def pinned_sha(root: Path = ROOT) -> str:
     """Return the commit of the finance_report gitlink in the index of ``root``."""
     path = SERVICE_TO_SUBMODULE_PATH[SERVICE_ID]
     mode, sha, _stage, _name = _git("ls-files", "--stage", "--", path, cwd=root).split()
-    assert mode == "160000", f"{path} is not a gitlink (mode {mode})"
+    if mode != "160000":
+        raise PinnedSourceUnavailable(f"{path} is not a gitlink (mode {mode})")
     return sha
 
 
-@lru_cache(maxsize=None)
-def read_pinned(relative_path: str) -> str:
-    """Return the text of ``relative_path`` in finance_report at the pinned commit."""
+def _read(relative_path: str) -> str:
     sha = pinned_sha()
     checkout = ROOT / SERVICE_TO_SUBMODULE_PATH[SERVICE_ID]
     if (checkout / ".git").exists() and _git("rev-parse", "HEAD", cwd=checkout) == sha:
         return (checkout / relative_path).read_text(encoding="utf-8")
+    if os.environ.get("CI"):
+        raise PinnedSourceUnavailable(
+            f"CI reads only the local checkout, and {checkout} is missing or not at {sha}. "
+            'Run the infra-ci.yml step "Check out the pinned finance_report contract files" '
+            "before pytest. PINNED_FILES must list each file that a test reads."
+        )
     url = f"https://raw.githubusercontent.com/{APP_SOURCES[SERVICE_ID]}/{sha}/{relative_path}"
     try:
         return http_get(url).decode("utf-8")
     except SystemExit as exc:  # http_get exits on a permanent error
-        raise RuntimeError(str(exc)) from exc
+        raise PinnedSourceUnavailable(str(exc)) from exc
+
+
+_READS: dict[str, str | PinnedSourceUnavailable] = {}
+
+
+def read_pinned(relative_path: str) -> str:
+    """Return the text of ``relative_path`` in finance_report at the pinned commit."""
+    if relative_path not in _READS:
+        try:
+            _READS[relative_path] = _read(relative_path)
+        except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+            _READS[relative_path] = PinnedSourceUnavailable(
+                f"cannot read finance_report {relative_path} at the pinned commit: {exc}"
+            )
+    result = _READS[relative_path]
+    if isinstance(result, PinnedSourceUnavailable):
+        raise PinnedSourceUnavailable(str(result))
+    return result
 
 
 def _module_tuple(tree: ast.Module, name: str) -> tuple:
@@ -145,3 +181,21 @@ def classify_outcomes(source: str) -> set[str]:
         for stmt in enum.body
         if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant)
     }
+
+
+@lru_cache(maxsize=None)
+def pinned_service_metrics() -> dict[str, set[str]]:
+    """`service_metrics` of the pinned telemetry_metrics.py, read on the first call."""
+    return service_metrics(read_pinned(TELEMETRY_METRICS))
+
+
+@lru_cache(maxsize=None)
+def pinned_classify_outcomes() -> set[str]:
+    """`classify_outcomes` of the pinned classification module, read on the first call."""
+    return classify_outcomes(read_pinned(CLASSIFICATION_RUN))
+
+
+@lru_cache(maxsize=None)
+def pinned_openapi_routes() -> set[str]:
+    """`openapi_routes` of the pinned openapi.json, read on the first call."""
+    return openapi_routes(read_pinned(OPENAPI))

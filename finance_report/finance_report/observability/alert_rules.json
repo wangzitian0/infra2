@@ -28,8 +28,8 @@
       "match_type": "all_times",
       "eval_window": "10m0s",
       "frequency": "1m",
-      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/livez|/readyz|/statements|/statements/[^/]+/approvals|/statements/[^/]+/runs|/reconciliation/runs|/chat|/chat/suggestions|/workflow/events|/workflow/status)$\"}[5m]))) * 1000 >= 0) or on() vector(0)",
-      "summary": "finance_report backend p95 latency of interactive non-probe requests stayed above 3000ms for 10 minutes. Severity P1."
+      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/livez|/readyz|/statements|/statements/[^/]+/approvals|/statements/[^/]+/runs|/reconciliation/runs|/chat|/chat/suggestions|/workflow/events|/workflow/status)$\"}[5m]) or rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"=~\"^(/statements|/statements/[^/]+/runs)$\",\"http.request.method\"!=\"POST\"}[5m]))) * 1000 >= 0) or on() vector(0)",
+      "summary": "finance_report backend p95 latency of interactive non-probe requests stayed above 3000ms for 10 minutes. The upload and run POST routes, chat, and SSE routes are excluded. Severity P1."
     },
     {
       "signal": "metrics",
