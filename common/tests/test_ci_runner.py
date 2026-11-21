@@ -157,7 +157,9 @@ def test_ci_runner_unit_tests_timeout_fails(
         return subprocess.CompletedProcess(args=args[0], returncode=0)
 
     monkeypatch.setattr("tools.ci_runner._run_cmd", mock_run_cmd)
-    ret = run_unit_tests(verbose=False, timeout=0.01)
+    ret = run_unit_tests(
+        targets=["common/tests/test_ci_runner.py"], verbose=False, timeout=0.01
+    )
     assert ret == 1
     captured = capsys.readouterr()
     assert "timed out after 0.01s" in captured.out
@@ -203,6 +205,7 @@ def test_run_unit_tests_runs_the_diff_targets_in_one_process(
     pytest_cmds = [cmd for cmd in recorded_cmds if "pytest" in cmd]
     assert len(pytest_cmds) == 1
     assert "common/tests/test_ci_runner.py" in pytest_cmds[0]
+    assert "common/tests/test_harness.py" in pytest_cmds[0]
     assert "common/tests" not in pytest_cmds[0]
     assert "-x" in pytest_cmds[0]
     assert "-n" not in pytest_cmds[0]
