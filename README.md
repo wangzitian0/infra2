@@ -167,7 +167,7 @@ DEPLOY_ENV=production invoke fr-app.shared.status
 - **应用部署与交付模型**：[docs/ssot/ops.pipeline.md](docs/ssot/ops.pipeline.md)
 - **环境隔离与四轴坐标（`deploy_v2`）**：[docs/ssot/core.environments.md](docs/ssot/core.environments.md)
 - **服务准入与退役原子 Saga（`service.onboard`）**：[docs/ssot/ops.service-lifecycle.md](docs/ssot/ops.service-lifecycle.md)
-- **Finance Report 模块说明**：[finance_report/README.md](finance_report/README.md) · [Infra-009 归档记录](docs/project/archive/Infra-009.finance_report_deploy.md)
+- **Finance Report 模块说明**：[finance_report/README.md](finance_report/README.md) · [Infra-009 归档记录](docs/project/archive/README.md#infra-009)
 - **TrueAlpha 模块说明**：[truealpha/README.md](truealpha/README.md) · [TrueAlpha Data Engine SSOT](docs/ssot/core.truealpha_runtime.md)
 
 ## 🔗 相关链接

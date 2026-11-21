@@ -15,4 +15,4 @@ Track top issues discovered during the project.
 - [ ] `path/to/doc.md`: issue summary
 ```
 
-> **Note**: When archiving a project, merge the TODOWRITE content into the archived project file.
+> **Note**: To close a project, add one entry to [`archive/README.md`](./archive/README.md). Then delete the project file and its TODOWRITE file.

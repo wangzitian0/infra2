@@ -20,6 +20,10 @@ ARCHIVE_DIR = PROJECT_DIR / "archive"
 _SKIP_SUFFIXES = (".TODOWRITE.md", ".SUMMARY.md")
 _NAV_ACTIVE_RE = re.compile(r"project/(Infra-[\w.-]+\.md)")
 _NAV_ARCHIVED_RE = re.compile(r"project/archive/(Infra-[\w.-]+\.md)")
+# An uncommented nav entry: a YAML comment line or a trailing comment cannot match.
+_NAV_ARCHIVE_INDEX_RE = re.compile(
+    r"^\s*- Archived Projects: project/archive/README\.md\s*$", re.MULTILINE
+)
 
 
 def _project_doc_names(directory: Path) -> set[str]:
@@ -44,15 +48,19 @@ def test_mkdocs_nav_lists_every_active_project_doc() -> None:
     )
 
 
-def test_mkdocs_nav_lists_every_archived_project_doc() -> None:
+def test_mkdocs_nav_lists_the_archive_index() -> None:
+    """Closed projects have one page, the provenance index (#1826). The nav
+    must list it, and must list no per-project archive page."""
     text = MKDOCS.read_text(encoding="utf-8")
-    nav_files = set(_NAV_ARCHIVED_RE.findall(text))
-    on_disk = _project_doc_names(ARCHIVE_DIR)
-
-    assert len(on_disk) > 0, f"No archived project docs discovered in {ARCHIVE_DIR}"
-    assert len(nav_files) > 0, "No archived nav files parsed from mkdocs.yml"
-    missing = sorted(on_disk - nav_files)
-    assert not missing, (
-        "Archived project docs missing from docs/mkdocs.yml nav (add them under "
-        "`- Archived Projects:`):\n" + "\n".join(missing)
+    assert (ARCHIVE_DIR / "README.md").is_file(), (
+        "missing docs/project/archive/README.md"
+    )
+    assert _NAV_ARCHIVE_INDEX_RE.search(text), (
+        "docs/mkdocs.yml nav does not list project/archive/README.md under "
+        "`- Archived Projects:`"
+    )
+    stale = sorted(set(_NAV_ARCHIVED_RE.findall(text)))
+    assert not stale, (
+        "docs/mkdocs.yml nav lists per-project archive pages; closed projects "
+        "are entries of project/archive/README.md:\n" + "\n".join(stale)
     )

@@ -16,7 +16,7 @@
 # (its D2 line scoped "infra-ci 7, ops-checks 6, ... drift reports", and `ops.scheduled_cleanup`
 # was defined for exactly this and sat unused). What epic #459 closed 2026-06-29 as "not
 # planned" was phases 3-4 -- app alignment and the cross-repo chain view -- not infra coverage.
-# See docs/project/archive/Infra-016.ci_gate_inventory.md.
+# See the Infra-016 entry of docs/project/archive/README.md.
 #
 # Every gate added by that backfill is `blocks_merge: false`: the set of blocks_merge:true
 # gates still equals, exactly, the 7 required status checks in the live branch ruleset, which

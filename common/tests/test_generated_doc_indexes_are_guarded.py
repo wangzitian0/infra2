@@ -213,10 +213,12 @@ def _generator_inputs() -> list[str]:
         gen_ssot_index.MANIFEST,
         gen_ssot_index.README,
     ]
-    for directory in (gen_project_index.PROJECT_DIR, gen_project_index.ARCHIVE_DIR):
-        docs = gen_project_index._project_docs(directory)
-        assert docs, f"no project doc under {directory}"
-        paths.append(docs[0])
+    docs = gen_project_index._project_docs(gen_project_index.PROJECT_DIR)
+    assert docs, f"no project doc under {gen_project_index.PROJECT_DIR}"
+    paths.append(docs[0])
+    # Not a generator input, but its guard (test_project_lifecycle_governance)
+    # also runs only when the classifier sees a non-doc change (#1826).
+    paths.append(gen_project_index.PROJECT_DIR / "archive" / "README.md")
     return [str(p.relative_to(ROOT)) for p in paths]
 
 

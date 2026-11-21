@@ -132,12 +132,22 @@ def test_project_ac_proof_paths_target_existing_files() -> None:
     assert missing == []
 
 
-def test_redesigned_pipeline_validation_command_targets_existing_files() -> None:
-    """Infra-011 validation commands must stay runnable as proof files move."""
-    missing: list[str] = []
-    path = PROJECT_DIR / "archive" / "Infra-011.reliability_hardening.md"
+#: Floors for the archive index (#1826). The 16 closed EPIC files at a77e6f06 had
+#: 29 AC rows and 57 AC proof paths; the index scan reads 60 distinct paths.
+#: A bulk trim of rows or proof paths fails.
+ARCHIVE_INDEX_AC_ROWS = 29
+ARCHIVE_INDEX_MIN_PROOF_PATHS = 60
+_AC_ROW_RE = re.compile(r"^\| Infra-0\d+\.\d+ \|", re.MULTILINE)
 
-    for target in BACKTICK_PATH_RE.findall(path.read_text(encoding="utf-8")):
+
+def test_archive_index_proof_paths_target_existing_files() -> None:
+    """Proof paths in the archive index (#1826) must exist as proof files move."""
+    missing: list[str] = []
+    checked: set[str] = set()
+    path = PROJECT_DIR / "archive" / "README.md"
+    text = path.read_text(encoding="utf-8")
+
+    for target in BACKTICK_PATH_RE.findall(text):
         if not target.startswith(PROOF_PATH_PREFIXES):
             continue
         if " " in target or "\n" in target:
@@ -145,18 +155,18 @@ def test_redesigned_pipeline_validation_command_targets_existing_files() -> None
         matches = list(ROOT.glob(_strip_anchor(target))) if "*" in target else []
         if matches:
             continue
+        checked.add(target)
         if not (ROOT / _strip_anchor(target)).exists():
             missing.append(f"{path.relative_to(ROOT)} -> {target}")
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        target = line.strip().rstrip("\\")
-        if not target.startswith(PROOF_PATH_PREFIXES):
-            continue
-        if " " in target or "\n" in target:
-            continue
-        if not (ROOT / _strip_anchor(target)).exists():
-            missing.append(f"{path.relative_to(ROOT)} -> {target}")
-
+    rows = len(_AC_ROW_RE.findall(text))
+    assert rows == ARCHIVE_INDEX_AC_ROWS, (
+        f"the index has {rows} AC rows; it must keep all {ARCHIVE_INDEX_AC_ROWS}"
+    )
+    assert len(checked) >= ARCHIVE_INDEX_MIN_PROOF_PATHS, (
+        f"the scan checked only {len(checked)} distinct proof paths; "
+        f"the floor is {ARCHIVE_INDEX_MIN_PROOF_PATHS}"
+    )
     assert missing == []
 
 
