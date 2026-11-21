@@ -307,12 +307,21 @@ def interp_refs(text: str) -> list[tuple[str, str | None, bool, bool]]:
     return out
 
 
+# A Vault Agent template body (`{{ with secret ... }}`) names secret paths; it holds no
+# secret value. The compiled x-infra2 sidecar sets one as VAULT_SECRETS_TEMPLATE (#1884).
+VAULT_TEMPLATE_VALUE = re.compile(r"\{\{-?\s*with\s+secret\b")
+
+
 def classify_value(key: str, value: str | None) -> tuple[str, tuple, bool]:
     """(shape, refs, identity) for a value string that may hold interpolations."""
     if value is None:
         return "ref", (key,), False
     if value == "":
         return "empty", (), False
+    # The value must BE a Go template (it starts with `{{`) that opens a Vault
+    # `with secret` block; a literal with that text appended stays a literal.
+    if value.lstrip().startswith("{{") and VAULT_TEMPLATE_VALUE.search(value):
+        return "secret-ref", (), False
     refs = [r[0] for r in interp_refs(value)]
     if "$(" in value or "`" in value:
         return "dynamic", tuple(dict.fromkeys(refs)), False
@@ -1889,6 +1898,96 @@ def scan_compose(inv: Inventory, repo: str, path: str, text: str) -> None:
                 )
 
 
+def _compose_source_line(
+    source_lines: list[str], key: str, role: str, origin: int
+) -> int:
+    """The 1-based source line for ``key`` of a compiled stack (infra2#1884).
+
+    A write prefers the line that sets the key (``KEY:`` or ``- KEY=``). Next comes the
+    first line that is not a comment and names the key, then the first comment that names
+    it. A key that the compiler injects and the source never names gets ``origin``, the
+    ``x-infra2:`` line.
+    """
+    word = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])")
+    setter = re.compile(rf"^\s*(?:-\s*)?{re.escape(key)}\s*[:=]")
+    code = [
+        (i, line)
+        for i, line in enumerate(source_lines)
+        if not line.lstrip().startswith("#")
+    ]
+    if role == "write":
+        for i, line in code:
+            if setter.match(line):
+                return i + 1
+    for i, line in code:
+        if word.search(line):
+            return i + 1
+    for i, line in enumerate(source_lines):
+        if word.search(line):
+            return i + 1
+    return origin
+
+
+def scan_stack_compose(
+    inv: Inventory, repo: str, path: str, text: str, root: Path | None = None
+) -> None:
+    """Scan a stack compose file as the deploy sees it (infra2#1884).
+
+    A plain file is scanned as its source text, as before. An ``x-infra2`` file is scanned
+    as its compiled text (``common.deploy.compose_compile``), so the keys that the compiler
+    injects (sidecar env, ``S3_ENDPOINT``, ``OTEL_*``) are in the inventory. Each record of a
+    compiled file names the source file and a source line (``_compose_source_line``); the
+    compiled line is in ``extra["compiled_line"]``. ``root`` holds the manifests that the
+    Vault template reads. A compile failure is a parse error and the source text is scanned.
+    """
+    from common.deploy.compose_compile import (
+        X_INFRA2,
+        compile_stack,
+        has_x_infra2,
+        vault_template_for,
+    )
+
+    if not has_x_infra2(text):
+        scan_compose(inv, repo, path, text)
+        return
+    try:
+        compiled = compile_stack(
+            text, vault_template=vault_template_for(path, text, manifest_root=root)
+        )
+    except Exception as exc:  # noqa: BLE001 - any compile failure is a reported parse error
+        inv.errors.append(f"compose compile: {repo}:{path}: {exc}")
+        scan_compose(inv, repo, path, text)
+        return
+    source_lines = text.split("\n")
+    origin = next(
+        (
+            i + 1
+            for i, line in enumerate(source_lines)
+            if line.startswith(f"{X_INFRA2}:")
+        ),
+        1,
+    )
+    occ_start = len(inv.occ)
+    edge_start = len(inv.edges)
+    string_keys = [k for k in inv.strings if k[0] == repo and k[1] == path]
+    string_start = {k: len(inv.strings[k]) for k in string_keys}
+    scan_compose(inv, repo, path, compiled)
+    for o in inv.occ[occ_start:]:
+        o.extra = {**o.extra, "compiled_line": o.line}
+        o.line = _compose_source_line(source_lines, o.key, o.role, origin)
+    inv.edges[edge_start:] = [
+        (a, b, kind, r, pth, _compose_source_line(source_lines, a, "read", origin))
+        for a, b, kind, r, pth, _ln in inv.edges[edge_start:]
+    ]
+    for k in [k for k in inv.strings if k[0] == repo and k[1] == path]:
+        toks = inv.strings[k]
+        start = string_start.get(k, 0)
+        toks[start:] = [
+            (tok, _compose_source_line(source_lines, tok, "read", origin), *rest)
+            for tok, _ln, *rest in toks[start:]
+        ]
+
+
 # ---------------------------------------------------------------------------------------------
 # Dockerfile
 # ---------------------------------------------------------------------------------------------
@@ -2572,7 +2671,6 @@ def scan_docs(inv: Inventory, repo: str, path: str, text: str) -> None:
 # driver
 # ---------------------------------------------------------------------------------------------
 ROUTED_SCANNERS = {
-    "compose": scan_compose,
     "dockerfile": scan_dockerfile,
     "ctmpl": scan_ctmpl,
     "env-example": scan_env_example,
@@ -2610,6 +2708,8 @@ def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
             scan_shell_text(inv, repo, f, text, "shell", scope_of(f), 1, consts)
         elif kind == "workflow":
             scan_workflow(inv, repo, f, text, consts)
+        elif kind == "compose":
+            scan_stack_compose(inv, repo, f, text, root)
         elif kind in ROUTED_SCANNERS:
             ROUTED_SCANNERS[kind](inv, repo, f, text)
 

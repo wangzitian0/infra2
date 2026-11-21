@@ -9,7 +9,8 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    scheduled workflows (`python tools/<script>.py`).
    Examples: `deploy_v2.py` (deploy front door), `deploy_guard_audit.py` /
    `ci_gate_audit.py` / `service_identity_audit.py` / `lint_compose_resource_limits.py` /
-   `compose_compile.py` (x-infra2 compile print and PR-time equivalence, #1822) /
+   `compose_compile.py` (x-infra2 compile print, PR-time equivalence, #1822, and the
+   `docker compose config` validation of the compiled text, #1884) /
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py` (CLI of the
    prod-promotion guard in `common/deploy/promotion_guard.py`, #1646), `stage_records.py` (the record reader),
