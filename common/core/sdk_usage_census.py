@@ -95,17 +95,6 @@ DEFAULT_LEFT_THE_PACKAGES: tuple[str, ...] = (
     "parse_env",
 )
 
-SDK_EXTRA_KEYS: dict[str, tuple[str, str]] = {
-    "GITHUB_ACTIONS": ("helper", "runtime/environment.py"),
-    "VAULT_ADDR": ("helper", "secrets.py"),
-    "VAULT_TOKEN": ("helper", "secrets.py"),
-    "VAULT_ROLE_ID": ("helper", "secrets.py"),
-    "VAULT_SECRET_ID": ("helper", "secrets.py"),
-    "GITHUB_TOKEN": ("tool-token", "deploy.py"),
-    "INFRA2_PAT": ("tool-token", "deploy.py"),
-    "ENV_SUFFIX": ("template", "scaffold.py"),
-}
-
 OTEL_COMPANION_KEYS = {"SERVICE_VERSION", "ENVIRONMENT", "ENV", "APP_ENV"}
 SELF_REPO = "infra2-sdk"
 
@@ -964,7 +953,7 @@ def compute_m1(
 def sdk_env_vocabulary(
     pkg_root: Path,
 ) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
-    """Return (contract_vocab, full_vocab) parsed from runtime/environment.py or runtime_env_contract()."""
+    """Return (contract_vocab, full_vocab) parsed from runtime/environment.py."""
     contract_vocab: dict[str, dict[str, str]] = {}
     env_py = pkg_root / "runtime" / "environment.py"
     if env_py.is_file():
@@ -1013,13 +1002,12 @@ def sdk_env_vocabulary(
                 contract_vocab[alias] = {"kind": "alias", "canonical": canon}
 
     if not contract_vocab:
-        full = envinv.sdk_vocabulary()
-        contract_vocab = {
-            k: v for k, v in full.items() if v.get("kind") in ("canonical", "alias")
-        }
+        raise ValueError(
+            f"no RuntimeEnvKey contract found in {pkg_root / 'runtime/environment.py'}"
+        )
 
     full_vocab = dict(contract_vocab)
-    for name, (kind, rel) in SDK_EXTRA_KEYS.items():
+    for name, (kind, rel) in envinv.SDK_EXTRA_KEYS.items():
         target = pkg_root / rel
         if target.is_file():
             text = target.read_text("utf-8", "replace")
@@ -1038,7 +1026,7 @@ def compute_m2(pkg_root: Path, consumers: dict[str, Path]) -> dict[str, Any]:
     include_manifests = (
         "infra2" in consumers and consumers["infra2"].resolve() == REPO_ROOT.resolve()
     )
-    inv = envinv.run(consumers, include_app_manifests=include_manifests)
+    inv = envinv.run(consumers)
     services = envinv.load_services() if include_manifests else []
     keys_map, _comps, _edges, _comp_of = envinv.analyze(
         inv,
