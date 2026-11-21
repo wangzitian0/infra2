@@ -36,7 +36,7 @@ X_INFRA2 = "x-infra2"
 # directory: the SDK compiler that the runner installs (uv.lock, sdk_requirement.py),
 # this module, and the Vault template renderer with the registry that names the
 # manifests. A change to one can change CONFIGURATION_SHA256 of every x-infra2 stack,
-# so the reconcile plan selects each such stack (tools/reconcile_iac_inputs.build_plan).
+# so the deploy fan-out selects each such stack (common.deploy.dependencies.explain_fanout).
 COMPILER_INPUT_PATHS: tuple[str, ...] = (
     "uv.lock",
     "tools/sdk_requirement.py",

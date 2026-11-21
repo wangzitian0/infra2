@@ -160,22 +160,6 @@ SOURCE_HASH_FORMULA_PATHS = (
 )
 
 
-def x_infra2_services(repo_root: Path = REPO_ROOT) -> list[str]:
-    """Registered services whose compose file is an x-infra2 source (infra2#1822).
-
-    Derived from the compose files, so a stack that migrates needs no declaration here.
-    """
-    from common.deploy.compose_compile import has_x_infra2
-
-    services: list[str] = []
-    for service, meta in sorted(service_attrs().items()):
-        path = repo_root / (meta.compose_path or "")
-        if meta.compose_path and path.is_file():
-            if has_x_infra2(path.read_text(encoding="utf-8")):
-                services.append(service)
-    return services
-
-
 @dataclass(frozen=True)
 class ReconcilePlan:
     changed_files: list[str]
@@ -2363,20 +2347,6 @@ def build_plan(
             selected.setdefault(
                 service, f"source config hash formula changed ({formula_hits[0]})"
             )
-
-    # The compiled text of an x-infra2 stack depends on the compiler, not only on the
-    # stack directory, so a compiler input selects each such stack (infra2#1822).
-    from common.deploy.compose_compile import COMPILER_INPUT_PATHS
-
-    compiler_hits = [p for p in COMPILER_INPUT_PATHS if p in files]
-    if compiler_hits:
-        for service in x_infra2_services(repo_root):
-            selected.setdefault(
-                service, f"x-infra2 compiler input changed ({compiler_hits[0]})"
-            )
-        for path in compiler_hits:
-            if path in dropped:
-                dropped.remove(path)
 
     if HARNESS_REPOS_PATH in files:
         repos_selected = changed_app_services_from_repos_yaml(

@@ -203,10 +203,12 @@ def test_manifest_change_reconciles_all_iac_pinned_services() -> None:
     assert "dependency manifest changed" in plan.selected["platform/alerting"]
 
 
-def test_x_infra2_services_are_read_from_the_compose_files() -> None:
-    services = reconcile.x_infra2_services()
-    assert "platform/todo" in services
-    assert "platform/portal" not in services
+def test_x_infra2_stacks_are_read_from_the_compose_files() -> None:
+    from common.deploy.dependencies import x_infra2_stacks
+
+    stacks = x_infra2_stacks()
+    assert stacks["platform/todo"] == "platform/30.todo/compose.yaml"
+    assert "platform/portal" not in stacks
 
 
 @pytest.mark.parametrize(
@@ -226,7 +228,7 @@ def test_a_compiler_input_change_selects_each_x_infra2_stack(path: str) -> None:
 
     assert path in COMPILER_INPUT_PATHS
     plan = build_plan([path])
-    assert plan.selected["platform/todo"] == f"x-infra2 compiler input changed ({path})"
+    assert plan.selected["platform/todo"] == f"x-infra2 compiler input ({path})"
     assert "platform/todo" in plan.staging_services
     assert path not in plan.dropped
 
