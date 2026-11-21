@@ -95,8 +95,8 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 ## Division of labor (`common/` vs `tools/`)
 
 The layer definition is in [`docs/ssot/core.harness.md` §5.3](../docs/ssot/core.harness.md#53-code-layers).
-`common/tests/test_tools_thin.py` enforces it. Its `DEBT` ledger lists the old tools
-that still carry logic; it can only shrink. Pattern: `tools/deploy_guard_audit.py` →
+`common/tests/test_tools_thin.py` enforces it. Its `DEBT` ledger records the exact size of each old
+tool that still carries logic; review rejects a new entry or a raised size. Pattern: `tools/deploy_guard_audit.py` →
 `common/deploy/dependencies.py`.
 
 ## Runner (invoke namespaces)
