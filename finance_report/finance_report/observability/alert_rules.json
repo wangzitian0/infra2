@@ -14,7 +14,7 @@
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "(sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code\"=~\"^5..$\"}[5m])) / sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\"}[5m]))) and on() (sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code\"=~\"^5..$\"}[5m])) >= 5)",
+      "promql": "(sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/livez|/readyz)$\",\"http.response.status_code\"=~\"^5..$\"}[5m])) / sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/livez|/readyz)$\"}[5m]))) and on() (sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/livez|/readyz)$\",\"http.response.status_code\"=~\"^5..$\"}[5m])) >= 5)",
       "summary": "finance_report backend returned at least 5 HTTP 5xx and more than 5% 5xx across non-probe requests within 5 minutes. Severity P0."
     },
     {
@@ -28,7 +28,7 @@
       "match_type": "all_times",
       "eval_window": "10m0s",
       "frequency": "1m",
-      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/ping|/ping/toggle|/statements/upload|/statements/[^/]+/review/approve|/chat|/chat/suggestions|/workflow/events|/workflow/status)$\"}[5m]))) * 1000 >= 0) or on() vector(0)",
+      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"{env}\",\"http.route\"!~\"^(/health|/livez|/readyz|/statements|/statements/[^/]+/approvals|/statements/[^/]+/runs|/reconciliation/runs|/chat|/chat/suggestions|/workflow/events|/workflow/status)$\"}[5m]))) * 1000 >= 0) or on() vector(0)",
       "summary": "finance_report backend p95 latency of interactive non-probe requests stayed above 3000ms for 10 minutes. Severity P1."
     },
     {
@@ -72,6 +72,76 @@
       "frequency": "1m",
       "promql": "sum(increase({\"finance.async_parse.failure\",\"service.name\"=~\"^(finance-report-backend|finance-report-worker)$\",\"deployment.environment.name\"=\"{env}\"}[5m]))",
       "summary": "finance_report async statement parse task failure was observed. Severity P1."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "FinanceReportInvariantViolation",
+      "service_name": "finance-report-backend",
+      "severity": "error",
+      "threshold": 0,
+      "threshold_unit": "count",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "sum(increase({\"finance.invariant.violation\",\"service.name\"=~\"^(finance-report-backend|finance-report-worker)$\",\"deployment.environment.name\"=\"{env}\"}[15m]))",
+      "summary": "finance_report statement parsing detected at least 1 financial-invariant violation in 15 minutes. Severity P1."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "FinanceReportClassificationFailureSpike",
+      "service_name": "finance-report-backend",
+      "severity": "error",
+      "threshold": 3,
+      "threshold_unit": "count",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "sum(increase({\"finance.statement_classification.outcome\",\"service.name\"=~\"^(finance-report-backend|finance-report-worker)$\",\"deployment.environment.name\"=\"{env}\",\"outcome\"=~\"^(failed|timed_out)$\"}[15m]))",
+      "summary": "finance_report statement classification runs failed or timed out more than 3 times in 15 minutes. Severity P1."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "FinanceReportOutboxDeadLetter",
+      "service_name": "finance-report-backend",
+      "severity": "error",
+      "threshold": 0,
+      "threshold_unit": "count",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "sum(increase({\"finance.outbox.dead_letter\",\"service.name\"=~\"^(finance-report-backend|finance-report-worker)$\",\"deployment.environment.name\"=\"{env}\"}[15m]))",
+      "summary": "finance_report outbox relay moved at least 1 event to the dead-letter state in 15 minutes. Severity P1."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "FinanceReportMarketDataSyncFailure",
+      "service_name": "finance-report-backend",
+      "severity": "warning",
+      "threshold": 0,
+      "threshold_unit": "count",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "sum(increase({\"finance.market_data.sync_failure\",\"service.name\"=~\"^(finance-report-backend|finance-report-worker)$\",\"deployment.environment.name\"=\"{env}\"}[15m]))",
+      "summary": "finance_report market-data sync failed at least once in 15 minutes: FX rates and prices can be stale. Severity P2."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "FinanceReportStorageSweepFailure",
+      "service_name": "finance-report-backend",
+      "severity": "warning",
+      "threshold": 0,
+      "threshold_unit": "count",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "sum(increase({\"finance.storage_sweep.failure\",\"service.name\"=~\"^(finance-report-backend|finance-report-worker)$\",\"deployment.environment.name\"=\"{env}\"}[15m]))",
+      "summary": "finance_report orphaned S3 storage sweep failed at least once in 15 minutes. Severity P2."
     },
     {
       "signal": "metrics",

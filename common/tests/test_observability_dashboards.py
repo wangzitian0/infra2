@@ -18,6 +18,7 @@ from common.alerting import (
     build_signoz_channel_payload,
     signoz_feishu_channel_name,
 )
+from common.tests import finance_report_sources as fr
 from common.tests.conftest import load_repo_module
 from common.observability_dashboards import (
     ALERT_RULES_FILE,
@@ -194,6 +195,46 @@ _EXPECTED_RULES = {
         "5m0s",
         "count",
     ),
+    "FinanceReportInvariantViolation": (
+        "promql_rule",
+        "error",
+        0.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
+    "FinanceReportClassificationFailureSpike": (
+        "promql_rule",
+        "error",
+        3.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
+    "FinanceReportOutboxDeadLetter": (
+        "promql_rule",
+        "error",
+        0.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
+    "FinanceReportMarketDataSyncFailure": (
+        "promql_rule",
+        "warning",
+        0.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
+    "FinanceReportStorageSweepFailure": (
+        "promql_rule",
+        "warning",
+        0.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
     "FinanceReportBackendTelemetryAbsent": (
         "promql_rule",
         "error",
@@ -355,6 +396,14 @@ _APP_METRICS: dict[str, dict[str, set[str]]] = {
     },
     "finance.rate_limit.rejected": {},
     "finance.async_parse.failure": {},
+    "finance.invariant.violation": {},
+    "finance.outbox.dead_letter": {},
+    "finance.market_data.sync_failure": {},
+    "finance.storage_sweep.failure": {},
+    # #1816: the outcome values are the ClassifyOutcome enum of the pinned finance_report.
+    "finance.statement_classification.outcome": {
+        "outcome": fr.classify_outcomes(fr.read_pinned(fr.CLASSIFICATION_RUN))
+    },
     "canary.probe.outcomes": {"canary.status": {"pass", "fail", "unconfigured"}},
 }
 _SELECTOR = re.compile(r"\{([^{}]*)\}")
@@ -450,14 +499,14 @@ def test_promql_regex_matchers_are_anchored() -> None:
         assert value.startswith("^") and value.endswith("$"), (name, value)
 
 
-# The probe routes that each rule family leaves out. finance_report: its health/system
-# routers. truealpha: the llm-service probe paths (the legacy rules use `http.target`, the
+# The probe routes that each rule family leaves out. finance_report: the SDK PROBE_PATHS
+# (#1816). truealpha: the llm-service probe paths (the legacy rules use `http.target`, the
 # stable ones `http.route`, and also leave out /livez and /readyz).
-_PROBE_ROUTE_EXCLUSION = ("http.route", "!~", "^(/health|/ping|/ping/toggle)$")
+_PROBE_ROUTE_EXCLUSION = ("http.route", "!~", "^(/health|/livez|/readyz)$")
 _FINANCE_P95_ROUTE_EXCLUSION = (
     "http.route",
     "!~",
-    "^(/health|/ping|/ping/toggle|/statements/upload|/statements/[^/]+/review/approve|/chat|/chat/suggestions|/workflow/events|/workflow/status)$",
+    "^(/health|/livez|/readyz|/statements|/statements/[^/]+/approvals|/statements/[^/]+/runs|/reconciliation/runs|/chat|/chat/suggestions|/workflow/events|/workflow/status)$",
 )
 _TRUEALPHA_STABLE_PROBES = (
     "http.route",
@@ -780,11 +829,9 @@ _SERVICE_FILTER = re.compile(r"service\.name\s*(?:=\s*'([^']+)'|IN\s*\[([^\]]*)\
 # or a metric the service lacks draws an empty panel). truealpha-* and platform-* were read from SigNoz on
 # 2026-11-10 (read-only): truealpha-app uses the old HTTP semantic convention, the
 # platform services the new one, truealpha-data-engine exports logs and traces only.
-# finance-report-* are the names its dashboard already queried (#1307).
-_NEW_HTTP = {
-    "http.server.request.duration.bucket",
-    "http.server.request.duration.count",
-}
+# finance-report-* come from the pinned finance_report telemetry_metrics.py (#1816).
+_NEW_HTTP = set(fr.OTEL_HTTP_SERVER_METRICS)
+_FINANCE_REPORT_METRICS = fr.service_metrics(fr.read_pinned(fr.TELEMETRY_METRICS))
 SERVICE_METRICS = {
     "truealpha-app": _NEW_HTTP | {"http.server.active_requests"},
     "truealpha-data-engine": set(),
@@ -798,17 +845,7 @@ SERVICE_METRICS = {
         "gen_ai.client.token.usage.sum",
         "gen_ai.client.operation.duration.bucket",
     },
-    "finance-report-backend": {
-        "finance.ai_provider.latency.bucket",
-        "finance.statement_parse.outcome",
-        "finance.reconciliation.match.outcome",
-        "finance.invariant.violation",
-    },
-    "finance-report-worker": {
-        "finance.ai_provider.latency.bucket",
-        "finance.statement_parse.outcome",
-    },
-    "finance-report-frontend": set(),
+    **_FINANCE_REPORT_METRICS,
 }
 all_dashboards = pytest.mark.parametrize(
     "path", DASHBOARD_FILES, ids=lambda p: p.relative_to(ROOT).as_posix()
@@ -892,6 +929,102 @@ def test_every_widget_names_its_service_and_a_metric_it_exports(path) -> None:
     """A service.name typo or a metric the service does not export draws an empty panel
     that reads as a healthy service (GREEN-WHILE-EMPTY)."""
     assert _service_problems(load_dashboard(path)) == []
+
+
+def _alert_metric_problems(rules: list[dict]) -> list[str]:
+    """Each PromQL selector must name a metric that every service it selects exports."""
+    problems = []
+    for rule in rules:
+        if rule.get("signal") != "metrics":
+            continue
+        for metric, matchers in _selectors(rule["promql"]):
+            services = {
+                name
+                for label, op, value in matchers
+                if label == "service.name"
+                for name in SERVICE_METRICS
+                if (op == "=" and name == value)
+                or (op == "=~" and re.fullmatch(value, name))
+            }
+            if not services:
+                problems.append(
+                    f"{rule['alert_name']}: {metric} selects no known service"
+                )
+            problems += [
+                f"{rule['alert_name']}: {metric} is not exported by {service}"
+                for service in sorted(services)
+                if metric not in SERVICE_METRICS[service]
+            ]
+    return problems
+
+
+def _finance_report_rules() -> list[dict]:
+    """The checked-in rules with the `{env}` placeholder filled for production."""
+    rules = json.loads(ALERT_RULES_FILE.read_text(encoding="utf-8"))["rules"]
+    return [
+        {**rule, "promql": rule["promql"].replace("{env}", "production")}
+        for rule in rules
+        if rule.get("signal") == "metrics"
+    ]
+
+
+def test_finance_report_alert_rules_select_metrics_the_pinned_app_exports() -> None:
+    """#1816: a PromQL rule on a metric that finance_report does not export never fires.
+    The exported names come from the pinned telemetry_metrics.py, not from a copy."""
+    rules = _finance_report_rules()
+    assert len(rules) == 11
+    assert _alert_metric_problems(rules) == []
+
+
+def test_finance_report_metric_contract_fails_on_a_metric_the_app_does_not_export() -> (
+    None
+):
+    """Mutation proof for the contract above (#1816)."""
+    rules = _finance_report_rules()
+    renamed = [
+        {
+            **rule,
+            "promql": rule["promql"].replace(
+                "finance.outbox.dead_letter", "finance.outbox.dead_letters"
+            ),
+        }
+        for rule in rules
+    ]
+    assert _alert_metric_problems(renamed) == [
+        "FinanceReportOutboxDeadLetter: finance.outbox.dead_letters is not exported by "
+        + service
+        for service in ("finance-report-backend", "finance-report-worker")
+    ]
+    http_on_worker = [
+        {
+            **rule,
+            "promql": rule["promql"].replace(
+                '"service.name"="finance-report-backend"',
+                '"service.name"="finance-report-worker"',
+            ),
+        }
+        for rule in rules
+        if rule["alert_name"] == "FinanceReportP95LatencyHigh"
+    ]
+    assert _alert_metric_problems(http_on_worker) == [
+        "FinanceReportP95LatencyHigh: http.server.request.duration.bucket is not exported "
+        "by finance-report-worker"
+    ]
+
+
+def test_finance_report_service_metrics_come_from_the_pinned_telemetry_source() -> None:
+    """#1816: the 5 metrics that the hand-copied list missed are now exported names."""
+    for metric in (
+        "finance.statement_classification.outcome",
+        "finance.rate_limit.rejected",
+        "finance.async_parse.failure",
+        "finance.extraction.confidence_tier",
+        "finance.correction_loop.low_confidence_proportion.bucket",
+    ):
+        assert metric in SERVICE_METRICS["finance-report-backend"], metric
+        assert metric in SERVICE_METRICS["finance-report-worker"], metric
+    assert SERVICE_METRICS["finance-report-frontend"] == set()
+    assert not _NEW_HTTP & SERVICE_METRICS["finance-report-worker"]
 
 
 @all_dashboards
@@ -3797,17 +3930,27 @@ def test_apply_observability_preflight_blocks_when_alerting_code_leads_productio
 
 
 def test_finance_p95_rule_excludes_slow_ai_and_upload_routes() -> None:
-    """#1708: FinanceReportP95LatencyHigh excludes slow upload, review, chat, and SSE routes."""
+    """#1708 / #1816: FinanceReportP95LatencyHigh excludes the active slow upload, approval,
+    run, chat, and SSE routes."""
     promql = _promql_rules()["FinanceReportP95LatencyHigh"]
+    (value,) = {
+        value
+        for _metric, matchers in _selectors(promql)
+        for label, _op, value in matchers
+        if label == "http.route"
+    }
+    tokens = value.removeprefix("^(").removesuffix(")$").split("|")
     for slow_route in (
-        "/statements/upload",
-        "/statements/[^/]+/review/approve",
+        "/statements",
+        "/statements/[^/]+/approvals",
+        "/statements/[^/]+/runs",
+        "/reconciliation/runs",
         "/chat",
         "/chat/suggestions",
         "/workflow/events",
         "/workflow/status",
     ):
-        assert slow_route in promql
+        assert slow_route in tokens
 
 
 _TODO_LLM_PANELS = {

@@ -1622,3 +1622,169 @@ def test_alerting_openapi_schema_contract(monkeypatch: pytest.MonkeyPatch) -> No
             "$ref"
             in feishu_op["responses"][code]["content"]["application/json"]["schema"]
         )
+
+
+# #1816: the finance_report alert rules against the pinned finance_report sources. The
+# routes come from its openapi.json, the failure counters from its telemetry_metrics.py.
+_ROUTE_MATCHER = re.compile(r'"http\.route"\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
+_SELECTOR_METRIC = re.compile(r'\{\s*"([^"]+)"')
+
+
+def _finance_report_alert_rules() -> list[dict]:
+    from common.observability_dashboards import ALERT_RULES_FILE
+
+    return json.loads(ALERT_RULES_FILE.read_text(encoding="utf-8"))["rules"]
+
+
+def _route_tokens(op: str, value: str) -> list[str]:
+    """Split one `http.route` matcher into regex tokens: `^(a|b)$` gives `a` and `b`."""
+    if op in {"=", "!="}:
+        return [re.escape(value)]
+    body = value.removeprefix("^").removesuffix("$")
+    if body.startswith("(") and body.endswith(")"):
+        body = body[1:-1]
+    return body.split("|")
+
+
+def _route_token_problems(rules: list[dict], routes: set[str]) -> list[str]:
+    """Each `http.route` token must match one active route template or probe path."""
+    return [
+        f"{rule['alert_name']}: route token {token!r} matches no active route"
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        for token in _route_tokens(op, value)
+        if not any(re.fullmatch(token, route) for route in routes)
+    ]
+
+
+def _probe_exclusion_problems(rules: list[dict], probes: frozenset[str]) -> list[str]:
+    """Each `http.route!~` exclusion must leave out every probe path."""
+    return [
+        f"{rule['alert_name']}: route exclusion keeps probe {probe}"
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        if op == "!~"
+        for probe in sorted(probes)
+        if not re.fullmatch(value, probe)
+    ]
+
+
+def _unalerted_counters(rules: list[dict], counters: set[str]) -> list[str]:
+    """Counters that no rule selects as its metric."""
+    selected = {
+        metric
+        for rule in rules
+        for metric in _SELECTOR_METRIC.findall(rule.get("promql", ""))
+    }
+    return sorted(counters - selected)
+
+
+def _active_routes() -> set[str]:
+    from infra2_sdk.runtime.otel import PROBE_PATHS
+
+    from common.tests import finance_report_sources as fr
+
+    return fr.openapi_routes(fr.read_pinned(fr.OPENAPI)) | set(PROBE_PATHS)
+
+
+def test_finance_report_route_tokens_match_active_openapi_or_probe_routes() -> None:
+    """#1816: a retired route in an exclusion excludes nothing. The renamed
+    `POST /statements` then polluted the interactive p95 alert."""
+    rules = _finance_report_alert_rules()
+    tokens = [
+        token
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        for token in _route_tokens(op, value)
+    ]
+    assert len(tokens) == 20  # 3 probes in each of 3 5xx selectors + 11 p95 tokens
+    assert _route_token_problems(rules, _active_routes()) == []
+
+
+def test_finance_report_route_exclusions_leave_out_every_sdk_probe_path() -> None:
+    """#1816: /livez and /readyz were missing from the exclusions."""
+    from infra2_sdk.runtime.otel import PROBE_PATHS
+
+    rules = _finance_report_alert_rules()
+    exclusions = [
+        value
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        if op == "!~"
+    ]
+    assert len(exclusions) == 4  # 3 in FinanceReportHigh5xxRate, 1 in the p95 rule
+    assert _probe_exclusion_problems(rules, PROBE_PATHS) == []
+
+
+def test_every_finance_report_failure_counter_has_an_alert_rule() -> None:
+    """#1816: a failure counter without a rule fails in silence."""
+    from common.tests import finance_report_sources as fr
+
+    counters = fr.failure_counter_names(fr.read_pinned(fr.TELEMETRY_METRICS))
+    assert {
+        "finance.invariant.violation",
+        "finance.outbox.dead_letter",
+        "finance.market_data.sync_failure",
+    } <= counters
+    assert _unalerted_counters(_finance_report_alert_rules(), counters) == []
+
+
+def test_finance_report_classification_rule_selects_only_failure_outcomes() -> None:
+    """#1816: the outcome filter names ClassifyOutcome values of the pinned app. A stale
+    label (`failure` for `failed`) matches no series, so the rule never fires."""
+    from common.tests import finance_report_sources as fr
+
+    outcomes = fr.classify_outcomes(fr.read_pinned(fr.CLASSIFICATION_RUN))
+    (rule,) = [
+        r
+        for r in _finance_report_alert_rules()
+        if r["alert_name"] == "FinanceReportClassificationFailureSpike"
+    ]
+    (pattern,) = re.findall(r'"outcome"=~"((?:[^"\\]|\\.)*)"', rule["promql"])
+    assert {o for o in outcomes if re.fullmatch(pattern, o)} == {"failed", "timed_out"}
+    assert _SELECTOR_METRIC.findall(rule["promql"]) == [
+        "finance.statement_classification.outcome"
+    ]
+
+
+def test_finance_report_contracts_fail_on_a_stale_route_or_an_unalerted_counter() -> (
+    None
+):
+    """Mutation proof for the three contracts above (#1816)."""
+    from common.tests import finance_report_sources as fr
+
+    rules = _finance_report_alert_rules()
+    stale = [
+        {
+            **rule,
+            "promql": rule["promql"].replace(
+                "/statements/[^/]+/approvals", "/statements/[^/]+/review/approve"
+            ),
+        }
+        for rule in rules
+    ]
+    assert _route_token_problems(stale, _active_routes()) == [
+        "FinanceReportP95LatencyHigh: route token '/statements/[^/]+/review/approve' "
+        "matches no active route"
+    ]
+
+    no_livez = [
+        {**rule, "promql": rule["promql"].replace("|/livez|", "|")}
+        for rule in rules
+        if rule["alert_name"] == "FinanceReportP95LatencyHigh"
+    ]
+    assert _probe_exclusion_problems(no_livez, frozenset({"/livez", "/health"})) == [
+        "FinanceReportP95LatencyHigh: route exclusion keeps probe /livez"
+    ]
+
+    source = fr.read_pinned(fr.TELEMETRY_METRICS)
+    grown = source.replace(
+        "_COUNTER_SPECS: tuple[tuple[str, str, str], ...] = (",
+        "_COUNTER_SPECS: tuple[tuple[str, str, str], ...] = (\n"
+        '    ("ledger_post_failure", "finance.ledger_post.failure", "Ledger post failures."),',
+        1,
+    )
+    assert grown != source
+    assert _unalerted_counters(rules, fr.failure_counter_names(grown)) == [
+        "finance.ledger_post.failure"
+    ]
