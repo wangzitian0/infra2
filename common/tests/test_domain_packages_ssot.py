@@ -102,7 +102,7 @@ def test_backup_inventory_and_rehearsal_spec() -> None:
 
 
 # ==========================================
-# 4. common.observability Tests
+# 3. common.observability Tests
 # ==========================================
 
 

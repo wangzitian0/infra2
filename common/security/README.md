@@ -16,7 +16,7 @@
 | `store.py` | 1Password and Vault stores, token helpers | `OpSecrets`, `VaultSecrets`, `get_secrets()`, `verify_vault_token()`, `generate_secret_token()`, `resolve_vault_token()` |
 | `registry.py` | Which services take which secrets, and from which manifests. App stack baseline manifests live in each stack directory and merge with the deployed release manifest at deploy time (#1320). | `SERVICES`, `Service`, `lookup()`, `merged_manifest()`, `store_keys()` |
 | `supply.py` | Manifest secret supply pipeline | `apply_secret_supply()`, `resolver_for()`, `SupplyReport` |
-| `prune.py` | Orphan KV key detection & cleanup | `prune_orphan_secrets()`, `PruneReport`, `PrunePlan` |
+| `prune.py` | Orphan KV key detection & cleanup | `prune()`, `PruneReport`, `PrunePlan` |
 
 `import common.security` needs no infra2-sdk: the package imports nothing. `store.py`, `supply.py` and `prune.py` need the SDK; import them directly (#847; pinned by `common/tests/test_sdk_free_import_surface.py`).
 
@@ -44,10 +44,10 @@ secret_val = client.get("POSTGRES_PASSWORD")
 
 ### Pruning Orphan Secrets
 ```python
-from common.security.prune import prune_orphan_secrets
+from common.security.prune import prune
 
-# Safe dry-run prune of undeclared Vault keys
-report = prune_orphan_secrets(dry_run=True)
+# Dry run (apply=False) of the undeclared Vault keys
+report = prune(apply=False)
 for plan in report.plans:
     if plan.orphans:
         print(f"{plan.path}: undeclared orphan keys {plan.orphans}")

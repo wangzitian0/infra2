@@ -61,9 +61,9 @@ No frozen compatibility shims remain in `common/`.
 The guard asserts that both are *not* structurally shims: migrate one and the table must
 move with it.
 
-`common.security` imports without infra2-sdk (#847): `common/security/__init__.py` loads
-`store`, `supply`, and `prune` lazily (PEP 562), so only touching an SDK-backed name needs
-the wheel; `common/tests/test_sdk_free_import_surface.py`,
+`common.security` imports without infra2-sdk (#847): `common/security/__init__.py` imports
+nothing, and `store`, `supply` and `prune` need the wheel only when a caller imports them;
+`common/tests/test_sdk_free_import_surface.py`,
 `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
 `test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs` pin this contract.
 
