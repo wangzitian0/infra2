@@ -5,13 +5,13 @@ description: Infra2 Platform Deploy Evidence & Reality Guard. Automates Touch Re
 
 # Infra2 Platform Deploy Evidence & Reality Guard
 
-> **Core Axiom (AGENTS.md Section 5)**:
-> *"Closed means deployed, real, and physically verified. Code merge is not deployment. Staging deploy is tag-driven soak. Production deploy requires explicit owner authorization and Touch Reality physical proof."*
+> **Core Axiom (`AGENTS.md` Merge gate §5 & `close` skill)**:
+> *"Stage 1 merge closes the implementation sub-issue only with a passing `smoke` reality probe; Staging deploy is tag-driven soak; claiming any release is deployed on Staging or Production requires Touch Reality physical proof."*
 
 ## 1. When to Activate This Skill
-- Before marking any Infra2 platform or service-touching issue as `Closed` or `Complete`.
-- After merging a PR that touches `platform/`, `bootstrap/`, or deployment configuration.
-- When verifying staging soak (10min) or production promote reality.
+- Before claiming a release tag is deployed/healthy on Staging or Production, or promoting `vX.Y.Z` to Production.
+- After Stage 2/3 deployment workflows touching `platform/`, `bootstrap/`, or release-train promotion.
+- Sub-issue Stage 1 closure follows the `smoke` + `close` skills; `release-train` tracks Staging verification and reopens on regression.
 
 ## 2. Four-Phase Verification Protocol
 
@@ -76,7 +76,7 @@ python -m tools.canary_verify --env production
 ```
 
 ## 3. Red Lines (Instant Rejection)
-- [REJECT] Merge commit on main without tag or promote: **DO NOT CLOSE ISSUE**.
+- [REJECT] Claiming Staging or Production deployment from a `main` merge without matching release tag/promote proof: **REJECT DEPLOYMENT EVIDENCE**.
 - [REJECT] GitHub Action green but VPS container digest unchanged: **REJECT EVIDENCE (GREEN-WHILE-STALE)**.
 - [REJECT] Ledger JSON missing or not cycling: **REJECT EVIDENCE**.
 - [REJECT] Watchdog reporting outages: **REJECT EVIDENCE**.
