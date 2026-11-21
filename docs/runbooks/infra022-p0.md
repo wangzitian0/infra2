@@ -48,7 +48,7 @@ Use this page for the five failure classes named by [#723](https://github.com/wa
 
 ## Schema divergence
 
-**Symptom:** `pre_deploy_schema_check.py` blocks with missing/extra enum labels, `NOT EVALUATED`, or `ROLLBACK_CLASS: C`.
+**Symptom:** the pre-deploy schema gate (`common/deploy/schema_gate.py`, which runs `infra2_sdk.runtime.schema_check` in the app image) blocks with missing/extra enum labels, `NOT EVALUATED`, or `ROLLBACK_CLASS: C`. An image whose SDK has no `runtime.schema_check` (finance_report before v0.2.92) is always `NOT EVALUATED`.
 
 **30 seconds:** Open the exact deploy run's Schema Gate output and read service, environment, `missing_in_db`, `missing_in_code`, and `ROLLBACK_CLASS`. `NOT EVALUATED` is a blocked check, not a passing schema.
 

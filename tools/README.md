@@ -7,8 +7,7 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    (`invoke <namespace>.<task>`).
 2. **Standalone scripts** — non-interactive entry points run by CI gates or
    scheduled workflows (`python tools/<script>.py`).
-   Examples: `deploy_v2.py` (deploy front door), `pre_deploy_schema_check.py`
-   (pre-deploy enum & schema compatibility gate, #698), `deploy_guard_audit.py` /
+   Examples: `deploy_v2.py` (deploy front door), `deploy_guard_audit.py` /
    `ci_gate_audit.py` / `service_identity_audit.py` / `lint_compose_resource_limits.py` /
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py` (CLI of the

@@ -617,8 +617,8 @@ def test_staging_accepts_tag_and_pulls_it(calls):
 
 
 def test_deploy_v2_carries_rollback_class_into_detail(monkeypatch, calls):
-    """The pre-deploy schema gate's ROLLBACK_CLASS (tools.pre_deploy_schema_check.
-    classify_rollback, printed by common.deploy.schema_gate.run_schema_gate) must land in
+    """The pre-deploy schema gate's ROLLBACK_CLASS (infra2_sdk.runtime.schema_check.
+    classify_rollback, parsed by common.deploy.schema_gate.run_schema_gate) must land in
     deploy_v2's own JSON result -- the thing an operator and the GitHub Actions step
     summary actually see -- not just get computed inside promote.deploy() and dropped."""
 

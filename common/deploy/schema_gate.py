@@ -1,45 +1,43 @@
-"""Pre-deploy schema gate: runs ``tools/pre_deploy_schema_check.py`` inside the app's
-own published image, against the target env's live database (#698, SSOT
+"""Pre-deploy schema gate: runs ``python -m infra2_sdk.runtime.schema_check`` inside the
+app's own published image, against the target env's live database (#698, #1824, SSOT
 ``ops.standards.md`` Rule 7 / Infra-022 TODOWRITE:20).
 
-Why this needs SSH to the VPS rather than running in-process: ``pre_deploy_schema_check``
-imports the app's own SQLAlchemy metadata (``src.database:Base.metadata``) — a real
-answer requires the app's own dependencies and code AT THE EXACT COMMIT being deployed,
-which only exist inside its published OCI image, not in infra2's own Python environment
-(TODOWRITE:20 — "在 infra2 的环境里跑不出正确结果"). Physically checked 2026-09-22:
+Why this needs SSH to the VPS rather than running in-process: the check imports the
+app's own SQLAlchemy metadata (``src.database:Base.metadata``). A real answer requires
+the app's own dependencies and code AT THE EXACT COMMIT being deployed, which only exist
+inside its published OCI image, not in infra2's own Python environment
+(TODOWRITE:20). Physically checked 2026-09-22:
 
-- ``deploy_v2``'s own process (a GitHub Actions runner) has neither a docker daemon nor
-  network reachability to the VPS's ``dokploy-network`` — only the ``bootstrap`` job in
-  ``.github/workflows/deploy.yml`` (iac-runner self-update) carries
-  ``INFRA2_WATCHDOG_SSH_*``, not the ``deploy`` job.
-- The iac-runner container IS reachable to the app's Postgres over ``dokploy-network``
-  (``docker exec iac-runner python3 -c "socket.gethostbyname('finance_report-postgres-staging')"``
-  resolves), but has no docker socket — ``docker inspect iac-runner`` shows only the
-  ``secrets``/``workspace``/``host_ssh`` mounts (documented in
-  ``bootstrap/06.iac_runner/README.md``).
+- The GitHub Actions deploy job has no docker daemon and no network path to the VPS's
+  ``dokploy-network``. It holds the ``INFRA2_WATCHDOG_SSH_*`` key (``deploy.yml`` and
+  ``reconcile-iac-inputs.yml``) and SSHes to the VPS.
+- The iac-runner container has no docker socket (``bootstrap/06.iac_runner/README.md``).
 - Only the VPS host itself runs the docker daemon AND sits on ``dokploy-network``.
 
-So this SSHes to the VPS (the same ``INFRA2_WATCHDOG_SSH_*`` convention
-``tools/secrets_reconcile_check.py`` and ``common/security/vault_self_refresh_audit.py`` already
-use) and:
+So this SSHes to the VPS (the ``INFRA2_WATCHDOG_SSH_*`` convention that
+``tools/secrets_reconcile_check.py`` and ``common/security/vault_self_refresh_audit.py``
+also use) and:
 
 1. Reads ``DATABASE_URL`` from the CURRENTLY RUNNING vault-agent sidecar's rendered
-   ``/vault/secrets/.env`` — the same value the about-to-be-replaced old container
-   already uses to reach this exact database (host/credentials do not change across an
-   app-code deploy within one env; verified live against finance_report staging+prod).
+   ``/vault/secrets/.env``. The about-to-be-replaced old container uses the same value
+   to reach this exact database (host and credentials do not change across an
+   app-code deploy within one env).
 2. Runs a throwaway container FROM THE IMAGE ABOUT TO BE DEPLOYED, entrypoint
    overridden to plain ``python3`` (the image's own entrypoint runs migrations and
-   starts the app server — NEVER let it run un-overridden here: an earlier live probe
-   without ``--entrypoint`` accidentally booted a full extra app instance and ran
-   migrations against staging before being caught and torn down), attached to
-   ``dokploy-network``, piping ``tools/pre_deploy_schema_check.py`` in over stdin
-   (``python3 -``) so no volume mount / no checkout on the remote side is needed.
+   starts the app server -- NEVER let it run un-overridden here: an earlier live probe
+   without ``--entrypoint`` booted a full extra app instance and ran migrations against
+   staging), attached to ``dokploy-network``. The container runs ``_LAUNCHER``, which
+   calls the SDK ``schema_check`` CLI with the service's ``SchemaCheckSpec`` and an
+   explicit ``--db-url``. The URL travels on stdin, so it is not in any process
+   argument list on the VPS.
 
-Fail-closed: exit 0 is the only pass. Exit 1 (discrepancy) and 3 (NOT EVALUATED —
-missing DB URL / a code-side import failure, #718 review) both block, and so does
-anything else — an SSH/docker transport failure, an unparseable result — because a
-check that could not run to a real verdict has not verified anything (the same
-fail-closed principle Rule 7 states for a DB query failure).
+The image owns the check code: infra2 sends only metadata names. An image whose
+infra2-sdk has no ``runtime.schema_check`` (finance_report before v0.2.92; infra2-sdk#239)
+cannot evaluate. ``_LAUNCHER`` then exits ``EXIT_NOT_EVALUATED`` and the gate blocks.
+
+Fail-closed: exit 0 with a ``ROLLBACK_CLASS`` line is the only pass. Exit 1 (blocked),
+exit 3 (not evaluated) and every other result -- an SSH or docker transport failure, a
+timeout, an unparseable pass -- raise :class:`SchemaGateError`.
 """
 
 from __future__ import annotations
@@ -48,22 +46,69 @@ import os
 import re
 import shlex
 import subprocess
-from pathlib import Path
+from dataclasses import dataclass
 
 from common.deploy.in_service import container_names
 from common.core.constants import REPO_ROOT
 
-_SCHEMA_CHECK_SCRIPT = (
-    Path(__file__).resolve().parents[2] / "tools" / "pre_deploy_schema_check.py"
-)
+# The SDK schema_check exit codes (infra2_sdk.runtime.schema_check). 2 is argparse's
+# usage error. Every code except EXIT_OK blocks the deploy.
+EXIT_OK = 0
+EXIT_BLOCKED = 1
+EXIT_NOT_EVALUATED = 3
 
-# Only the backend image carries the ORM (`src.database`) — the frontend image also
-# listed in ServiceSpec.image_repositories does not. Explicit rather than
-# "image_repositories[0]": that ordering is incidental wiring for the artifact-readiness
-# wait, not a contract about which repository holds the code-side enum truth.
-_BACKEND_IMAGE_REPOSITORY: dict[str, str] = {
-    "finance_report/app": "ghcr.io/wangzitian0/finance_report-backend",
+VERDICT_BLOCKED = "BLOCKED"
+VERDICT_NOT_EVALUATED = "NOT EVALUATED"
+VERDICT_NO_VERDICT = "NO VERDICT"
+
+
+@dataclass(frozen=True)
+class SchemaCheckSpec:
+    """Where one service's code-side enum truth lives, as the SDK CLI options name it.
+
+    ``image_repository`` is the image that carries the ORM. ``metadata`` is a SQLAlchemy
+    ``MetaData`` as ``module:attribute.path``. ``imports`` are imported first, so that
+    every mapped class registers on that metadata. The image WORKDIR must put the
+    ``metadata`` package on ``sys.path`` (``python3 -c`` puts the working directory
+    first).
+    """
+
+    image_repository: str
+    metadata: str
+    imports: tuple[str, ...] = ()
+
+
+# The single declaration of the gated services. The finance_report image ships no file
+# that declares its metadata, so infra2 keeps the declaration (#1824 follow-up: the
+# service declares it in its own repository). Only the backend image carries the ORM;
+# the frontend image in ServiceSpec.image_repositories does not. Every Postgres enum in
+# src.database:Base.metadata has an explicit ``name=`` (``account_type_enum``).
+_SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
+    "finance_report/app": SchemaCheckSpec(
+        image_repository="ghcr.io/wangzitian0/finance_report-backend",
+        metadata="src.database:Base.metadata",
+        imports=("src.orm_registry",),
+    ),
 }
+
+# Runs in the target image as ``python3 -c _LAUNCHER <spec options>``. It reads the
+# database URL from stdin and calls the SDK CLI with an explicit ``--db-url``. An image
+# without ``infra2_sdk.runtime.schema_check`` (an SDK before infra2-sdk#239) exits
+# EXIT_NOT_EVALUATED.
+_LAUNCHER = f"""\
+import sys
+try:
+    from infra2_sdk.runtime import schema_check
+except ImportError as exc:
+    print(
+        "NOT EVALUATED - deploy blocked: the image has no "
+        "infra2_sdk.runtime.schema_check (the image SDK is too old): " + repr(exc),
+        file=sys.stderr,
+    )
+    sys.exit({EXIT_NOT_EVALUATED})
+db_url = sys.stdin.readline().strip()
+sys.exit(schema_check.main([*sys.argv[1:], "--db-url", db_url]))
+"""
 
 _DOKPLOY_NETWORK = "dokploy-network"
 _VAULT_AGENT_SERVICE_KEY = "vault-agent"
@@ -71,21 +116,41 @@ _SSH_CONTROL_PATH = "/tmp/infra2-schema-gate-%r@%h:%p"
 
 
 class SchemaGateError(RuntimeError):
-    """The pre-deploy schema gate blocked, or could not run to a verdict."""
+    """The pre-deploy schema gate blocked, or could not run to a verdict.
+
+    ``verdict`` is ``VERDICT_BLOCKED`` (exit 1), ``VERDICT_NOT_EVALUATED`` (exit 3) or
+    ``VERDICT_NO_VERDICT`` (every other failure).
+    """
+
+    def __init__(self, message: str, *, verdict: str = VERDICT_NO_VERDICT) -> None:
+        super().__init__(message)
+        self.verdict = verdict
+
+
+def verdict_for_exit(returncode: int) -> str:
+    """The gate verdict for a non-zero check exit code."""
+    if returncode == EXIT_BLOCKED:
+        return VERDICT_BLOCKED
+    if returncode == EXIT_NOT_EVALUATED:
+        return VERDICT_NOT_EVALUATED
+    return VERDICT_NO_VERDICT
 
 
 def gate_applies(service: str) -> bool:
-    """Whether this service has a registered code-side enum source at all.
+    """Whether this service declares a ``SchemaCheckSpec`` in ``_SCHEMA_CHECK_SPECS``.
 
-    Only a service ``tools.pre_deploy_schema_check`` actually knows how to evaluate is
-    gated here — every other service is unaffected by this integration (a service with
-    persistent enums needs registering in
-    ``tools.pre_deploy_schema_check.ENUM_SOURCES`` and
-    ``common.deploy.schema_gate._BACKEND_IMAGE_REPOSITORY`` first, same as
-    ``docs/onboarding/07.new-service-sop.md`` already documents). Expanding
-    coverage to another service is separate follow-up work, not this wiring.
+    Every other service is not gated. A service with persistent enums needs a
+    ``_SCHEMA_CHECK_SPECS`` entry first (``docs/onboarding/07.new-service-sop.md``).
     """
-    return service in _BACKEND_IMAGE_REPOSITORY
+    return service in _SCHEMA_CHECK_SPECS
+
+
+def schema_check_argv(service: str, spec: SchemaCheckSpec) -> list[str]:
+    """The SDK ``schema_check`` options for ``spec``; ``_LAUNCHER`` adds ``--db-url``."""
+    argv = ["--metadata", spec.metadata]
+    for module in spec.imports:
+        argv += ["--import", module]
+    return [*argv, "--label", service]
 
 
 def _ssh_args(host: str) -> list[str]:
@@ -198,24 +263,41 @@ def _run_remote_check(
     *,
     image: str,
     service: str,
+    spec: SchemaCheckSpec,
     database_url: str,
     runner,
     timeout: float,
 ) -> subprocess.CompletedProcess:
-    docker_cmd = (
-        f"docker run --rm -i --network {_DOKPLOY_NETWORK} "
-        "--memory=1g --cpus=1 --entrypoint python3 "
-        f"-e DATABASE_URL={shlex.quote(database_url)} "
-        f"{shlex.quote(image)} - --service {shlex.quote(service)}"
-    )
-    script = _SCHEMA_CHECK_SCRIPT.read_text(encoding="utf-8")
-    return runner(
-        [*_ssh_args(host), docker_cmd],
-        input=script,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
+    docker_argv = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        _DOKPLOY_NETWORK,
+        "--memory=1g",
+        "--cpus=1",
+        "--entrypoint",
+        "python3",
+        image,
+        "-c",
+        _LAUNCHER,
+        *schema_check_argv(service, spec),
+    ]
+    try:
+        return runner(
+            [*_ssh_args(host), shlex.join(docker_argv)],
+            input=f"{database_url}\n",
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        # The exception text can carry the command; identify the failure type only.
+        raise SchemaGateError(
+            f"pre-deploy schema gate: the check of {service} in {image} on {host} "
+            f"did not finish ({type(exc).__name__})"
+        ) from None
 
 
 def run_schema_gate(
@@ -230,18 +312,18 @@ def run_schema_gate(
 ) -> str:
     """Fail-closed pre-deploy schema gate; returns the ``ROLLBACK_CLASS`` on a pass.
 
-    Raises :class:`SchemaGateError` on ANY non-zero outcome — a discrepancy (exit 1),
-    NOT EVALUATED (exit 3, #718 review: missing DB URL / a code-side import failure is
-    ALSO blocking, never a silent pass), or an SSH/docker transport failure. There is no
-    caller-visible distinction between these: every one of them means "do not proceed."
-    Callers only invoke this when :func:`gate_applies` is true.
+    Raises :class:`SchemaGateError` on ANY other outcome. Its ``verdict`` tells a
+    discrepancy (exit 1, ``BLOCKED``) from a check that compared nothing (exit 3,
+    ``NOT EVALUATED``: no DB URL, a code-side import failure, or an image without the
+    SDK ``schema_check``) from a transport failure (``NO VERDICT``). Every one of them
+    means "do not proceed". Callers only invoke this when :func:`gate_applies` is true.
     """
-    image = _BACKEND_IMAGE_REPOSITORY.get(service)
-    if not image:
+    spec = _SCHEMA_CHECK_SPECS.get(service)
+    if spec is None:
         raise SchemaGateError(
             f"{service}: pre-deploy schema gate has no registered backend image "
             "repository to run the check inside "
-            "(common.deploy.schema_gate._BACKEND_IMAGE_REPOSITORY)"
+            "(common.deploy.schema_gate._SCHEMA_CHECK_SPECS)"
         )
     resolved_host = host or _ssh_host()
     vault_agent = _vault_agent_container(service, compose_path, env_suffix)
@@ -250,36 +332,36 @@ def run_schema_gate(
     )
     result = _run_remote_check(
         resolved_host,
-        image=f"{image}:{image_ref}",
+        image=f"{spec.image_repository}:{image_ref}",
         service=service,
+        spec=spec,
         database_url=database_url,
         runner=runner,
         timeout=timeout,
     )
     output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    # Parsed BEFORE the returncode check, on purpose: pre_deploy_schema_check.py's
-    # main() prints ROLLBACK_CLASS on stdout for BOTH its passing and its blocked exit
-    # path (everything except NOT EVALUATED, exit 3, which never computed a
-    # comparison) -- the blocked case is exactly when an operator most wants to know
-    # the class without re-running the check by hand. run_schema_gate still raises on
-    # block (a blocked deploy must not proceed), but folds the class into the
-    # exception message so it reaches the deploy log either way.
+    # Parsed BEFORE the returncode check, on purpose: the SDK schema_check prints
+    # ROLLBACK_CLASS on stdout for BOTH its passing and its blocked exit path (not for
+    # NOT EVALUATED, exit 3, which never computed a comparison). The blocked case is
+    # exactly when an operator most wants the class, so the exception carries it.
     rollback_class = ""
     for line in (result.stdout or "").splitlines():
         line = line.strip()
         if line.startswith("ROLLBACK_CLASS: "):
             rollback_class = line.split(":", 1)[1].strip()
-    if result.returncode != 0:
+    if result.returncode != EXIT_OK:
+        verdict = verdict_for_exit(result.returncode)
         suffix = f" (ROLLBACK_CLASS: {rollback_class})" if rollback_class else ""
         sanitized_output = _sanitize_db_url(output.strip()[-2000:])
         raise SchemaGateError(
-            f"pre-deploy schema gate BLOCKED {service} (exit {result.returncode})"
-            f"{suffix}: {sanitized_output}"
+            f"pre-deploy schema gate {verdict} {service} "
+            f"(exit {result.returncode}){suffix}: {sanitized_output}",
+            verdict=verdict,
         )
     if not rollback_class:
         # exit 0 with no parseable ROLLBACK_CLASS is not a real answer -- treat an
         # unparseable pass as blocking rather than trusting it (Rule 7's "never a
-        # silent pass" applies to OUR parsing failures too, not only the script's own).
+        # silent pass" applies to OUR parsing failures too).
         sanitized_output = _sanitize_db_url(output.strip()[-2000:])
         raise SchemaGateError(
             f"pre-deploy schema gate: {service} exited 0 but printed no ROLLBACK_CLASS "
