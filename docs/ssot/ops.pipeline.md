@@ -157,9 +157,9 @@ State: a manifest lists the checks of each slot, so a check that runs in two slo
 - One data file in infra2-sdk has one row for each cell. A row names the owner, the check list, the trigger, the time budget, the scale, and "blocks" or "reports".
 - `STAGE_HOOK_PLANS` and the slot time limits come from that file. Target: the tables of this section come from it too; today they are written by hand.
 - A change to the file is a change of kind SDK: the Canary first, then the Apps.
-- Each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
+- Target: each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
 
-State: the file exists: `src/infra2_sdk/data/stages.yaml` in infra2-sdk (`policy_version`, 15 cells and `scheduled_audit`). `manifests.py` loads it and derives `STAGE_HOOK_PLANS` from it. Target: each record names the policy version, and the Delivery report shows it.
+State: the file exists: `src/infra2_sdk/data/stages.yaml` in infra2-sdk (`policy_version`, 15 cells and `scheduled_audit`). `manifests.py` loads it and derives `STAGE_HOOK_PLANS` from it.
 
 **Scale ladder (target)**
 
