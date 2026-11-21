@@ -1790,10 +1790,10 @@ def test_finance_report_contracts_fail_on_a_stale_route_or_an_unalerted_counter(
     ]
 
 
-# The tests that read a pinned finance_report source. Each other test of the two modules
-# must pass when every read fails (#1816 review).
+# The tests that read a pinned finance_report source. When every read fails, each of them
+# fails, and no other test fails on PinnedSourceUnavailable (#1816 review).
 _READS_FINANCE_REPORT_SOURCES = [
-    "common/tests/test_alerting.py::test_ci_reads_only_the_local_finance_report_checkout",
+    "common/tests/test_alerting.py::test_ci_reads_only_the_pinned_checkout_that_the_ci_step_names",
     "common/tests/test_alerting.py::test_every_finance_report_failure_counter_has_an_alert_rule",
     "common/tests/test_alerting.py::test_finance_report_classification_rule_selects_only_failure_outcomes",
     "common/tests/test_alerting.py::test_finance_report_contracts_fail_on_a_stale_route_or_an_unalerted_counter",
@@ -1828,6 +1828,7 @@ def test_an_unreadable_finance_report_source_fails_only_its_contract_tests(
         "PYTHONPATH": os.pathsep.join(
             [str(tmp_path), str(ROOT), os.environ.get("PYTHONPATH", "")]
         ),
+        "COLUMNS": "1000",  # keep the exception name in each short summary line
     }
     files = [
         "common/tests/test_observability_dashboards.py",
@@ -1855,38 +1856,81 @@ def test_an_unreadable_finance_report_source_fails_only_its_contract_tests(
         text=True,
         timeout=300,
     )
-    failed = sorted(
-        line.split(" ", 2)[1]
+    summaries = {
+        line.split(" ", 2)[1]: line
         for line in ran.stdout.splitlines()
         if line.startswith("FAILED ")
-    )
-    assert failed == _READS_FINANCE_REPORT_SOURCES, ran.stdout[-3000:]
+    }
+    missing = set(_READS_FINANCE_REPORT_SOURCES) - summaries.keys()
+    assert missing == set(), ran.stdout[-3000:]
+    others = {
+        test: line
+        for test, line in summaries.items()
+        if test not in _READS_FINANCE_REPORT_SOURCES
+    }
+    assert [t for t, line in others.items() if "PinnedSourceUnavailable" in line] == []
     assert "PinnedSourceUnavailable" in ran.stdout
     assert "simulated outage of apps/" in ran.stdout
 
 
-def test_ci_reads_only_the_local_finance_report_checkout(
+def test_ci_reads_only_the_pinned_checkout_that_the_ci_step_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#1816 review: with CI set and no checkout at the pin, the reader names the infra-ci
-    step and never fetches. Without CI, the same state fetches at the pinned commit."""
+    """#1816 review: with CI set, the reader reads only FINANCE_REPORT_PINNED_CHECKOUT at the
+    pin and never fetches. A missing or unpinned path names the infra-ci step. Without CI
+    and without a checkout at the pin, the reader fetches at the pinned commit."""
     from common.tests import finance_report_sources as fr
 
-    fetched: list[str] = []
-    monkeypatch.setattr(fr, "ROOT", tmp_path)  # no checkout under tmp_path
-    monkeypatch.setattr(fr, "_READS", {})
-    monkeypatch.setattr(fr, "http_get", lambda url: fetched.append(url) or b"text")
+    pin = tmp_path / "pin"
+    (pin / "apps/frontend").mkdir(parents=True)
+    (pin / fr.OPENAPI).write_text("pinned text")
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q"], cwd=pin, check=True, timeout=30)
+    subprocess.run([*git, "add", "."], cwd=pin, check=True, timeout=30)
+    subprocess.run([*git, "commit", "-qm", "pin"], cwd=pin, check=True, timeout=30)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=pin,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
 
+    fetched: list[str] = []
+    monkeypatch.setattr(fr, "ROOT", tmp_path / "infra2")  # no repos/finance_report
+    monkeypatch.setattr(fr, "pinned_sha", lambda: head)
+    monkeypatch.setattr(fr, "http_get", lambda url: fetched.append(url) or b"fetched")
     monkeypatch.setenv("CI", "true")
-    with pytest.raises(fr.PinnedSourceUnavailable) as raised:
+
+    for configured in (None, str(tmp_path / "absent")):
+        monkeypatch.setattr(fr, "_READS", {})
+        if configured is None:
+            monkeypatch.delenv(fr.PINNED_CHECKOUT_ENV, raising=False)
+        else:
+            monkeypatch.setenv(fr.PINNED_CHECKOUT_ENV, configured)
+        with pytest.raises(fr.PinnedSourceUnavailable) as raised:
+            fr.read_pinned(fr.OPENAPI)
+        assert fr.CI_STEP in str(raised.value)
+
+    monkeypatch.setattr(fr, "_READS", {})
+    monkeypatch.setenv(fr.PINNED_CHECKOUT_ENV, str(pin))
+    monkeypatch.setattr(
+        fr, "pinned_sha", lambda: "0" * 40
+    )  # the checkout is not at the pin
+    with pytest.raises(fr.PinnedSourceUnavailable):
         fr.read_pinned(fr.OPENAPI)
-    assert "Check out the pinned finance_report contract files" in str(raised.value)
+
+    monkeypatch.setattr(fr, "_READS", {})
+    monkeypatch.setattr(fr, "pinned_sha", lambda: head)
+    assert fr.read_pinned(fr.OPENAPI) == "pinned text"
     assert fetched == []
 
     monkeypatch.delenv("CI")
+    monkeypatch.delenv(fr.PINNED_CHECKOUT_ENV)
     monkeypatch.setattr(fr, "_READS", {})
-    assert fr.read_pinned(fr.OPENAPI) == "text"
+    assert fr.read_pinned(fr.OPENAPI) == "fetched"
     assert fetched == [
-        f"https://raw.githubusercontent.com/wangzitian0/finance_report/{fr.pinned_sha()}/"
+        f"https://raw.githubusercontent.com/wangzitian0/finance_report/{head}/"
         "apps/frontend/openapi.json"
     ]

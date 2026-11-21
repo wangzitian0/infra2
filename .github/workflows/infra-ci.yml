@@ -305,8 +305,10 @@ jobs:
       # The finance_report alert contract tests read the files that PINNED_FILES of
       # common/tests/finance_report_sources.py names, at the repos/finance_report gitlink
       # commit. Check out only those files (a blob-less depth-1 fetch of one commit, about
-      # 5 s); the job still never checks out the full submodules (#506). With CI set, the
-      # tests read only this checkout and never fetch (#1816).
+      # 5 s) outside the infra2 tree: repos/finance_report stays empty, so the harness still
+      # sees no app checkout (#506). The step exports the path as
+      # FINANCE_REPORT_PINNED_CHECKOUT; with CI set, the tests read only that path and never
+      # fetch (#1816).
       - name: Check out the pinned finance_report contract files
         timeout-minutes: 2
         run: |
@@ -315,15 +317,17 @@ jobs:
           sha=$(git ls-files --stage -- repos/finance_report | awk '$1 == "160000" {print $2}')
           test -n "$sha"
           url=$(uv run --locked python -c "from common.tests.finance_report_sources import APP_SOURCES, SERVICE_ID; print('https://github.com/' + APP_SOURCES[SERVICE_ID] + '.git')")
-          uv run --locked python -c "from common.tests.finance_report_sources import PINNED_FILES; print(chr(10).join(PINNED_FILES))" > "$RUNNER_TEMP/finance_report_files"
-          mkdir -p repos/finance_report
-          git init -q repos/finance_report
-          git -C repos/finance_report remote add origin "$url"
-          git -C repos/finance_report sparse-checkout set --no-cone --stdin < "$RUNNER_TEMP/finance_report_files"
-          git -C repos/finance_report fetch -q --depth=1 --filter=blob:none origin "$sha"
-          git -C repos/finance_report checkout -q --detach FETCH_HEAD
-          test "$(git -C repos/finance_report rev-parse HEAD)" = "$sha"
-          git -C repos/finance_report ls-files
+          files="$RUNNER_TEMP/finance_report_files"
+          uv run --locked python -c "from common.tests.finance_report_sources import PINNED_FILES; print(chr(10).join(PINNED_FILES))" > "$files"
+          pin="$RUNNER_TEMP/finance_report_pin"
+          git init -q "$pin"
+          git -C "$pin" remote add origin "$url"
+          git -C "$pin" sparse-checkout set --no-cone --stdin < "$files"
+          git -C "$pin" fetch -q --depth=1 --filter=blob:none origin "$sha"
+          git -C "$pin" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$pin" rev-parse HEAD)" = "$sha"
+          while read -r file; do test -f "$pin/$file"; echo "pinned: $file"; done < "$files"
+          echo "FINANCE_REPORT_PINNED_CHECKOUT=$pin" >> "$GITHUB_ENV"
 
       - name: Run infra unit tests
         # PYTHONSAFEPATH (not -P) so pytest-xdist's execnet worker subprocesses also

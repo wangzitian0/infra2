@@ -1,10 +1,11 @@
 """Read the pinned finance_report sources that the alert and dashboard contracts check (#1816).
 
 The pin is the `repos/finance_report` gitlink of this checkout. A local checkout at the
-pinned commit supplies the files. Infra CI checks out only PINNED_FILES in the step "Check out
-the pinned finance_report contract files" of infra-ci.yml (#506). With `CI` set, the reader
-uses only that checkout. A local run without a checkout at the pin fetches the files at the
-pinned commit from the public repository.
+pinned commit supplies the files. Infra CI checks out only PINNED_FILES, outside the infra2
+tree, in the step "Check out the pinned finance_report contract files" of infra-ci.yml (#506).
+That step exports the path as FINANCE_REPORT_PINNED_CHECKOUT. With `CI` set, the reader uses
+only that path. A local run uses repos/finance_report when it is at the pin, and otherwise
+fetches the files at the pinned commit from the public repository.
 
 Every read is lazy: a test calls the reader, an import never does. An unreadable source fails
 only the tests that read it, with one PinnedSourceUnavailable message, and the reader keeps
@@ -33,6 +34,9 @@ CLASSIFICATION_RUN = (
 )
 # The infra-ci.yml step checks out these files and no others.
 PINNED_FILES = (TELEMETRY_METRICS, OPENAPI, CLASSIFICATION_RUN)
+# The infra-ci.yml step writes the path of its checkout to this variable.
+PINNED_CHECKOUT_ENV = "FINANCE_REPORT_PINNED_CHECKOUT"
+CI_STEP = "Check out the pinned finance_report contract files"
 
 # The OTel FastAPI HTTP server metrics, as SigNoz stores them (#1465).
 OTEL_HTTP_SERVER_METRICS = frozenset(
@@ -63,17 +67,27 @@ def pinned_sha(root: Path = ROOT) -> str:
     return sha
 
 
+def _at_pin(checkout: Path, sha: str) -> bool:
+    return (checkout / ".git").exists() and _git(
+        "rev-parse", "HEAD", cwd=checkout
+    ) == sha
+
+
 def _read(relative_path: str) -> str:
     sha = pinned_sha()
-    checkout = ROOT / SERVICE_TO_SUBMODULE_PATH[SERVICE_ID]
-    if (checkout / ".git").exists() and _git("rev-parse", "HEAD", cwd=checkout) == sha:
-        return (checkout / relative_path).read_text(encoding="utf-8")
     if os.environ.get("CI"):
-        raise PinnedSourceUnavailable(
-            f"CI reads only the local checkout, and {checkout} is missing or not at {sha}. "
-            'Run the infra-ci.yml step "Check out the pinned finance_report contract files" '
-            "before pytest. PINNED_FILES must list each file that a test reads."
-        )
+        configured = os.environ.get(PINNED_CHECKOUT_ENV, "")
+        if not configured or not _at_pin(Path(configured), sha):
+            raise PinnedSourceUnavailable(
+                f"CI reads only the checkout in {PINNED_CHECKOUT_ENV} "
+                f"({configured or 'not set'}), and it is missing or not at {sha}. "
+                f'Run the infra-ci.yml step "{CI_STEP}" before pytest. '
+                "PINNED_FILES must list each file that a test reads."
+            )
+        return (Path(configured) / relative_path).read_text(encoding="utf-8")
+    checkout = ROOT / SERVICE_TO_SUBMODULE_PATH[SERVICE_ID]
+    if _at_pin(checkout, sha):
+        return (checkout / relative_path).read_text(encoding="utf-8")
     url = f"https://raw.githubusercontent.com/{APP_SOURCES[SERVICE_ID]}/{sha}/{relative_path}"
     try:
         return http_get(url).decode("utf-8")

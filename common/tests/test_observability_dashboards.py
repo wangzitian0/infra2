@@ -1027,10 +1027,14 @@ def test_finance_report_metric_contract_fails_on_a_metric_the_app_does_not_expor
         for rule in rules
         if rule["alert_name"] == "FinanceReportP95LatencyHigh"
     ]
-    assert _alert_metric_problems(http_on_worker) == [
-        "FinanceReportP95LatencyHigh: http.server.request.duration.bucket is not exported "
-        "by finance-report-worker"
-    ] * 2  # the route-exclusion selector and the GET-read selector
+    assert (
+        _alert_metric_problems(http_on_worker)
+        == [
+            "FinanceReportP95LatencyHigh: http.server.request.duration.bucket is not exported "
+            "by finance-report-worker"
+        ]
+        * 2
+    )  # the route-exclusion selector and the GET-read selector
 
 
 def test_finance_report_service_metrics_come_from_the_pinned_telemetry_source() -> None:
