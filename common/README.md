@@ -91,7 +91,8 @@ container = with_env_suffix("platform-postgres", get_env())  # needs DEPLOY_ENV 
 
 ### 2. Secret Supply & Vault Access (`common.security`)
 ```python
-from common.security import VaultSecrets, apply_secret_supply
+from common.security.store import VaultSecrets
+from common.security.supply import apply_secret_supply
 from common.security.registry import lookup
 
 service = lookup("platform", "alerting")  # the secrets row, with its manifests
@@ -126,7 +127,8 @@ result = execute_rehearsal(plan)
 
 ### 4. Observability Probes & Log Triage (`common.observability`)
 ```python
-from common.observability import ProbeSpec, analyze_container_logs, run_probes
+from common.observability.breakdown import analyze_container_logs
+from common.observability.probes import ProbeSpec, run_probes
 
 spec = ProbeSpec(name="pg-tcp", kind="tcp", target="platform-postgres:5432")
 results = run_probes([spec])

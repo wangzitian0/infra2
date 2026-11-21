@@ -29,7 +29,7 @@
 
 ### Executing In-Band Probes
 ```python
-from common.observability import ProbeSpec, run_probe
+from common.observability.probes import ProbeSpec, run_probe
 
 spec = ProbeSpec(
     name="postgres-tcp",
@@ -46,7 +46,7 @@ if not result.ok:
 
 ### Triaging Container Crashes
 ```python
-from common.observability import analyze_container_logs
+from common.observability.breakdown import analyze_container_logs
 
 verdict = analyze_container_logs("platform-alerting", "ERROR: connection refused")
 print(f"Container breakdown cause: {verdict.cause} ({verdict.detail})")

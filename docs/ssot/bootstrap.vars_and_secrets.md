@@ -323,7 +323,8 @@ invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=p
 密钥与机密供给能力的**实现真源**位于 [`common/security/`](../../common/security/README.md)（`common/security/store.py`, `common/security/supply.py`, `common/security/prune.py`）。Vault token 取 `VAULT_TOKEN`（`VAULT_ROOT_TOKEN` 仅过渡别名）。
 
 ```python
-from common.security import VaultSecrets, apply_secret_supply, resolve_vault_token
+from common.security.store import VaultSecrets, resolve_vault_token
+from common.security.supply import apply_secret_supply
 from common.security.registry import lookup
 
 # 1. 运行时值 (Vault, 默认) —— 只读访问

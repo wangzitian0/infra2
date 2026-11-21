@@ -18,13 +18,13 @@
 | `supply.py` | Manifest secret supply pipeline | `apply_secret_supply()`, `resolver_for()`, `SupplyReport` |
 | `prune.py` | Orphan KV key detection & cleanup | `prune_orphan_secrets()`, `PruneReport`, `PrunePlan` |
 
-`import common.security` needs no infra2-sdk: `store.py`, `supply.py`, and `prune.py` load lazily (PEP 562) on first access of an SDK-backed name, which then raises the SDK's `ImportError` if the wheel is absent (#847; pinned by `common/tests/test_sdk_free_import_surface.py`).
+`import common.security` needs no infra2-sdk: the package imports nothing. `store.py`, `supply.py` and `prune.py` need the SDK; import them directly (#847; pinned by `common/tests/test_sdk_free_import_surface.py`).
 
 ## Usage Examples
 
 ### Applying Secret Supply during Deployment
 ```python
-from common.security import apply_secret_supply
+from common.security.supply import apply_secret_supply
 from common.security.registry import lookup
 
 service = lookup("platform", "alerting")
@@ -35,7 +35,7 @@ print(f"Supplied: {report.changed}, Missing: {report.missing}, Notes: {report.no
 
 ### Resolving Tokens and Accessing Vault
 ```python
-from common.security import resolve_vault_token, VaultSecrets
+from common.security.store import VaultSecrets, resolve_vault_token
 
 token = resolve_vault_token()
 client = VaultSecrets(path="platform/staging/postgres", token=token)
@@ -44,7 +44,7 @@ secret_val = client.get("POSTGRES_PASSWORD")
 
 ### Pruning Orphan Secrets
 ```python
-from common.security import prune_orphan_secrets
+from common.security.prune import prune_orphan_secrets
 
 # Safe dry-run prune of undeclared Vault keys
 report = prune_orphan_secrets(dry_run=True)

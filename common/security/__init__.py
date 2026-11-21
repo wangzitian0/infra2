@@ -1,61 +1,7 @@
-"""Infra2 Security Domain Package."""
+"""Infra2 security domain package.
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
-# Importing this package must not require infra2-sdk (#847).
-#
-# `store.py`, `supply.py`, and `prune.py` all import `infra2_sdk.secrets` unconditionally,
-# so an eager import here would make every `common.security.*` import need the wheel --
-# including `common.security` and `common.security.registry`.
-# Guards pin that invariant at its source:
-# `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` (a real
-# CI incident, run 34938044492), `test_workflow_runtime_deps.py::
-# test_a_job_can_import_what_it_runs`, and `test_sdk_free_import_surface.py`.
-#
-# All exported names resolve lazily through `_SDK_BACKED` (`PEP 562` module-level
-# `__getattr__`): `from common.security import apply_secret_supply` keeps working,
-# and importing `common.security` or `common.security.registry` stays SDK-free. Without
-# the SDK, accessing any name in `_SDK_BACKED` loads `store` / `supply` / `prune` and
-# raises the SDK's own ImportError rather than returning a stub.
-if TYPE_CHECKING:
-    from common.security.prune import prune_orphan_secrets
-    from common.security.store import (
-        VaultSecrets,
-        generate_secret_token,
-        resolve_vault_token,
-    )
-    from common.security.supply import (
-        SupplyReport,
-        apply_secret_supply,
-    )
-
-# Names that need infra2-sdk; each maps to the submodule that defines it.
-_SDK_BACKED: dict[str, str] = {
-    "SupplyReport": "common.security.supply",
-    "VaultSecrets": "common.security.store",
-    "apply_secret_supply": "common.security.supply",
-    "generate_secret_token": "common.security.store",
-    "prune_orphan_secrets": "common.security.prune",
-    "resolve_vault_token": "common.security.store",
-}
-
-__all__ = [
-    "SupplyReport",
-    "VaultSecrets",
-    "apply_secret_supply",
-    "generate_secret_token",
-    "prune_orphan_secrets",
-    "resolve_vault_token",
-]
-
-
-def __getattr__(name: str):
-    from common.core.environ import resolve_lazy_attr
-
-    return resolve_lazy_attr(name, _SDK_BACKED, globals(), __name__)
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_SDK_BACKED))
+Import the submodule that defines a name, for example
+`from common.security.supply import apply_secret_supply`. The package itself
+imports nothing, so `import common.security` and `common.security.registry`
+need no infra2-sdk (#847; `common/tests/test_sdk_free_import_surface.py`).
+"""
