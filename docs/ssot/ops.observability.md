@@ -231,7 +231,7 @@ graph LR
 
 > **单一全局实例**:SigNoz 是 `prod_only` 单实例。preview/staging/production **全部**打到这个**无后缀** collector,靠 `deployment.environment.name` 区分环境(无 per-env collector)。标识规则见 [core.environments.md](core.environments.md#telemetry-identity)。
 
-The infra2-sdk [app integration contract](https://github.com/wangzitian0/infra2-sdk/blob/main/docs/app-integration-contract.md) owns the names of the app-side variables `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, and the `init_service` start-up that reads them. infra2 owns their values: the endpoint is `http://platform-signoz-otel-collector:4318` in every environment, with no suffix. [core.environments.md](core.environments.md#telemetry-identity) defines the `OTEL_RESOURCE_ATTRIBUTES` keys.
+The infra2-sdk [app integration contract](https://github.com/wangzitian0/infra2-sdk/blob/main/docs/app-integration-contract.md) owns the `OTEL_*` variable names and the `init_service` start-up. infra2 sets the values. The endpoint is `http://platform-signoz-otel-collector:4318` in all environments. [core.environments.md](core.environments.md#telemetry-identity) defines the `OTEL_RESOURCE_ATTRIBUTES` keys.
 
 > 表层别名与底层 commit 由 infra2 部署时签发,应用只消费、对缺失 fast-fail。The alert bridge (`platform/alerting`) is the one exception: it pages people, so it keeps running and logs a bad OTEL value (todo refuses to start). The value of `GIT_COMMIT_SHA` for each service class is in [core.environments.md](core.environments.md#commit-identity).
 
