@@ -24,8 +24,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from common.deploy.compose_compile import load_stack
-
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_ROOTS = ("bootstrap", "platform", "finance_report", "truealpha")
 
@@ -44,8 +42,7 @@ PROMOTE_TIER_COMPOSE_FILES = (
 
 
 def _services(compose_path: Path) -> dict[str, dict]:
-    # The deployed text: an x-infra2 stack gets its sidecar from the compiler (#1822).
-    doc = yaml.safe_load(load_stack(compose_path).compiled) or {}
+    doc = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
     return {
         name: spec
         for name, spec in (doc.get("services") or {}).items()
@@ -58,30 +55,14 @@ def _mounts(spec: dict, needle: str) -> bool:
 
 
 def _vault_agent_composes() -> list[str]:
-    """Every compose whose vault-agent reads a template, repo-relative.
-
-    A hand-written agent bind-mounts secrets.ctmpl. A compiled x-infra2 agent gets the
-    template as VAULT_SECRETS_TEMPLATE (#1822 Slice 2).
-    """
+    """Every compose whose vault-agent bind-mounts secrets.ctmpl, repo-relative."""
     found = []
     for top in COMPOSE_ROOTS:
         for compose in sorted((ROOT / top).rglob("compose.yaml")):
             agent = _services(compose).get("vault-agent")
-            if agent and (
-                _mounts(agent, "secrets.ctmpl")
-                or "VAULT_SECRETS_TEMPLATE" in (agent.get("environment") or {})
-            ):
+            if agent and _mounts(agent, "secrets.ctmpl"):
                 found.append(str(compose.relative_to(ROOT)))
     return found
-
-
-def _template(compose: Path) -> str:
-    """The template that the agent of ``compose`` renders."""
-    agent = _services(compose)["vault-agent"]
-    inline = (agent.get("environment") or {}).get("VAULT_SECRETS_TEMPLATE")
-    if inline is not None:
-        return str(inline).replace("$$", "$")
-    return (compose.parent / "secrets.ctmpl").read_text(encoding="utf-8")
 
 
 VAULT_AGENT_COMPOSE_FILES = _vault_agent_composes()
@@ -91,7 +72,6 @@ def test_every_vault_agent_is_discovered():
     assert len(VAULT_AGENT_COMPOSE_FILES) >= 16, VAULT_AGENT_COMPOSE_FILES
     assert set(PROMOTE_TIER_COMPOSE_FILES) <= set(VAULT_AGENT_COMPOSE_FILES)
     assert "bootstrap/06.iac_runner/compose.yaml" in VAULT_AGENT_COMPOSE_FILES
-    assert "platform/30.todo/compose.yaml" in VAULT_AGENT_COMPOSE_FILES
 
 
 @pytest.mark.parametrize("relative_path", VAULT_AGENT_COMPOSE_FILES)
@@ -113,7 +93,7 @@ def test_vault_agent_forwards_every_env_its_template_reads(relative_path):
     compose kept forwarding only TA_POSTGRES_PORT, so a recreated agent rendered
     S3_ENDPOINT=http://127.0.0.1: (no port) and every raw capture failed (2026-09-07)."""
     compose = ROOT / relative_path
-    template = _template(compose)
+    template = (compose.parent / "secrets.ctmpl").read_text(encoding="utf-8")
     referenced = set(re.findall(r'env "([A-Za-z0-9_]+)"', template))
     forwarded = set(_services(compose)["vault-agent"].get("environment") or {})
     missing = sorted(referenced - forwarded)

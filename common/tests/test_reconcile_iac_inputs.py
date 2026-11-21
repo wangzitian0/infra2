@@ -203,36 +203,6 @@ def test_manifest_change_reconciles_all_iac_pinned_services() -> None:
     assert "dependency manifest changed" in plan.selected["platform/alerting"]
 
 
-def test_x_infra2_stacks_are_read_from_the_compose_files() -> None:
-    from common.deploy.dependencies import x_infra2_stacks
-
-    stacks = x_infra2_stacks()
-    assert stacks["platform/todo"] == "platform/30.todo/compose.yaml"
-    assert "platform/portal" not in stacks
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "uv.lock",
-        "tools/sdk_requirement.py",
-        "common/deploy/compose_compile.py",
-        "common/security/secrets_render.py",
-        "common/security/registry.py",
-    ],
-)
-def test_a_compiler_input_change_selects_each_x_infra2_stack(path: str) -> None:
-    """The compiled text of an x-infra2 stack, and so its CONFIGURATION_SHA256, depends
-    on the compiler (infra2#1822 Slice 2). A compiler change must redeploy the stack."""
-    from common.deploy.compose_compile import COMPILER_INPUT_PATHS
-
-    assert path in COMPILER_INPUT_PATHS
-    plan = build_plan([path])
-    assert plan.selected["platform/todo"] == f"x-infra2 compiler input ({path})"
-    assert "platform/todo" in plan.staging_services
-    assert path not in plan.dropped
-
-
 def test_deployer_change_reconciles_all_iac_pinned_services() -> None:
     """Select all iac_pinned services when the shared source config hash formula changes."""
     plan = build_plan(["common/deploy/deployer.py"])
@@ -6028,21 +5998,3 @@ def test_print_changed_files_uses_the_same_base_as_the_train(tmp_path, capsys) -
         "f1.txt",
         "f2.txt",
     ]  # production: the marker
-
-
-@pytest.mark.parametrize(
-    "compiler_input", ["uv.lock", "common/deploy/compose_compile.py"]
-)
-def test_the_runner_fanout_and_the_plan_agree_on_a_compiler_input(
-    compiler_input,
-) -> None:
-    """Review of #1882: match_changed_services (the runner's own diff path) and
-    explain_fanout (its log and build_plan) must select the same services, and a
-    compiler input selects no plain stack."""
-    from common.deploy.dependencies import explain_fanout, match_changed_services
-
-    files = [compiler_input]
-    selected = match_changed_services(files)
-    assert selected == set(explain_fanout(files).selected)
-    assert "platform/todo" in selected
-    assert "platform/portal" not in selected

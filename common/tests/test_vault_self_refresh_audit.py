@@ -7,7 +7,6 @@ import types
 
 import yaml
 
-from common.deploy.compose_compile import load_stack
 from common.security import vault_self_refresh_audit as vault_self_refresh_audit_module
 from common.security.vault_self_refresh_audit import (
     classify_deployed_template,
@@ -68,25 +67,6 @@ def _token_service():
 def test_inventory_covers_every_active_vault_agent_compose() -> None:
     """#166: every active vault-agent compose path must have an audit inventory row."""
     assert discover_vault_agent_compose_paths() == inventory_compose_paths()
-    # The x-infra2 todo has no `vault-agent:` text; the compiler adds the sidecar.
-    assert "platform/30.todo/compose.yaml" in inventory_compose_paths()
-
-
-def test_discovery_finds_an_x_infra2_sidecar_by_its_vault_block(tmp_path) -> None:
-    """#1874 left this open: discovery read only the text `  vault-agent:`."""
-    stacks = {
-        "plain": "services:\n  vault-agent:\n    image: a:1\n",
-        "plain-none": "services:\n  app:\n    image: a:1\n",
-        "x-vault": "x-infra2:\n  vault:\n    name: s\nservices:\n  app:\n    image: a:1\n",
-        "x-none": "x-infra2: {}\nservices:\n  app:\n    image: a:1\n",
-    }
-    for name, text in stacks.items():
-        (tmp_path / name).mkdir()
-        (tmp_path / name / "compose.yaml").write_text(text, encoding="utf-8")
-    assert discover_vault_agent_compose_paths(tmp_path) == {
-        "plain/compose.yaml",
-        "x-vault/compose.yaml",
-    }
 
 
 def test_inventory_paths_exist_and_match_vault_agent_contract() -> None:
@@ -99,13 +79,8 @@ def test_inventory_paths_exist_and_match_vault_agent_contract() -> None:
         ):
             assert (ROOT / relative).exists(), f"{service.id}: missing {relative}"
 
-        # The deployed text: an x-infra2 stack gets its sidecar from the compiler.
-        compose = yaml.safe_load(load_stack(service.compose_path).compiled)
+        compose = yaml.safe_load((ROOT / service.compose_path).read_text())
         vault_agent = compose["services"]["vault-agent"]
-        # The audit runs `docker exec` on this name (#1822 Slice 2).
-        assert vault_agent["container_name"] == service.vault_agent_container, (
-            service.id
-        )
         agent_env = str(vault_agent.get("environment", {}))
         for env_key in service.auth_env_keys:
             assert env_key in agent_env, f"{service.id}: vault-agent missing {env_key}"

@@ -10,8 +10,6 @@ from typing import Any
 
 import yaml
 
-from common.deploy.compose_compile import load_stack
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_PATH = REPO_ROOT / "docs/ssot/compose-security-baseline.json"
 WORKFLOWS_DIR = REPO_ROOT / ".github/workflows"
@@ -74,7 +72,7 @@ def scan_compose_security_gaps(
 
     for path in sorted(compose_files):
         rel = path.relative_to(root).as_posix()
-        data = yaml.safe_load(load_stack(path).compiled) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         services = data.get("services") or {}
         if not isinstance(services, dict):
             continue
