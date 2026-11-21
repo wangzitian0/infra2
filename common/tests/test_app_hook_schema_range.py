@@ -1,7 +1,7 @@
-"""infra2 runs app hook manifests of schema 2 and 3 (infra2#1823, T7 of #1644).
+"""infra2 runs app hook manifests of schema 3 only (infra2#1823, Step 3).
 
-The train reads each app manifest at the app's pinned tag. An app that moves to infra2-sdk
-4.0.0 ships schema 3; infra2 keeps schema 2 for the apps that have not moved yet.
+The train reads each app manifest at the app's pinned tag. Every app ships schema 3, and
+the pinned SDK refuses schema 2.
 """
 
 from __future__ import annotations
@@ -52,8 +52,12 @@ def _writing_only() -> RuntimeHooksManifest:
     return _v3(*(_row(name, writes=True) for name in ("preview_gate", "staging_gate")))
 
 
-def test_the_runner_accepts_schema_2_and_3() -> None:
-    assert ACCEPTED_HOOK_SCHEMA_VERSIONS == (2, 3)
+def test_the_runner_accepts_schema_3_only() -> None:
+    assert ACCEPTED_HOOK_SCHEMA_VERSIONS == (3,)
+    with pytest.raises(ValueError, match="schema_version"):
+        RuntimeHooksManifest.from_dict(
+            {"schema_version": 2, "service": "finance_report/app", "slots": {}}
+        )
 
 
 @pytest.mark.parametrize(
@@ -215,7 +219,6 @@ def test_the_scheduled_audit_runs_and_fails_a_schema_3_app_with_an_empty_cell(
     monkeypatch.setenv("GITHUB_TOKEN", "tok-test")
     off = {"reason": "paused", "issue": "infra2#1823"}
     manifest = _v3(*(_row(name, off=off) for name in ALL_SLOTS))
-    assert "scheduled_audit" not in manifest.slots
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
 
     def runner(argv, **_kw):
@@ -247,7 +250,6 @@ def test_the_train_runs_and_fails_a_schema_3_slot_with_an_empty_cell(
     )
     monkeypatch.setenv("GITHUB_TOKEN", "tok-test")
     manifest = _writing_only()
-    assert "prod_gate" not in manifest.slots
     plan = reconcile.build_plan(
         ["finance_report/finance_report/10.app/compose.yaml"],
         app_release_tags={"finance_report/app": "v0.2.92"},

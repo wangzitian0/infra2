@@ -494,7 +494,11 @@ _HARNESS_REPOS_REL_PATH = "harness/repos.yaml"
 
 
 def classify_version_ref(ref: str | int) -> str:
-    """Classify ``version_ref`` into one of 4 pairwise-disjoint forms:
+    """Equal to ``infra2_sdk.refs.classify_ref`` of infra2-sdk 4.x. This copy stays while the
+    IaC runner image runs an older SDK without the ``pr`` form; delete it after the runner
+    image is rebuilt on 4.x (a production step, infra2#1823 Step 3).
+
+    Classify ``version_ref`` into one of 4 pairwise-disjoint forms:
 
     - ``branch``: literal ``main``
     - ``tag``: ``vX.Y.Z``

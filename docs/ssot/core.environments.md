@@ -398,7 +398,7 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 | `preview/branch` | preview | `branch-<name>`（默认 `main`）| branch |
 | `preview/pr` | preview | `pr-<N>` | PR 号 |
 
-**四种正交、两两不相交的 `version_ref` 形态**（`deploy_contract.classify_version_ref`）：
+**四种正交、两两不相交的 `version_ref` 形态**（`infra2_sdk.refs.classify_ref`）：
 1. `branch`：`\Amain\Z`
 2. `tag`：`\Av\d+\.\d+\.\d+\Z`
 3. `pr`：`\A(?:pr-([1-9]\d*)|([1-9]\d{0,5}))\Z`（至多 6 位正整数，永不与 7–40 位十六进制 SHA 重叠）

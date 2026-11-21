@@ -228,6 +228,10 @@ _RENDER_KEYS = (
 def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManifest:
     """Union of a service's manifests.
 
+    Equal to ``infra2_sdk.runtime.merge_manifests`` (4.x). The loop stays because the IaC
+    runner runs it (secret supply) on SDK 3.23.0, which lacks that function. Switch after
+    the owner-approved runner rebuild (infra2#1823 Step 3).
+
     Two apps in one stack may declare the same variable (both truealpha apps read
     DATABASE_URL); they must agree on how it is produced and rendered, and the first
     declaration wins for the rest (requiredness, description).

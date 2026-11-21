@@ -6,8 +6,9 @@ Run 43012402667 (v3.1.50) failed: the image held 3.23.0 and `dokploy_client`
 imported `request_with_retry` from 3.27.0. `invoke <service>.sync` loads the
 whole task collection, so one bad import failed every service.
 
-This test loads that collection the way the runner does and lists the
-infra2_sdk names that the loaded modules import. Each name must be in
+This test loads that collection the way the runner does, follows each repo
+import of the loaded modules (function-level imports included, #1853), and lists
+the infra2_sdk names that those files import. Each name must be in
 RUNNER_SDK_NAMES. An entry needs a check against the runner wheel
 (`pip install infra2-sdk==<RUNNER_SDK>`); the production run that rebuilds the
 runner raises RUNNER_SDK and may add names.
@@ -27,22 +28,29 @@ RUNNER_SDK_NAMES = frozenset(
     {
         ("infra2_sdk.ci", "parse_github_time"),
         ("infra2_sdk.observability", "is_recently_flapping"),
+        ("infra2_sdk.refs", "ReleaseError"),
+        ("infra2_sdk.refs", "assert_after_on_main"),
         ("infra2_sdk.refs", "resolve_image_digest"),
         ("infra2_sdk.routing", "CANARY_SLOT"),
         ("infra2_sdk.routing", "derive_preview_coordinates"),
         ("infra2_sdk.routing", "resolve_app_hostname"),
         ("infra2_sdk.routing", "resolve_service_url"),
+        ("infra2_sdk.runtime.config_schema", "EnvironmentField"),
+        ("infra2_sdk.runtime.config_schema", "EnvironmentManifest"),
         ("infra2_sdk.runtime.environment", "is_preview_alias"),
         ("infra2_sdk.runtime.environment", "resolve_environment_tier"),
         ("infra2_sdk.runtime.otel", "signal_endpoint"),
         ("infra2_sdk.runtime.s3", "S3Settings"),
         ("infra2_sdk.runtime.s3", "ensure_bucket"),
+        ("infra2_sdk.secrets", "HttpTransport"),
         ("infra2_sdk.secrets", "OnePasswordBackend"),
         ("infra2_sdk.secrets", "SecretsError"),
+        ("infra2_sdk.secrets", "SecretsResolver"),
         ("infra2_sdk.secrets", "VaultKvBackend"),
         ("infra2_sdk.secrets", "VaultTokenTarget"),
         ("infra2_sdk.secrets", "normalize_selector"),
         ("infra2_sdk.secrets", "policy_name"),
+        ("infra2_sdk.secrets", "urllib_transport"),
         ("infra2_sdk.secrets", "vault_path"),
         ("infra2_sdk.secrets", "vault_token_status"),
     }
@@ -78,6 +86,57 @@ def sdk_names_imported_by(source: str) -> set[tuple[str, str]]:
     return names
 
 
+_LOCAL_ROOTS = frozenset(
+    {"common", "tools", "platform", "bootstrap", "libs", "finance_report", "truealpha"}
+)
+
+
+def local_files_imported_by(path: Path) -> set[Path]:
+    """Repo files that ``path`` imports, function-level imports included.
+
+    The runner calls functions that import modules ``invoke --list`` never loads (the
+    secret supply path imports ``common.security.registry``). #1853 review: such a module
+    imported an SDK 4.x name that the runner SDK lacks, and the old scan missed it."""
+    found: set[Path] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            modules = [node.module, *(f"{node.module}.{a.name}" for a in node.names)]
+        elif isinstance(node, ast.Import):
+            modules = [a.name for a in node.names]
+        else:
+            continue
+        for module in modules:
+            if module.split(".")[0] not in _LOCAL_ROOTS:
+                continue
+            base = ROOT.joinpath(*module.split("."))
+            for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+                if candidate.is_file():
+                    found.add(candidate.resolve())
+    return found
+
+
+def runner_reachable_files(loaded: list[str]) -> set[Path]:
+    """The loaded modules plus every repo file that they import, transitively."""
+    seen = {Path(f).resolve() for f in loaded}
+    queue = list(seen)
+    while queue:
+        for target in local_files_imported_by(queue.pop()):
+            if target not in seen:
+                seen.add(target)
+                queue.append(target)
+    return seen
+
+
+def test_the_reach_scan_follows_a_function_level_import(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "def supply():\n    from common.security.registry import merged_manifest\n",
+        encoding="utf-8",
+    )
+    registry = (ROOT / "common/security/registry.py").resolve()
+    assert registry in local_files_imported_by(probe)
+
+
 def test_import_scanner_reports_the_name_that_broke_the_runner() -> None:
     source = "from infra2_sdk.runtime.http import request_with_retry\nimport infra2_sdk.secrets\n"
     assert sdk_names_imported_by(source) == {
@@ -107,10 +166,14 @@ def test_runner_task_collection_imports_only_names_of_the_runner_sdk() -> None:
         f"only {len(loaded)} repo modules loaded; the scan would be empty"
     )
 
+    reachable = runner_reachable_files(loaded)
+    assert (ROOT / "common/security/registry.py").resolve() in reachable, (
+        "the secret supply module is not in the scan; the reach scan is broken"
+    )
     imported: dict[tuple[str, str], str] = {}
-    for file in loaded:
-        for pair in sdk_names_imported_by(Path(file).read_text(encoding="utf-8")):
-            imported.setdefault(pair, Path(file).relative_to(ROOT).as_posix())
+    for file in sorted(reachable):
+        for pair in sdk_names_imported_by(file.read_text(encoding="utf-8")):
+            imported.setdefault(pair, file.relative_to(ROOT).as_posix())
     assert imported, (
         "no infra2_sdk import found in the loaded modules; the scan is empty"
     )
