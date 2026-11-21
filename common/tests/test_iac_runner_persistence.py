@@ -32,6 +32,19 @@ _RESULT = types.SimpleNamespace(
 )
 
 
+def _patch_thread(monkeypatch, module, fake) -> None:
+    """Replace `Thread` for `module` only. Patching `module.threading.Thread` changes the
+    global `threading` module, so anyio's portal thread (Starlette TestClient) gets the fake
+    and fails with `unexpected keyword argument 'daemon'`."""
+    import threading as _threading
+    import types as _types
+
+    proxy = _types.ModuleType("threading")
+    proxy.__dict__.update(vars(_threading))
+    proxy.Thread = fake
+    monkeypatch.setattr(module, "threading", proxy)
+
+
 def _thread(runs: bool):
     """A stand-in for threading.Thread: it runs the deploy at once, or dies with the process."""
 
@@ -90,7 +103,7 @@ def test_a_restart_between_request_and_poll_reads_back_interrupted_then_retries(
     """The record reads back as `interrupted`, never `not_found`; a second request for the
     same coordinates then runs and completes."""
     first = _runner(monkeypatch, tmp_path)
-    monkeypatch.setattr(first.threading, "Thread", _thread(False))
+    _patch_thread(monkeypatch, first, _thread(False))
     accepted, code = _deploy(first)
     assert code == 202
 
@@ -99,7 +112,7 @@ def test_a_restart_between_request_and_poll_reads_back_interrupted_then_retries(
     assert (code, body["status"]) == (200, "interrupted")
     assert second._in_flight_deploys == set() and sys.modules["sync_runner"].calls == []
 
-    monkeypatch.setattr(second.threading, "Thread", _thread(True))
+    _patch_thread(monkeypatch, second, _thread(True))
     retry, code = _deploy(second)
     assert code == 202 and retry["deployment_id"] == accepted["deployment_id"]
     assert len(sys.modules["sync_runner"].calls) == 1
@@ -110,7 +123,7 @@ def test_a_result_survives_a_restart_and_a_too_old_record_does_not(
     monkeypatch, tmp_path
 ):
     first = _runner(monkeypatch, tmp_path)
-    monkeypatch.setattr(first.threading, "Thread", _thread(True))
+    _patch_thread(monkeypatch, first, _thread(True))
     deployment_id = _deploy(first)[0]["deployment_id"]
 
     body, code = _status(_runner(monkeypatch, tmp_path), deployment_id)
@@ -164,7 +177,7 @@ def test_a_failed_swap_leaves_the_previous_file_whole_and_the_deploy_goes_on(
     monkeypatch, tmp_path
 ):
     ws = _runner(monkeypatch, tmp_path)
-    monkeypatch.setattr(ws.threading, "Thread", _thread(True))
+    _patch_thread(monkeypatch, ws, _thread(True))
     _deploy(ws)
     before = (tmp_path / STATE).read_text()
 

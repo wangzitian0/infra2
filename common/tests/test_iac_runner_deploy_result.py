@@ -29,6 +29,19 @@ DEPLOY_SHA = "a" * 40
 _nonce_counter = 0
 
 
+def _patch_thread(monkeypatch, module, fake) -> None:
+    """Replace `Thread` for `module` only. Patching `module.threading.Thread` changes the
+    global `threading` module, so anyio's portal thread (Starlette TestClient) gets the fake
+    and fails with `unexpected keyword argument 'daemon'`."""
+    import threading as _threading
+    import types as _types
+
+    proxy = _types.ModuleType("threading")
+    proxy.__dict__.update(vars(_threading))
+    proxy.Thread = fake
+    monkeypatch.setattr(module, "threading", proxy)
+
+
 def _load_module(name: str, path: Path, monkeypatch):
     monkeypatch.setenv("GIT_REPO_URL", "https://github.com/wangzitian0/infra2")
     spec = importlib.util.spec_from_file_location(name, path)
@@ -427,7 +440,7 @@ def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
         def start(self):
             started.append(self.args)
 
-    monkeypatch.setattr(webhook_server.threading, "Thread", FakeThread)
+    _patch_thread(monkeypatch, webhook_server, FakeThread)
 
     body, status_code = _post_signed(
         webhook_server,
@@ -480,7 +493,7 @@ def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
         def start(self):
             self.target(*self.args)
 
-    monkeypatch.setattr(webhook_server.threading, "Thread", ImmediateThread)
+    _patch_thread(monkeypatch, webhook_server, ImmediateThread)
 
     body, status_code = _post_signed(
         webhook_server,
@@ -1873,7 +1886,7 @@ def test_a_retry_in_flight_is_reported_over_the_failure_it_retries(
         def finish(self):
             self._target(*self._args, **self._kwargs)
 
-    monkeypatch.setattr(webhook_server.threading, "Thread", DeferredThread)
+    _patch_thread(monkeypatch, webhook_server, DeferredThread)
     monkeypatch.setattr(
         sync_runner,
         "sync_services_by_version",
@@ -2200,7 +2213,7 @@ def test_async_secrets_supply_response_id_matches_the_status_lookup(
         def start(self):
             self._target(*self._args, **self._kwargs)
 
-    monkeypatch.setattr(webhook_server.threading, "Thread", ImmediateThread)
+    _patch_thread(monkeypatch, webhook_server, ImmediateThread)
 
     def fake_sync(env, ref, triggered_by, services=None, **kwargs):
         return sync_runner.SyncResult(
@@ -2379,7 +2392,7 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
         def start(self):
             pass
 
-    monkeypatch.setattr(webhook_server.threading, "Thread", NoopThread)
+    _patch_thread(monkeypatch, webhook_server, NoopThread)
     monkeypatch.setattr(
         sync_runner,
         "sync_services_by_version",
