@@ -958,3 +958,30 @@ def test_m3_reads_lock_path_from_repos_yaml(tmp_path: Path) -> None:
         census.consumer_pinned_version(fr_root, consumer_name="finance_report")
         == current_ver
     )
+
+
+def test_each_sdk_extra_key_names_the_sdk_file_that_reads_it() -> None:
+    """One table (env_inventory.SDK_EXTRA_KEYS) for both tools (infra2#1824). Each file
+    must exist in the installed SDK and hold the name; a stale file such as scaffold.py
+    fails here."""
+    from common.core import env_inventory as envinv
+
+    import infra2_sdk
+
+    # The installed SDK is the uv.lock pin; CI has no submodule checkout (infra-ci.yml).
+    pkg = Path(infra2_sdk.__file__).resolve().parent
+    for name, (kind, rel) in envinv.SDK_EXTRA_KEYS.items():
+        target = pkg / rel
+        assert target.is_file(), (name, rel)
+        needle = name if kind == "template" else f'"{name}"'
+        assert needle in target.read_text("utf-8"), (name, rel)
+
+
+def test_an_sdk_without_a_runtime_contract_fails(tmp_path: Path) -> None:
+    """An empty RuntimeEnvKey contract stops the census; it never reports an empty
+    vocabulary as green (infra2#1824)."""
+    pkg = tmp_path / "pkg"
+    (pkg / "runtime").mkdir(parents=True)
+    (pkg / "runtime/environment.py").write_text("X = 1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="no RuntimeEnvKey contract"):
+        census.sdk_env_vocabulary(pkg)

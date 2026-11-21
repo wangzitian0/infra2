@@ -2215,8 +2215,6 @@ def scan_manifest(
     repo: str,
     path: str,
     text: str,
-    *,
-    synthetic_code_read: bool = False,
 ) -> None:
     unit = unit_of(repo, path, "manifest")
     try:
@@ -2226,7 +2224,7 @@ def scan_manifest(
         return
     lines = text.split("\n")
     for fld in data.get("fields", []) or []:
-        key = fld.get("env") or fld.get("name")
+        key = fld.get("env")
         if not key:
             continue
         ln = next((i + 1 for i, line in enumerate(lines) if f'"{key}"' in line), 1)
@@ -2269,7 +2267,7 @@ def scan_manifest(
         )
 
         def emit_synthetic(k: str, via_str: str, extra_d: dict | None = None) -> None:
-            if synthetic_code_read or is_app_stack_manifest:
+            if is_app_stack_manifest:
                 inv.add(
                     key=k,
                     role="read",
@@ -2678,8 +2676,7 @@ def resolve_weak_refs(inv: Inventory) -> None:
                 )
 
 
-def run(repos: dict[str, Path], *, include_app_manifests: bool = False) -> Inventory:
-    _ = include_app_manifests
+def run(repos: dict[str, Path]) -> Inventory:
     inv = Inventory()
     for name, root in repos.items():
         scan_repo(inv, name, root)
@@ -2791,15 +2788,17 @@ FAILOPEN_ID = {
     "local-unpinned",
 }
 
-SDK_EXTRA = {
-    "GITHUB_ACTIONS": "helper",
-    "VAULT_ADDR": "helper",
-    "VAULT_TOKEN": "helper",
-    "VAULT_ROLE_ID": "helper",
-    "VAULT_SECRET_ID": "helper",
-    "GITHUB_TOKEN": "tool-token",
-    "INFRA2_PAT": "tool-token",
-    "ENV_SUFFIX": "template",
+#: Env names the SDK reads outside the runtime contract: name -> (kind, SDK file that
+#: reads it). sdk_usage_census reads the same table.
+SDK_EXTRA_KEYS: dict[str, tuple[str, str]] = {
+    "GITHUB_ACTIONS": ("helper", "runtime/environment.py"),
+    "VAULT_ADDR": ("helper", "secrets.py"),
+    "VAULT_TOKEN": ("helper", "secrets.py"),
+    "VAULT_ROLE_ID": ("helper", "secrets.py"),
+    "VAULT_SECRET_ID": ("helper", "secrets.py"),
+    "GITHUB_TOKEN": ("tool-token", "deploy.py"),
+    "INFRA2_PAT": ("tool-token", "manifests.py"),
+    "ENV_SUFFIX": ("template", "rules/compose.py"),
 }
 SDK_IDENTITY_ONLY = {
     "CONFIGURATION_SHA256",
@@ -2815,16 +2814,16 @@ def sdk_vocabulary() -> dict[str, dict]:
     from infra2_sdk.runtime.environment import runtime_env_contract
 
     data = runtime_env_contract()
-    entries = data.get("variables") or data.get("keys") or ()
+    entries = data.get("variables") or ()
     vocab: dict[str, dict] = {}
     for item in entries:
-        canon = item.get("name") or item.get("key")
+        canon = item.get("name")
         if not canon:
             continue
         vocab[canon] = {"kind": "canonical", "canonical": canon}
         for alias in item.get("aliases") or ():
             vocab[alias] = {"kind": "alias", "canonical": canon}
-    for name, kind in SDK_EXTRA.items():
+    for name, (kind, _file) in SDK_EXTRA_KEYS.items():
         vocab.setdefault(name, {"kind": kind, "canonical": name})
     return vocab
 
@@ -3711,7 +3710,7 @@ def main(argv: list[str] | None = None) -> int:
         repos["finance_report"] = args.finance_report.resolve()
     if args.truealpha:
         repos["truealpha"] = args.truealpha.resolve()
-    inv = run(repos, include_app_manifests=True)
+    inv = run(repos)
     heads = {
         n: subprocess.run(
             ["git", "-C", str(p), "rev-parse", "--short", "HEAD"],

@@ -1248,7 +1248,7 @@ def g3_violations(
 @pytest.fixture(scope="module")
 def repo_scan():
     repos = {"infra2": envinv.REPO_ROOT}
-    inv_ = envinv.run(repos, include_app_manifests=True)
+    inv_ = envinv.run(repos)
     services = envinv.load_services()
     keys_map, comps, _edges, comp_of = envinv.analyze(
         inv_, envinv.service_groups(services)
