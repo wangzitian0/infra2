@@ -32,6 +32,18 @@ from common.deploy.config_hash import (
 from common.deploy.yaml_text import safe_load_text
 
 X_INFRA2 = "x-infra2"
+# The files that decide the compiled text of an x-infra2 stack, besides the stack's own
+# directory: the SDK compiler that the runner installs (uv.lock, sdk_requirement.py),
+# this module, and the Vault template renderer with the registry that names the
+# manifests. A change to one can change CONFIGURATION_SHA256 of every x-infra2 stack,
+# so the reconcile plan selects each such stack (tools/reconcile_iac_inputs.build_plan).
+COMPILER_INPUT_PATHS: tuple[str, ...] = (
+    "uv.lock",
+    "tools/sdk_requirement.py",
+    "common/deploy/compose_compile.py",
+    "common/security/secrets_render.py",
+    "common/security/registry.py",
+)
 SOURCE_GITHUB = "github"
 SOURCE_RAW = "raw"
 MODES = ("deploy", "preview")
@@ -271,6 +283,7 @@ def load_stack(compose_path: str | Path, *, mode: str = "deploy") -> StackCompos
 
 __all__ = [
     "COMPILED_TEMPLATE_PATH",
+    "COMPILER_INPUT_PATHS",
     "ComposeSourceError",
     "MODES",
     "SOURCE_GITHUB",

@@ -79,6 +79,9 @@ def test_a_compiled_vault_agent_config_uses_approle(compose: str) -> None:
     normalized = re.sub(r"\s+", "", text)
     assert 'type="token_file"' not in normalized
     assert 'method "approle"' in text
+    # A failed login or render must stop the agent, not leave a stale /secrets/.env.
+    assert "exit_on_err=true" in normalized
+    assert "exit_on_retry_failure=true" in normalized
 
 
 def test_inventory_is_entirely_approle() -> None:
