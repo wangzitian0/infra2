@@ -192,5 +192,5 @@ See [docs/ssot/platform.sso.md](../docs/ssot/platform.sso.md) for details.
 - **AI 行为准则**: [AGENTS.md](../AGENTS.md)
 - **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)
 - **Vault SSOT**: [docs/ssot/db.vault-integration.md](../docs/ssot/db.vault-integration.md)
-- **Libs**: [common/README.md](../common/README.md)
+- **common**: [common/README.md](../common/README.md)
 - **Tools**: [tools/README.md](../tools/README.md)
