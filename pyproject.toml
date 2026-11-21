@@ -40,7 +40,7 @@ dev = [
     "pydantic-ai-slim[zai]>=2.71.0,<3",
     "pytest-recording>=0.15,<1",
 ]
-# The e2e_regressions/ smoke job of ops-checks.yml runs this suite each day. The group
+# The e2e_regressions/ smoke job of ops-checks.yml runs the smoke tier of this suite each day. The group
 # stays out of the default `uv sync` so the infra-ci unit-test job installs no unused deps.
 e2e = [
     "playwright>=1.40.0",

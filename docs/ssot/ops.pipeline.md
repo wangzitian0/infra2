@@ -63,7 +63,7 @@ The question of a stage is the same for every change kind.
 | Staging | Does the release work with all other changes and with real data? | release tag | each release-tag push | exists |
 | Prod | Does the release serve users? | the same tag | each promotion; the owner approves the tag; the train gate asks for a promotion at 15 or more unpromoted PRs or 48 h (`prod_gatekeeper`) | exists |
 
-Budgets come from the SDK `stages.yaml` (`src/infra2_sdk/data/stages.yaml`, `budget_seconds` of each cell). This file states no budget. "exists" means main runs it today. "target" means it is the goal and no check runs it yet. The main-branch regression is the post of the merge. exists: the Prod pre reads it (#1646). target: the Staging pre reads it.
+Budgets come from the SDK `stages.yaml` (`src/infra2_sdk/data/stages.yaml`, `budget_seconds` of each cell). This file states no cell budget. "exists" means main runs it today. "target" means it is the goal and no check runs it yet. The main-branch regression is the post of the merge. exists: the Prod pre reads it (#1646). target: the Staging pre reads it.
 
 **Three phases and the record**
 
@@ -110,7 +110,7 @@ A cell is one stage and one phase. A stage moves the artifact one step. Pre answ
 | Staging | Platform: `contract`, `provenance`, `env`, `upstream_post` | Platform: the deploy of the release tag. App: `smoke`. | App: `staging_gate` |
 | Prod | Platform: the same four checks, then the owner's approval | Platform: the promotion of the same artifact. App: `smoke`. | App: `prod_gate` |
 
-State: `stages.yaml` in the SDK has the 15 cells. `STAGE_HOOK_PLANS` derives the Preview, Staging and Prod rows from it. The Local row and the CI row have no scheduler entry.
+State: `stages.yaml` in the SDK has the 15 cells. `STAGE_HOOK_PLANS` derives the Preview, Staging, Prod and schedule rows from it. The Local row and the CI row have no scheduler entry.
 
 - The Platform owns 8 cells: the 5 operations and the pre of Preview, Staging and Prod. An App cannot change them.
 - An App owns 7 cells: the pre of Local and CI, and the 5 post cells. It also owns `smoke`.
@@ -155,7 +155,7 @@ State: a manifest lists the checks of each slot, so a check that runs in two slo
 **One policy table**
 
 - One data file in infra2-sdk has one row for each cell. A row names the owner, the check list, the trigger, the time budget, the scale, and "blocks" or "reports".
-- `STAGE_HOOK_PLANS`, the slot time limits and the tables of this section come from that file. No second copy stays in code or in a document.
+- `STAGE_HOOK_PLANS` and the slot time limits come from that file. Target: the tables of this section come from it too; today they are written by hand.
 - A change to the file is a change of kind SDK: the Canary first, then the Apps.
 - Each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
 

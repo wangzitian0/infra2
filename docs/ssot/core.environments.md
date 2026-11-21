@@ -31,22 +31,17 @@
 **位置**: 开发者工作站  
 **用途**: 代码编辑、单元测试、快速迭代  
 **特点**:
-- ✅ **零基础设施** - 无需 Docker/DB，纯代码开发
-- ✅ **Mock 外部依赖** - 使用 pytest fixtures 模拟 DB/Redis/S3
 - ✅ **热重载** - Next.js dev server + FastAPI --reload
 - ✅ **IDE 集成** - LSP、调试器、类型检查
 
 **配置**:
 ```bash
 # Finance Report 示例
-cd apps/backend
-uv run pytest <改动对应的测试文件>  # 聚焦测试，单进程（内存 SQLite）
-
 cd apps/frontend
 npm run dev  # Next.js dev server (localhost:3000)
 ```
 
-**数据**: 无持久化，使用内存数据库或 Mock
+**测试**: 只跑改动对应的聚焦测试，单进程；各仓库的本地入口见 [`harness/README.md`](../../harness/README.md)。
 
 ---
 
