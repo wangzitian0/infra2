@@ -31,18 +31,17 @@ Secrets are read from multiple Vault paths:
 
 ### Application Secrets
 
-Stored at: `secret/data/finance_report/<env>/app`
+Stored at: `secret/data/finance_report/<env>/app`. The one source for the keys is `secrets.ctmpl`: `LLM_API_KEY`, `LLM_ENCRYPTION_KEYS`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_ACCESS_KEY`, `S3_PUBLIC_SECRET_KEY`, `SECRET_KEY`.
+
+Not in Vault (`compose.yaml` sets them; `env.manifest.json` names their source):
 
 | Key | Description |
 |-----|-------------|
 | `S3_ENDPOINT` | S3 object storage endpoint URL (RustFS) |
-| `S3_ACCESS_KEY` | S3 access key |
-| `S3_SECRET_KEY` | S3 secret key |
 | `S3_BUCKET` | Bucket name for statements |
 | `S3_PUBLIC_ENDPOINT` | Externally reachable S3 API endpoint for short-lived presigned URLs |
 | `S3_PUBLIC_BUCKET` | Public-endpoint bucket alias; defaults to `S3_BUCKET` |
 | `LLM_PROVIDER` | LLM provider identifier; defaults to `zai` |
-| `LLM_API_KEY` | LLM provider API key |
 | `LLM_BASE_URL` | Provider base URL; defaults to Z.AI |
 | `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
 | Model keys | Not set. The infra2 SDK defaults apply (large, small and multimodal roles). Set a role only to customize production |

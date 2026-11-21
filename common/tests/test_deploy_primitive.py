@@ -637,8 +637,8 @@ def test_deploy_sets_cache_bust_and_static_infra_keys():
         FULL_SHA,
         deps=PromoteDeps(client=client, domain="zitian.party", now=lambda: 1000),
     )
-    # IAC_CONFIG_HASH is the per-deploy cache-bust (short sha, forces redeploy even on
-    # the same digest)
+    # CONFIGURATION_SHA256 is the per-deploy cache-bust (short sha, forces redeploy even
+    # on the same digest)
     assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1000000"
     assert "IAC_CONFIG_HASH" not in plan.env_vars
     assert plan.env_vars["COMPOSE_PROFILES"] == "app"
@@ -1296,7 +1296,7 @@ def test_verify_in_service_gives_up_at_the_deadline():
 
 
 def test_deploy_fast_swap_uses_deterministic_config_hash():
-    # R17 (#750): truealpha/app staging has fast_swap=True, so IAC_CONFIG_HASH is
+    # R17 (#750): truealpha/app staging has fast_swap=True, so CONFIGURATION_SHA256 is
     # deterministic (tag + iac_ref) to avoid churning vault-agent when secrets and code are unchanged,
     # while still advancing when iac_ref advances.
     client = FakeDokploy()

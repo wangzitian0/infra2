@@ -1201,7 +1201,7 @@ def test_cli_reports_deploy_failure(monkeypatch, capsys):
 
 def test_fixed_deploy_verifies_vault_and_config_by_default(calls):
     # parity with the retired bash dokploy_deploy.sh: the unified path must KEEP the
-    # VAULT_APP_TOKEN TTL preflight + post-deploy IAC_CONFIG_HASH check + #569 smoke check (default-ON).
+    # VAULT_APP_TOKEN TTL preflight + post-deploy CONFIGURATION_SHA256 check + #569 smoke check (default-ON).
     _deploy(deploy_type="staging", version_ref="v1.2.3")
     assert calls["fixed"]["verify_vault"] is True
     assert calls["fixed"]["verify_config"] is True
