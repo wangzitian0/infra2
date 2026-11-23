@@ -12,7 +12,7 @@ from packaging.version import Version
 
 import infra2_sdk
 from infra2_sdk.ci import validate_manifest_offline
-from tools.scaffold import (
+from common.core.scaffold import (
     _generate_requirements_txt,
     _scaffold_manifest,
     main,
@@ -622,7 +622,7 @@ def test_scaffold_compose_passes_the_sdk_memory_lint(
     tmp_path: Path, profile: str
 ) -> None:
     from infra2_sdk.rules.compose import inspect_compose
-    from tools.scaffold import _generate_compose_yaml
+    from common.core.scaffold import _generate_compose_yaml
 
     report = inspect_compose(
         _generate_compose_yaml("web-app", "apps", 8000, profile=profile)
@@ -631,7 +631,7 @@ def test_scaffold_compose_passes_the_sdk_memory_lint(
 
 
 def test_scaffold_deploy_py_declares_compose_path_and_public_route() -> None:
-    from tools.scaffold import _generate_deploy_py
+    from common.core.scaffold import _generate_deploy_py
 
     tree = ast.parse(_generate_deploy_py("web-app", "apps", 8000))
     imports = [

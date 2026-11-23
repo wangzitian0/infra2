@@ -9,7 +9,7 @@
 
 `infra2` 平台坚持**工业级零安全降级**原则：即使对于 95% 的轻量化微服务，其安全防御强度（Vault AppRole 凭据隔离、tmpfs 内存挂载 `.env`、PostgreSQL 独立限流用户、SigNoz APM 观测）也必须保持 100% 完备。
 
-生命周期管理通过原子事务 Saga（`tools/service_onboard.py` 与 `tools/service_offboard.py`）提供全自动化的开通与注销流水线。
+生命周期管理通过原子事务 Saga（逻辑在 `common/core/service_onboard.py` 与 `common/core/service_offboard.py`，CLI 入口为 `tools/service_onboard.py` 与 `tools/service_offboard.py`）提供全自动化的开通与注销流水线。
 
 ---
 

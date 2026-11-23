@@ -14,6 +14,7 @@
 | Module | Role | Key Exports |
 |--------|------|-------------|
 | `verification.py` | Backup inventory & manifest validation | `load_backup_inventory()`, `verify_backup_manifest()`, `build_backup_alert_payload()`, `BackupCheck`, `BackupEntry` |
+| `restore_rehearsal_cli.py` | Sandboxed off-host restore rehearsal run (CLI: `tools/run_restore_rehearsal.py`) | `run_rehearsal()`, `main()`, `ALL_SERVICES`, `PASS_SUMMARY_PREFIX` |
 | `rehearsal.py` | Restore rehearsal planning & sandboxed execution | `RehearsalSpecification`, `RestoreRehearsalPlan`, `create_rehearsal_plan()`, `execute_rehearsal()`, `assert_rehearsal_target()` |
 
 ## Usage Examples

@@ -151,17 +151,40 @@ def _declared_distributions(job: dict) -> set[str] | None:
     return found or None
 
 
-def _subprocess_modules(module: str) -> set[str]:
-    """Find secondary repo modules spawned via `python -m` inside a module."""
+def _is_repo_module(name: str) -> bool:
+    return name in REPO_PACKAGES or name.startswith(
+        tuple(f"{pkg}." for pkg in REPO_PACKAGES)
+    )
+
+
+def _parse_module(module: str) -> ast.Module | None:
     rel_path = ROOT / (module.replace(".", "/") + ".py")
     if not rel_path.is_file():
-        return set()
+        return None
     try:
-        tree = ast.parse(rel_path.read_text(encoding="utf-8"))
+        return ast.parse(rel_path.read_text(encoding="utf-8"))
     except SyntaxError:
+        return None
+
+
+def _subprocess_modules(module: str) -> set[str]:
+    """Find secondary repo modules spawned via `python -m` inside a module.
+
+    A thin `tools/` entry (core.harness.md §5.3) holds no logic: its `main` is in
+    a `common/` module that it imports at top level. The scan also reads each repo
+    module that the entry imports at top level (one hop), so the commands that the
+    logic module spawns stay in scope.
+    """
+    tree = _parse_module(module)
+    if tree is None:
         return set()
+    trees = [tree]
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            if _is_repo_module(node.module) and (sub := _parse_module(node.module)):
+                trees.append(sub)
     found: set[str] = set()
-    for node in ast.walk(tree):
+    for node in (n for t in trees for n in ast.walk(t)):
         if isinstance(node, (ast.List, ast.Tuple)):
             elements = [
                 elt.value

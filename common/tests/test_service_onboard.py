@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from invoke import Context
-import tools.service_onboard as sob
-from tools.service_onboard import (
+import common.core.service_onboard as sob
+from common.core.service_onboard import (
     _clean_ident,
     check_op_signed_in,
     get_or_create_db_credentials,
@@ -16,7 +16,7 @@ from tools.service_onboard import (
     provision_vault_approle,
     sync_vault_secrets,
 )
-from tools.service_offboard import offboard_service
+from common.core.service_offboard import offboard_service
 
 
 def test_clean_ident():
