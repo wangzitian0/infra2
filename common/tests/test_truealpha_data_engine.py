@@ -625,7 +625,7 @@ def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
 
 # --- boot validation in dagster-entrypoint.sh (#1210) ---------------------------------
 #
-# These tests run the real entrypoint with `sh`. A fake `truealpha_runtime.boot` module
+# These tests run the real entrypoint with `sh`. A fake `infra2_sdk.runtime.config_schema` module
 # replaces the validator, so the tests need no image. The fake has the same signature as
 # the real `assert_environment` (keyword-only `require_injected`) and records what the
 # entrypoint passed and which variables the process could see at that moment.
@@ -645,7 +645,7 @@ SECRET_VALUES = {
     "LLM_MODEL": "fake-llm-model-secret",
 }
 
-FAKE_BOOT_MODULE = """\
+FAKE_VALIDATOR_MODULE = """\
 import json
 import os
 
@@ -692,10 +692,11 @@ def _run_entrypoint(tmp_path, *, validator_failure=None):
     target.chmod(0o755)
 
     fake_packages = tmp_path / "fake_packages"
-    package = fake_packages / "truealpha_runtime"
+    package = fake_packages / "infra2_sdk" / "runtime"
     package.mkdir(parents=True)
+    (fake_packages / "infra2_sdk" / "__init__.py").write_text("", encoding="utf-8")
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "boot.py").write_text(FAKE_BOOT_MODULE, encoding="utf-8")
+    (package / "config_schema.py").write_text(FAKE_VALIDATOR_MODULE, encoding="utf-8")
 
     secrets_file = tmp_path / "secrets.env"
     secrets_file.write_text(
