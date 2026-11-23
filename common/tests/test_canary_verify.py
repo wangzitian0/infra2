@@ -1273,3 +1273,20 @@ def test_llm_pillar_happy_path_and_failure_gates() -> None:
         )
         assert report_sso.llm.ok is False
         assert "unprotected" in report_sso.llm.summary
+
+
+def test_an_unknown_expected_sdk_fails_the_sdk_check() -> None:
+    """#1908 review: no pin for the served release must not pass the SDK check."""
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        sdk="4.3.0",
+    )
+    report, _ = _verify_with_canned_ssh("production", stdout, expected_sdk="")
+    assert report.sdk.ok is False
+    assert "Expected SDK unknown" in report.sdk.summary
+    assert report.all_ok is False
+    skipped, _ = _verify_with_canned_ssh(
+        "production", stdout, expected_sdk="", check_sdk=False
+    )
+    assert skipped.sdk.ok is True

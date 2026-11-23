@@ -773,14 +773,24 @@ def verify_canary(
     )
 
     # Parse SDK Version against locked requirement
+    # Fail closed: without an expected version (no Canary pin found for the served
+    # release) the check has nothing to compare and does not pass.
     sdk_ok = True
-    if check_sdk and expected_sdk:
-        sdk_ok = bool(installed_sdk == expected_sdk)
+    if check_sdk:
+        sdk_ok = bool(expected_sdk) and installed_sdk == expected_sdk
+    if sdk_ok:
+        sdk_summary = (
+            f"Installed SDK {installed_sdk} matches locked release {expected_sdk}"
+        )
+    elif not expected_sdk:
+        sdk_summary = (
+            "Expected SDK unknown: no Canary image pin found for the served release"
+        )
+    else:
+        sdk_summary = f"Installed SDK {installed_sdk} does not match locked release {expected_sdk}"
     sdk_pillar = PillarResult(
         ok=sdk_ok,
-        summary=f"Installed SDK {installed_sdk} matches locked release {expected_sdk}"
-        if sdk_ok
-        else f"Installed SDK {installed_sdk} does not match locked release {expected_sdk}",
+        summary=sdk_summary,
         details={"installed_sdk": installed_sdk, "expected_sdk": expected_sdk},
     )
 
