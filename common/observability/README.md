@@ -24,6 +24,9 @@
 | `probe_specs.py` | Probe specs rendered from the registry for the probe runner | `render_probe_spec_text()`, `normalize_specs_text()` |
 | `out_of_band_watchdog.py` | Daily GitHub out-of-band audit: checks, page/report routing, direct Feishu page (entry: `tools/out_of_band_watchdog.py`) | `main()`, `deliver_out_of_band_alert()`, `CheckResult`, `run_backup_checks()` |
 | `estate_scheduler_liveness.py` | Liveness of every scheduled workflow in the estate repositories | `evaluate_estate_liveness()`, `evaluate_workflows()`, `BOUND_CAP_ENV` |
+| `infra_probe_runner.py` | The resident probe loop of the alerting sidecar: probe rounds, alert bridge, heartbeat, resident watchers (entry: `tools/infra_probe_runner.py`) | `main()`, `run_once()` |
+| `observability_roundtrip_probe.py` | Synthetic write-then-query probes for SigNoz and OpenPanel (entry: `tools/observability_roundtrip_probe.py`) | `main()` |
+| `canary_verify.py` | Canary Todo touch-reality verification across endpoints, SDK version, traces, logs, ledger and alert bridge (entry: `tools/canary_verify.py`) | `main()`, `verify_canary()` |
 | `watchers/` | Alerting sidecar resident watcher plugins: `resident.py` (base and registry), `deploy_queue_guard.py`, `breakdown_watch.py` | `ResidentWatcher`, `build_watchers()`, `DeployQueueGuard`, `BreakdownWatch` |
 
 ## Usage Examples

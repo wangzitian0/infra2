@@ -16,7 +16,7 @@ import pytest
 import common.observability.probes as probes
 from common.observability.probe_dispatch import _chronic_digest_payload
 from common.tests.conftest import load_repo_module
-from tools import observability_roundtrip_probe as roundtrip
+from common.observability import observability_roundtrip_probe as roundtrip
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -30,7 +30,9 @@ _PROBE_ENVIRONMENT_VARIABLES = (
 
 
 def _load_probe_runner():
-    return load_repo_module("tools/infra_probe_runner.py", "infra_probe_runner_1208")
+    return load_repo_module(
+        "common/observability/infra_probe_runner.py", "infra_probe_runner_1208"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +100,7 @@ def test_chronic_digest_keeps_an_explicit_environment_argument(monkeypatch):
     assert payload["alerts"][0]["labels"]["environment"] == "production"
 
 
-# ---- tools/infra_probe_runner.py: _deploy_env, host specs, main ----------------------
+# ---- common/observability/infra_probe_runner.py: _deploy_env, host specs, main ----------------------
 
 
 def test_runner_without_an_environment_raises_and_does_not_say_production():
@@ -162,7 +164,7 @@ def test_runner_help_works_without_an_environment(monkeypatch, capsys):
     assert "--loop" in capsys.readouterr().out
 
 
-# ---- tools/observability_roundtrip_probe.py: _deploy_env, main -----------------------
+# ---- common/observability/observability_roundtrip_probe.py: _deploy_env, main -----------------------
 
 
 def test_roundtrip_without_an_environment_raises_a_config_error():

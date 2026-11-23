@@ -4,7 +4,7 @@ The pure stuck-detection logic is covered by test_deploy_queue.py; this file
 covers the watcher's orchestration: env-file loading semantics, the compose
 sweep's failure isolation, alert delivery guards, the renotify suppression
 window, and the remediate/escalate sequence. Since the #543 single-sidecar
-merge the guard is a ResidentWatcher plugin inside tools/infra_probe_runner.py
+merge the guard is a ResidentWatcher plugin inside common/observability/infra_probe_runner.py
 rather than a standalone sidecar — these tests are the behavior-parity proof
 that the merge changed the packaging, not the semantics.
 """

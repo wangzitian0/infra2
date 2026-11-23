@@ -27,11 +27,12 @@ AUDIT = ROOT / "common/observability/watchdog_audit.py"
 
 def _probe_runner():
     return load_repo_module(
-        "tools/infra_probe_runner.py", "infra_probe_runner_for_signal_entries"
+        "common/observability/infra_probe_runner.py",
+        "infra_probe_runner_for_signal_entries",
     )
 
 
-# The probe runner's actual shared debounce (tools/infra_probe_runner.py
+# The probe runner's actual shared debounce (common/observability/infra_probe_runner.py
 # DEFAULT_FAILURE_THRESHOLD / DEFAULT_RENOTIFY_SECONDS) — what every derived
 # entry must state, because the registry documents what the runner DOES. Read
 # from the runner itself (#903), so a SignalFacet that restates a stale value
