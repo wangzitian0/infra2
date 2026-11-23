@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tools.scaffold import main
+from common.core.scaffold import main
 
 
 def _get_sop_text() -> str:
@@ -62,7 +62,7 @@ def test_onboarding_sop_scaffold_command_flags_are_valid() -> None:
     # Execute main() with scaffold_service mocked to avoid writing files to disk
     from unittest.mock import patch
 
-    with patch("tools.scaffold.scaffold_service") as mock_scaffold:
+    with patch("common.core.scaffold.scaffold_service") as mock_scaffold:
         mock_scaffold.return_value = []
         ret = main(cleaned_tokens)
         assert ret == 0, f"scaffold CLI returned non-zero code {ret}"

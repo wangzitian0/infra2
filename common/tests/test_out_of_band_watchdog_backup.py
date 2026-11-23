@@ -25,7 +25,7 @@ import yaml
 import common.backup.verification as verification
 import tools.out_of_band_watchdog as watchdog
 from common.backup.verification import load_backup_inventory
-from tools import run_restore_rehearsal
+from common.backup import restore_rehearsal_cli as run_restore_rehearsal
 
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 9, 28, 2, 17, tzinfo=UTC)

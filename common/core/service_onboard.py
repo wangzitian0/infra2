@@ -38,7 +38,7 @@ def _load_postgres_tasks():
     mod_name = "platform.01.postgres.shared"
     if mod_name in sys.modules:
         return sys.modules[mod_name]
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     path = root / "platform/01.postgres/shared_tasks.py"
     spec = importlib.util.spec_from_file_location("platform.01_postgres.shared", path)
     if not spec or not spec.loader:

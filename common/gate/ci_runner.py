@@ -22,13 +22,11 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 # infra2#1884: one definition of the compose command and its dummy environment.
-from common.deploy.compose_validate import CI_COMPOSE_ENV as DUMMY_COMPOSE_ENV  # noqa: E402
-from common.deploy.compose_validate import config_command  # noqa: E402
+from common.deploy.compose_validate import CI_COMPOSE_ENV as DUMMY_COMPOSE_ENV
+from common.deploy.compose_validate import config_command
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_cmd(
@@ -260,7 +258,7 @@ def _select_changed_compose_targets(
     )
     if not changed_set:
         return []
-    if "tools/ci_runner.py" in changed_set:
+    if {"tools/ci_runner.py", "common/gate/ci_runner.py"} & changed_set:
         return list(compose_files)
 
     include_truealpha = any(c.startswith("contracts/truealpha/") for c in changed_set)
@@ -303,11 +301,12 @@ def run_compose(verbose: bool = False, changed_only: bool = False) -> int:
     print("  Validating compose YAML syntax...")
     import yaml
 
+    from common.deploy.yaml_text import safe_load_text
+
     failed_yaml: list[Path] = []
     for file in compose_files:
         try:
-            with open(file, "r", encoding="utf-8") as f:
-                yaml.safe_load(f)
+            safe_load_text(yaml, file.read_text(encoding="utf-8"))
         except Exception as exc:
             print(f"  ❌ Compose syntax error in {file.relative_to(ROOT)}: {exc}")
             failed_yaml.append(file)

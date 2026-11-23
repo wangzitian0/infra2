@@ -1,4 +1,4 @@
-"""Unit tests for tools/run_restore_rehearsal.py.
+"""Unit tests for common/backup/restore_rehearsal_cli.py (CLI: tools/run_restore_rehearsal.py).
 
 Asserts docker command structure, network isolation, invariant thresholds,
 teardown safety, and CLI entry point without requiring Docker or a live host.
@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.run_restore_rehearsal import (
+from common.backup.restore_rehearsal_cli import (
     _build_rehearsal_invariants,
     main,
     run_rehearsal,
@@ -48,8 +48,10 @@ def test_wait_for_postgres_ignores_temporary_init_server() -> None:
         return result
 
     with (
-        patch("tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run),
-        patch("tools.run_restore_rehearsal.time.sleep"),
+        patch(
+            "common.backup.restore_rehearsal_cli.subprocess.run", side_effect=fake_run
+        ),
+        patch("common.backup.restore_rehearsal_cli.time.sleep"),
     ):
         wait_for_postgres("infra022-restore-rehearsal", "postgres", timeout=5)
 
@@ -116,13 +118,13 @@ def test_run_rehearsal_docker_args_and_invariants(
 
     with (
         patch("subprocess.run", side_effect=fake_subprocess_run),
-        patch("tools.run_restore_rehearsal.wait_for_postgres"),
+        patch("common.backup.restore_rehearsal_cli.wait_for_postgres"),
         patch(
-            "tools.run_restore_rehearsal.materialize_artifact",
+            "common.backup.restore_rehearsal_cli.materialize_artifact",
             return_value=fake_archive,
         ),
         patch(
-            "tools.run_restore_rehearsal.run_postgres_restore_rehearsal"
+            "common.backup.restore_rehearsal_cli.run_postgres_restore_rehearsal"
         ) as mock_restore,
     ):
         report = run_rehearsal(
@@ -246,10 +248,13 @@ def test_failed_restore_respects_keep_container(
 
     with (
         patch("subprocess.run", side_effect=fake_run),
-        patch("tools.run_restore_rehearsal.wait_for_postgres"),
-        patch("tools.run_restore_rehearsal.materialize_artifact", return_value=archive),
+        patch("common.backup.restore_rehearsal_cli.wait_for_postgres"),
         patch(
-            "tools.run_restore_rehearsal.run_postgres_restore_rehearsal",
+            "common.backup.restore_rehearsal_cli.materialize_artifact",
+            return_value=archive,
+        ),
+        patch(
+            "common.backup.restore_rehearsal_cli.run_postgres_restore_rehearsal",
             side_effect=RuntimeError("restore failed"),
         ),
     ):
@@ -271,12 +276,12 @@ def test_sequential_runs_use_separate_download_directories(
 
     with (
         patch("subprocess.run", side_effect=fake_run),
-        patch("tools.run_restore_rehearsal.wait_for_postgres"),
+        patch("common.backup.restore_rehearsal_cli.wait_for_postgres"),
         patch(
-            "tools.run_restore_rehearsal.materialize_artifact",
+            "common.backup.restore_rehearsal_cli.materialize_artifact",
             return_value=archive,
         ) as materialize,
-        patch("tools.run_restore_rehearsal.run_postgres_restore_rehearsal"),
+        patch("common.backup.restore_rehearsal_cli.run_postgres_restore_rehearsal"),
     ):
         for _ in range(2):
             run_rehearsal(
@@ -320,7 +325,10 @@ def test_main_cli_success(
         "duration_seconds": 1.2,
     }
     with (
-        patch("tools.run_restore_rehearsal.run_rehearsal", return_value=fake_report),
+        patch(
+            "common.backup.restore_rehearsal_cli.run_rehearsal",
+            return_value=fake_report,
+        ),
         patch(
             "sys.argv",
             ["run_restore_rehearsal.py", "--manifest", str(mock_manifest_file)],
@@ -363,7 +371,7 @@ def test_cron_invocation_starts_in_a_fresh_interpreter() -> None:
 
 
 def test_run_restore_rehearsal_rejects_unsafe_database_name() -> None:
-    from tools.run_restore_rehearsal import run_rehearsal
+    from common.backup.restore_rehearsal_cli import run_rehearsal
 
     with pytest.raises(ValueError, match="Invalid database name"):
         run_rehearsal(
@@ -384,7 +392,7 @@ def test_rehearsal_all_attempts_every_service_when_one_fails(
     monkeypatch, capsys
 ) -> None:
     """One failing service never stops the others (#618)."""
-    import tools.run_restore_rehearsal as rrr
+    import common.backup.restore_rehearsal_cli as rrr
 
     attempted: list[str] = []
 
@@ -413,7 +421,7 @@ def test_rehearsal_all_attempts_every_service_when_one_fails(
 
 def test_rehearsal_all_survives_a_malformed_report(monkeypatch, capsys) -> None:
     """A report missing 'status' must not abort the services that follow it."""
-    import tools.run_restore_rehearsal as rrr
+    import common.backup.restore_rehearsal_cli as rrr
 
     attempted: list[str] = []
 
@@ -528,7 +536,7 @@ def test_truealpha_rehearsal_invariants_support_slice3_and_slice4_relations() ->
 
 def test_truealpha_collect_rehearsal_evidence_switches_on_regclass() -> None:
     """Evidence collection switches between legacy topt_* and converged Slice 3/4 tables."""
-    from tools.run_restore_rehearsal import _collect_rehearsal_evidence
+    from common.backup.restore_rehearsal_cli import _collect_rehearsal_evidence
 
     seen_post: list[str] = []
 
@@ -553,7 +561,8 @@ def test_truealpha_collect_rehearsal_evidence_switches_on_regclass() -> None:
         return result
 
     with patch(
-        "tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_post_slice4
+        "common.backup.restore_rehearsal_cli.subprocess.run",
+        side_effect=fake_run_post_slice4,
     ):
         tables, size_bytes, stats = _collect_rehearsal_evidence(
             "ta-rehearsal", "postgres", "truealpha", "truealpha/postgres"
@@ -594,7 +603,8 @@ def test_truealpha_collect_rehearsal_evidence_switches_on_regclass() -> None:
         return result
 
     with patch(
-        "tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_legacy
+        "common.backup.restore_rehearsal_cli.subprocess.run",
+        side_effect=fake_run_legacy,
     ):
         tables_l, size_l, stats_l = _collect_rehearsal_evidence(
             "ta-rehearsal", "postgres", "truealpha", "truealpha/postgres"

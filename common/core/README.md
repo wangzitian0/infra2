@@ -16,6 +16,10 @@
 | `environ.py` | Deployment environment of this process, suffixes, platform hosts | `get_env()`, `set_deploy_env()`, `with_env_suffix()`, `infra_domain()`, `service_domain()`, `DeploymentEnvironment` |
 | `registry.py` | Service registry read from each Deployer by AST | `service_attrs()`, `ServiceMeta`, `all_services()`, `resolve_container_host()` |
 | `facets.py` | Typed per-service facets a Deployer declares | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `SecretsFacet`, `Exemption` |
+| `scaffold.py` | Service scaffold generator (CLI: `tools/scaffold.py`) | `scaffold_service()`, `main()` |
+| `service_onboard.py` | Atomic service onboarding saga (CLI and invoke: `tools/service_onboard.py`) | `onboard_service()`, `onboard_task`, `main()` |
+| `service_offboard.py` | Symmetrical service offboarding (CLI and invoke: `tools/service_offboard.py`) | `offboard_service()`, `offboard_task`, `main()` |
+| `local_init.py` | Local CLI dependency checks (invoke: `tools/local_init.py`) | `check`, `init`, `version`, `bootstrap`, `phase` |
 | `constants.py` | Estate-wide constants and Docker labels | `DEPLOYMENT_ENV_PRODUCTION`, `DEPLOYMENT_ENV_STAGING`, `DEPLOYMENT_ENV_PREVIEW`, `DOCKER_LABEL_PREFIX`, `IDENTITY_SCHEMA_VERSION`, `MANAGED_BY`, `REPO_ROOT`, `GITHUB_OWNER` |
 
 ## Usage Examples

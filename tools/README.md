@@ -26,8 +26,9 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    `orchestrator_guard_hook.py` (an owner-wired Claude Code hook that keeps the
    workspace orchestrator's foreground calls under 4 minutes and its watch armed;
    see [coordination.md](../harness/workspace/coordination.md#orchestrator-liveness)), and
-   `ci_runner.py` (unified local and CI gate runner; `unit-tests` runs the tests of
-   the current diff in one process, and the full suite runs only in CI).
+   `ci_runner.py` (unified local and CI gate runner, logic in `common/gate/ci_runner.py`;
+   `unit-tests` runs the tests of the current diff in one process, and the full suite
+   runs only in CI).
 
 ## The single resident entry point (#543)
 
@@ -111,7 +112,7 @@ tool that still carries logic; review rejects a new entry or a raised size. Patt
 |-----------|-------|---------|
 | `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
-| `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
+| `local` | `tools/local_init.py` (logic: `common/core/local_init.py`) | Local CLI checks and bootstrap helpers |
 | `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
 
 ## Common Conventions
@@ -233,6 +234,7 @@ ENV_SUFFIX=-staging BACKUP_OUTPUT_DIR=/tmp/hb tools/host_backup.sh
 ## run_restore_rehearsal.py
 
 Guarded restore rehearsal for off-host backup artifacts (`common/backup/rehearsal.py`). `run_restore_rehearsal.py`
+is the CLI; its logic is in `common/backup/restore_rehearsal_cli.py`. It
 automates the full sandbox lifecycle: spins up an ephemeral throwaway container
 (zero host port binds, zero mount to `/data`, resource capped), downloads and
 decrypts the latest artifact from Google Drive via `rclone crypt`, ingests the SQL

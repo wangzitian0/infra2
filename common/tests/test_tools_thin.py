@@ -41,18 +41,12 @@ Size = tuple[int, int]
 DEBT: dict[str, Size] = {
     "reconcile_iac_inputs.py": (7, 3764),
     "out_of_band_watchdog.py": (4, 2113),
-    "ci_runner.py": (0, 851),
     "canary_verify.py": (3, 834),
     "infra_probe_runner.py": (1, 774),
-    "service_onboard.py": (0, 510),
-    "scaffold.py": (0, 453),
     "pr_merge_gate.py": (0, 437),
     "host_hygiene_schedule.py": (0, 406),
-    "run_restore_rehearsal.py": (0, 377),
     "observability_roundtrip_probe.py": (2, 323),
     "signoz_alert_rule_probe.py": (0, 323),
-    "local_init.py": (0, 299),
-    "service_offboard.py": (0, 251),
     "facet_reconcile.py": (1, 214),
 }
 
