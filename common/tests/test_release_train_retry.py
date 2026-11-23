@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 from common.deploy.stage_record import write_stage_record
-from tools.reconcile_iac_inputs import (
+from common.deploy.reconcile_iac_inputs import (
     DeployCommand,
     build_deploy_commands,
     build_plan,

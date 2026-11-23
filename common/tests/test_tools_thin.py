@@ -39,7 +39,6 @@ Size = tuple[int, int]
 # entry to `common/`. `facet_reconcile.py` and `host_hygiene_schedule.py` are
 # production paths (AGENTS.md merge gate rule 6): the owner approves their edits.
 DEBT: dict[str, Size] = {
-    "reconcile_iac_inputs.py": (7, 3764),
     "host_hygiene_schedule.py": (0, 406),
     "facet_reconcile.py": (1, 214),
 }

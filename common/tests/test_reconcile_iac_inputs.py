@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-import tools.reconcile_iac_inputs as reconcile
+import common.deploy.reconcile_iac_inputs as reconcile
 from common.deploy.app_contract import HOOK_SLOTS
-from tools.reconcile_iac_inputs import (
+from common.deploy.reconcile_iac_inputs import (
     MANIFEST_PATH,
     assert_after_on_main,
     assert_production_marker_advances,
@@ -5506,7 +5506,7 @@ def test_sync_sdk_pins_holds_app_prs_until_canary_verified(
 
 def test_open_or_update_pr_shared_by_app_and_sdk_sync() -> None:
     """Both sync_app_releases and sync_sdk_pins delegate PR management to _open_or_update_pr."""
-    source_path = ROOT / "tools" / "reconcile_iac_inputs.py"
+    source_path = ROOT / "common" / "deploy" / "reconcile_iac_inputs.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     callees: dict[str, set[str]] = {}
     for node in tree.body:
@@ -6046,3 +6046,22 @@ def test_the_runner_fanout_and_the_plan_agree_on_a_compiler_input(
     assert selected == set(explain_fanout(files).selected)
     assert "platform/todo" in selected
     assert "platform/portal" not in selected
+
+
+def test_the_entry_point_keeps_every_name_a_workflow_imports() -> None:
+    """#1823 Step 4.3 moved the logic to common/deploy. Inline Python in the
+    workflows still imports names from `tools.reconcile_iac_inputs`; each must
+    resolve there, or the alert job fails at run time."""
+    import tools.reconcile_iac_inputs as entry
+
+    pattern = re.compile(
+        r"from tools\.reconcile_iac_inputs import (?:\(([^)]*)\)|([^\n(]*))"
+    )
+    imported: set[str] = set()
+    for workflow in sorted((ROOT / ".github" / "workflows").glob("*.y*ml")):
+        for match in pattern.finditer(workflow.read_text(encoding="utf-8")):
+            names = match.group(1) or match.group(2)
+            imported |= {n.strip() for n in names.split(",") if n.strip()}
+    assert {"hook_findings_from_result", "resolve_workflow_failure_alert"} <= imported
+    missing = sorted(name for name in imported if not hasattr(entry, name))
+    assert not missing, f"tools.reconcile_iac_inputs no longer exports {missing}"

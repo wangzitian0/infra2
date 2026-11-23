@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from common.deploy import promotion_guard as guard
-import tools.reconcile_iac_inputs as reconcile
+import common.deploy.reconcile_iac_inputs as reconcile
 from common.deploy import stage_record as writer
 from common.deploy import stage_record_reader as stage_records
 from common.tests.test_stage_records import FakeGitHub, _record

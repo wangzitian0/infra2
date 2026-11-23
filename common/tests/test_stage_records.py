@@ -12,7 +12,7 @@ import pytest
 import yaml
 from infra2_sdk.stage_record import StageRecord
 
-import tools.reconcile_iac_inputs as reconcile
+import common.deploy.reconcile_iac_inputs as reconcile
 from common.deploy import stage_record as writer
 from common.deploy import stage_record_reader as stage_records
 from tools import promotion_reminder

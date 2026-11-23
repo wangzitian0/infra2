@@ -19,7 +19,7 @@ from common.deploy.app_contract import (
     hook_env_for_slot,
     schema3_empty_cells,
 )
-from tools import reconcile_iac_inputs as reconcile
+from common.deploy import reconcile_iac_inputs as reconcile
 
 ALL_SLOTS = ("smoke", "preview_gate", "staging_gate", "prod_gate", "scheduled_audit")
 
