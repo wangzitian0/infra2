@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import sys
+import os
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -212,10 +213,13 @@ def _old_manifest() -> bytes:
 
 
 def _drift_at(monkeypatch, files_by_ref: dict[str, dict[str, bytes]]):
+    """Each ref pins the SDK of this checkout unless its files give another uv.lock."""
     import common.deploy.config_drift as drift
 
+    lock = (ROOT / "uv.lock").read_bytes()
+
     def contents_at_ref(ref, paths):
-        files = files_by_ref[ref]
+        files = {"uv.lock": lock, **files_by_ref[ref]}
         return {p: files[p] for p in paths if p in files}
 
     monkeypatch.setattr(drift, "contents_at_ref", contents_at_ref)
@@ -257,6 +261,105 @@ def test_config_drift_compiles_an_x_infra2_stack_with_the_template_at_the_ref(
 def load_stack_text(source: str) -> str:
     """The compiled text that the deploy uploads for the todo source."""
     return compile_stack(source, vault_template=_template())
+
+
+#: A version that no release pins; built so no file names a real SDK pin.
+OTHER_SDK = ".".join(["0", "0", "1"])
+_WHEEL_STEM = "infra2" + "_sdk-"
+
+
+def _lock_for(version: str) -> bytes:
+    url = f"https://example.test/download/{_WHEEL_STEM}{version}-py3-none-any.whl"
+    return (
+        '[[package]]\nname = "infra2-sdk"\n'
+        f'version = "{version}"\nsource = {{ url = "{url}" }}\n'
+    ).encode()
+
+
+def test_sdk_at_ref_reads_the_infra2_sdk_pin_of_uv_lock() -> None:
+    import common.deploy.config_drift as drift
+
+    version, url = drift.sdk_at_ref("HEAD")
+    assert version == drift.installed_sdk_version()
+    assert url.endswith(f"/v{version}/infra2_sdk-{version}-py3-none-any.whl")
+
+
+def test_config_drift_does_not_compile_an_x_infra2_ref_with_another_sdk(
+    monkeypatch,
+) -> None:
+    """Another SDK can compile other bytes: a false DRIFT. The compare stops instead."""
+    source = _todo_source()
+    manifest = (ROOT / TODO_MANIFEST).read_bytes()
+    drift = _drift_at(
+        monkeypatch,
+        {
+            "v-other-sdk": {
+                TODO: source.encode(),
+                TODO_MANIFEST: manifest,
+                "uv.lock": _lock_for(OTHER_SDK),
+            },
+            "v-no-lock": {TODO: source.encode(), TODO_MANIFEST: manifest},
+        },
+    )
+    with pytest.raises(ComposeSourceError, match=f"pins infra2-sdk {OTHER_SDK}"):
+        drift.expected_hash_at(object, MagicMock(), "v-other-sdk", {})
+    # A plain compose does not use the compiler: the SDK does not matter.
+    plain = "services:\n  a:\n    image: x\n"
+    assert drift.compiled_at_ref(TODO, plain, "v-other-sdk") == plain
+
+
+def test_the_release_run_imports_the_sdk_that_the_release_pins(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import common.deploy.config_drift as drift
+
+    seen: dict = {}
+
+    def run_at_ref(ref, args, *, root, timeout, env):
+        seen["env"] = env
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout='REF_HASHES {"version": "v1", "services": {}}',
+            stderr="",
+        )
+
+    monkeypatch.setenv("PYTHONPATH", "/inherited")
+    monkeypatch.setattr(drift, "_on_main", lambda commit, root: True)
+    monkeypatch.setattr(drift, "run_at_ref", run_at_ref)
+    monkeypatch.setattr(drift, "sdk_at_ref", lambda ref: (OTHER_SDK, "u"))
+    monkeypatch.setattr(drift, "_sdk_dir_for", lambda version, url: tmp_path / version)
+    drift.hashes_with_ref_code("abc", ["platform/todo"])
+    # The release SDK goes first; an inherited path stays after it.
+    assert seen["env"]["PYTHONPATH"] == f"{tmp_path / OTHER_SDK}{os.pathsep}/inherited"
+    # The same SDK as this process: nothing to put first.
+    monkeypatch.setattr(
+        drift, "sdk_at_ref", lambda ref: (drift.installed_sdk_version(), "u")
+    )
+    drift.hashes_with_ref_code("abc", ["platform/todo"])
+    assert seen["env"]["PYTHONPATH"] == "/inherited"
+
+
+def test_sdk_dir_for_unpacks_a_pure_python_wheel_once(monkeypatch) -> None:
+    import io
+    import zipfile
+
+    import common.deploy.config_drift as drift
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as wheel:
+        wheel.writestr("infra2_sdk/__init__.py", "MARK = 1\n")
+        wheel.writestr(f"{_WHEEL_STEM}{OTHER_SDK}.dist-info/METADATA", "Name: x\n")
+    fetched: list[str] = []
+    monkeypatch.setattr(drift, "_SDK_DIRS", {})
+    monkeypatch.setattr(
+        drift, "_fetch", lambda url: fetched.append(url) or buf.getvalue()
+    )
+    url = f"https://x/{_WHEEL_STEM}{OTHER_SDK}-py3-none-any.whl"
+    target = drift._sdk_dir_for(OTHER_SDK, url)
+    assert (target / "infra2_sdk/__init__.py").read_text() == "MARK = 1\n"
+    assert drift._sdk_dir_for(OTHER_SDK, url) == target and fetched == [url]
+    with pytest.raises(RuntimeError, match="not a pure-Python wheel"):
+        drift._sdk_dir_for("other", f"https://x/{_WHEEL_STEM}other-cp312-macosx.whl")
 
 
 def test_config_drift_stops_when_the_manifest_is_absent_at_the_ref(monkeypatch) -> None:
@@ -334,28 +437,75 @@ def _fake_ssh(monkeypatch, stdout: str):
     return audit, commands
 
 
-def test_remote_template_sha256_reads_the_compiled_path_and_drops_the_printf_newline(
+def test_remote_template_identity_reads_a_compiled_sidecar_and_drops_the_printf_newline(
     monkeypatch,
 ) -> None:
     template = _template()
     # The sidecar writes the file with `printf '%s\n' "$VAULT_SECRETS_TEMPLATE"`.
-    audit, commands = _fake_ssh(monkeypatch, template + "\n")
-    got = audit._remote_template_sha256("vps", "c-1", compiled_sidecar=True)
-    assert commands == ["docker exec c-1 cat /vault/secrets.ctmpl"]
-    assert got == hashlib.sha256(template.encode()).hexdigest()
+    audit, commands = _fake_ssh(monkeypatch, "compiled\n" + template + "\n")
+    got = audit._remote_template_identity("vps", "c-1")
+    assert got == ("compiled", hashlib.sha256(template.encode()).hexdigest())
+    assert len(commands) == 1 and commands[0].startswith("docker exec c-1 sh -c ")
+    assert "/vault/secrets.ctmpl" in commands[0]
+    assert "/etc/vault/secrets.ctmpl" in commands[0]
     # A file without the printf newline is not what the sidecar wrote: unreadable.
-    audit, _ = _fake_ssh(monkeypatch, template.rstrip("\n"))
-    assert audit._remote_template_sha256("vps", "c-1", compiled_sidecar=True) == ""
+    audit, _ = _fake_ssh(monkeypatch, "compiled\n" + template.rstrip("\n"))
+    assert audit._remote_template_identity("vps", "c-1") == ("compiled", "")
 
 
-def test_remote_template_sha256_keeps_the_mounted_path_for_a_plain_stack(
-    monkeypatch,
+def test_remote_template_identity_reads_a_hand_written_sidecar(monkeypatch) -> None:
+    audit, _ = _fake_ssh(monkeypatch, "hand-written\nabc123\n")
+    assert audit._remote_template_identity("vps", "c-1") == ("hand-written", "abc123")
+    # Neither file in the container, or an SSH failure: the form is unknown.
+    audit, _ = _fake_ssh(monkeypatch, "")
+    assert audit._remote_template_identity("vps", "c-1") == ("", "")
+
+
+def test_remote_template_identity_script_picks_the_form_the_container_has(
+    tmp_path: Path,
 ) -> None:
-    audit, commands = _fake_ssh(monkeypatch, "abc123\n")
-    assert audit._remote_template_sha256("vps", "c-1") == "abc123"
-    assert commands == [
-        "docker exec c-1 sh -lc 'sha256sum /etc/vault/secrets.ctmpl 2>/dev/null | cut -d\" \" -f1'"
-    ]
+    """Run the real shell script against a fake root: each layout gives its form."""
+    import subprocess
+
+    import common.security.vault_self_refresh_audit as audit
+
+    template = _template()
+    for layout, expected_form in (
+        ("compiled", "compiled"),
+        ("mounted", "hand-written"),
+    ):
+        root = tmp_path / layout
+        compiled = root / "vault/secrets.ctmpl"
+        mounted = root / "etc/vault/secrets.ctmpl"
+        target = compiled if layout == "compiled" else mounted
+        target.parent.mkdir(parents=True)
+        target.write_text(template + "\n", encoding="utf-8")
+        captured: list[str] = []
+
+        def ssh(host, command, _root=root):
+            captured.append(command)
+            script = command.split(" sh -c ", 1)[1]
+            script = script.replace(
+                "/vault/secrets.ctmpl", f"{_root}/vault/secrets.ctmpl"
+            )
+            script = script.replace(
+                f"/etc{_root}/vault/secrets.ctmpl", f"{_root}/etc/vault/secrets.ctmpl"
+            )
+            return subprocess.run(
+                f"sh -c {script}", shell=True, capture_output=True, text=True
+            )
+
+        audit_ssh = audit._ssh
+        audit._ssh = ssh
+        try:
+            form, sha = audit._remote_template_identity("vps", "c-1")
+        finally:
+            audit._ssh = audit_ssh
+        assert form == expected_form, (layout, captured)
+        if layout == "compiled":
+            assert sha == hashlib.sha256(template.encode()).hexdigest()
+        else:
+            assert sha == hashlib.sha256((template + "\n").encode()).hexdigest()
 
 
 def test_the_audit_passes_a_compiled_sidecar_that_runs_the_release_template(
@@ -385,20 +535,59 @@ def test_the_audit_passes_a_compiled_sidecar_that_runs_the_release_template(
 
     def ssh(host, command):
         seen.append(command)
-        return types.SimpleNamespace(returncode=0, stdout=_template() + "\n", stderr="")
+        return types.SimpleNamespace(
+            returncode=0, stdout="compiled\n" + _template() + "\n", stderr=""
+        )
 
     monkeypatch.setattr(audit, "_ssh", ssh)
     service = _vault_service(TODO)
     obs = audit.collect_live_observations([service], env="production")
-    deployed = obs["services"]["platform/todo"]["deployed_template_sha256"]
-    assert seen == ["docker exec platform-todo-vault-agent cat /vault/secrets.ctmpl"]
-    result = va.classify_deployed_template(service, deployed)
+    observed = obs["services"]["platform/todo"]
+    deployed = observed["deployed_template_sha256"]
+    assert observed["deployed_template_form"] == "compiled"
+    assert len(seen) == 1
+    assert seen[0].startswith("docker exec platform-todo-vault-agent sh -c ")
+    result = va.classify_deployed_template(service, deployed, "compiled")
     assert result.status == "pass", result
     # The message names the compiled compose, not the secrets.ctmpl that is not deployed.
     assert result.summary == (
         "the template in the vault-agent container matches the compiled "
         f"{TODO} template"
     )
+
+
+def test_the_audit_fails_a_hand_written_sidecar_when_the_release_is_compiled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A rollback runs the hand-written form while main ships x-infra2: a fail, not info."""
+    import common.security.vault_audit as va
+
+    _repo_with(monkeypatch, tmp_path, TODO, _todo_source())
+    monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
+    service = _vault_service(TODO)
+    result = va.classify_deployed_template(service, "a" * 64, "hand-written")
+    assert result.status == "fail" and result.severity == "P1", result
+    assert "hand-written template" in result.summary
+    assert result.evidence["release_form"] == "compiled"
+    # The same container in the release form compares by hash, as before.
+    same_form = va.classify_deployed_template(service, "a" * 64, "compiled")
+    assert same_form.status == "fail" and "never reached" in same_form.summary
+    assert "hand-written" not in same_form.summary
+
+
+def test_the_audit_fails_a_compiled_release_without_its_template_label(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import common.security.vault_audit as va
+    import common.security.vault_self_refresh_audit as audit
+
+    _repo_with(monkeypatch, tmp_path, TODO, _todo_source())
+    monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(audit, "_release_template_sha256", lambda _service: "")
+    service = _vault_service(TODO)
+    result = va.classify_deployed_template(service, "a" * 64, "compiled")
+    assert result.status == "fail" and result.severity == "P1", result
+    assert "infra2.vault.template.sha256" in result.summary
 
 
 # --- 4. the six stacks with their own composing() --------------------------------------

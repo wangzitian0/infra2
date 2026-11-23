@@ -110,6 +110,62 @@ def contents_at_ref(ref: str, paths: list[str]) -> dict[str, bytes]:
     return out
 
 
+_SDK_LOCK_RE = re.compile(
+    r'\[\[package\]\]\nname = "infra2-sdk"\nversion = "(?P<version>[^"]+)"\n'
+    r'source = \{ url = "(?P<url>[^"]+)" \}'
+)
+# How long the download of one release's SDK wheel may take.
+SDK_DOWNLOAD_TIMEOUT_S = 60
+
+
+def sdk_at_ref(ref: str) -> tuple[str, str] | None:
+    """``(version, wheel_url)`` of infra2-sdk in ``uv.lock`` at ``ref``; None if absent."""
+    lock = contents_at_ref(ref, ["uv.lock"]).get("uv.lock")
+    if lock is None:
+        return None
+    match = _SDK_LOCK_RE.search(lock.decode("utf-8", "replace"))
+    return (match["version"], match["url"]) if match else None
+
+
+def installed_sdk_version() -> str:
+    """The infra2-sdk version that this process imports."""
+    from importlib.metadata import version
+
+    return version("infra2-sdk")
+
+
+_SDK_DIRS: dict[str, Path] = {}
+
+
+def _fetch(url: str) -> bytes:
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=SDK_DOWNLOAD_TIMEOUT_S) as response:
+        return response.read()
+
+
+def _sdk_dir_for(version: str, url: str) -> Path:
+    """A directory that holds the infra2-sdk wheel ``url``; one download per version.
+
+    The wheel is pure Python (``py3-none-any``), so its unpacked files are an install
+    that ``import`` and ``importlib.metadata`` read. Its dependencies come from this
+    process.
+    """
+    import io
+    import zipfile
+
+    if version not in _SDK_DIRS:
+        if not url.endswith("-py3-none-any.whl"):
+            raise RuntimeError(
+                f"infra2-sdk {version}: {url} is not a pure-Python wheel"
+            )
+        target = Path(tempfile.mkdtemp(prefix=f"infra2-sdk-{version}-"))
+        with zipfile.ZipFile(io.BytesIO(_fetch(url))) as wheel:
+            wheel.extractall(target)
+        _SDK_DIRS[version] = target
+    return _SDK_DIRS[version]
+
+
 def compiled_at_ref(compose_path: str, text: str, ref: str) -> str:
     """The compose text that the deploy at ``ref`` hashed (infra2#1822).
 
@@ -128,6 +184,16 @@ def compiled_at_ref(compose_path: str, text: str, ref: str) -> str:
 
     if not has_x_infra2(text):
         return text
+    # The compiled bytes depend on the SDK compiler. Another SDK than the one ``ref``
+    # pins can give other bytes, and then a false DRIFT; stop the comparison instead.
+    pinned = sdk_at_ref(ref)
+    installed = installed_sdk_version()
+    if pinned is None or pinned[0] != installed:
+        raise ComposeSourceError(
+            f"config drift {compose_path}@{ref}: the release pins infra2-sdk "
+            f"{pinned[0] if pinned else 'unknown'}, this process runs {installed}; "
+            "the compiled compose of that release cannot be rebuilt here"
+        )
     manifests = list(vault_manifest_paths(compose_path, text))
     if not manifests:
         return compile_stack(text)
@@ -252,12 +318,21 @@ def hashes_with_ref_code(
     root = root or ROOT
     if not _on_main(ref, root):
         raise RuntimeError(f"{ref} is not on main; its code does not run here")
+    env = _release_env()
+    # The release's code runs with the release's SDK: the compiler of an x-infra2
+    # stack is in the SDK, so another SDK can give other compiled bytes.
+    pinned = sdk_at_ref(ref)
+    if pinned is not None and pinned[0] != installed_sdk_version():
+        first = str(_sdk_dir_for(*pinned))
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (first, env.get("PYTHONPATH", "")) if part
+        )
     proc = run_at_ref(
         ref,
         [sys.executable, "-c", _REF_HASH_SCRIPT, json.dumps(service_ids)],
         root=root,
         timeout=REF_RUN_TIMEOUT_S,
-        env=_release_env(),
+        env=env,
     )
     line = next(
         (x for x in proc.stdout.splitlines() if x.startswith("REF_HASHES ")), None

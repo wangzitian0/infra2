@@ -694,17 +694,22 @@ class Deployer:
         # vault.setup-approle had no compose to inject creds into (hit live on
         # truealpha/data_engine's production graduation, 2026-07-27). Order is
         # now: upsert record -> assert creds -> deploy.
-        if existing:
-            compose_id = existing["composeId"]
-            existing_env = client.get_compose(compose_id).get("env")
-            effective_env = _preserve_runtime_env(env_str, existing_env)
-        else:
-            effective_env = env_str
-
         from common.deploy.dokploy_adapter import (
+            source_snapshot,
             upsert_github_compose,
             upsert_raw_compose,
         )
+
+        previous_source: dict | None = None
+        if existing:
+            compose_id = existing["composeId"]
+            existing_record = client.get_compose(compose_id)
+            existing_env = existing_record.get("env")
+            effective_env = _preserve_runtime_env(env_str, existing_env)
+            if existing_env is not None:
+                previous_source = source_snapshot(existing_record)
+        else:
+            effective_env = env_str
 
         if source_type == "raw":
             compose_id = upsert_raw_compose(
@@ -759,14 +764,12 @@ class Deployer:
             info(f"Deploying compose {compose_id}...")
             cls._deploy_compose_with_record_check(client, compose_id)
         except Exception:
-            if existing and existing_env is not None:
+            if previous_source is not None:
                 try:
-                    client.update_compose(
-                        compose_id, env=existing_env, autoDeploy=False
-                    )
+                    client.update_compose(compose_id, **previous_source)
                 except Exception as restore_exc:  # noqa: BLE001
                     warning(
-                        f"Failed to restore previous compose env on {compose_id}: {restore_exc}"
+                        f"Failed to restore previous compose source on {compose_id}: {restore_exc}"
                     )
             raise
 

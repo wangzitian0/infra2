@@ -970,7 +970,13 @@ def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
             return {"composeId": "cmp-auth"}
 
         def get_compose(self, compose_id):
-            return {"composeId": compose_id, "env": "IAC_DEPLOY_REF=old_sha\n"}
+            return {
+                "composeId": compose_id,
+                "env": "IAC_DEPLOY_REF=old_sha\n",
+                "sourceType": "raw",
+                "composePath": "./docker-compose.yml",
+                "branch": "old_sha",
+            }
 
         def update_compose(self, compose_id, **kwargs):
             updates.append({"compose_id": compose_id, **kwargs})
@@ -989,11 +995,52 @@ def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
 
     assert len(updates) == 2
     assert updates[0]["env"] == "IAC_DEPLOY_REF=new_sha"
+    assert updates[0]["source_type"] == "github"
+    # The restore puts back the source of the record, not only its env (infra2#1822).
     assert updates[1] == {
         "compose_id": "cmp-auth",
         "env": "IAC_DEPLOY_REF=old_sha\n",
+        "source_type": "raw",
+        "composePath": "./docker-compose.yml",
+        "branch": "old_sha",
         "autoDeploy": False,
     }
+
+
+def test_a_failed_deploy_restores_the_whole_compose_source():
+    """infra2#1822: a raw upsert over a github record changes the source type, the
+    compose text and the compose path. A failed deploy puts each one back, not only the
+    env; else the record keeps the new compose with the old identity."""
+    from common.deploy.dokploy_adapter import raw_source_fields, source_snapshot
+
+    github_record = {
+        "composeId": "cmp-todo",
+        "sourceType": "github",
+        "composeFile": "",
+        "composePath": "platform/30.todo/compose.yaml",
+        "githubId": "gh-1",
+        "repository": "infra2",
+        "owner": "wangzitian0",
+        "branch": "old_sha",
+        "env": "IAC_DEPLOY_REF=old_sha\n",
+        "name": "todo",
+    }
+    snapshot = source_snapshot(github_record)
+    assert snapshot == {
+        "source_type": "github",
+        "compose_file": "",
+        "composePath": "platform/30.todo/compose.yaml",
+        "githubId": "gh-1",
+        "repository": "infra2",
+        "owner": "wangzitian0",
+        "branch": "old_sha",
+        "env": "IAC_DEPLOY_REF=old_sha\n",
+        "autoDeploy": False,
+    }
+    # The snapshot puts back each field that the raw upsert writes.
+    raw = raw_source_fields("services: {}\n")
+    overwritten = {k for k in raw if k != "autoDeploy"}
+    assert overwritten <= set(snapshot), overwritten - set(snapshot)
 
 
 def test_wait_for_rollout_and_failure_snapshot_surface_dokploy_log_tail(

@@ -189,6 +189,37 @@ def test_a_relative_top_level_config_file_is_not_raw_eligible() -> None:
     assert raw_ineligibility(text) == ["configs.c reads './c.conf' from the checkout"]
 
 
+@pytest.mark.parametrize(
+    ("spec", "reason"),
+    [
+        ("    env_file: ./app.env\n", "services.a reads env_file './app.env'"),
+        (
+            "    env_file:\n      - path: ./a.env\n",
+            "services.a reads env_file './a.env'",
+        ),
+        (
+            "    extends:\n      file: ./base.yaml\n      service: b\n",
+            "services.a extends './base.yaml'",
+        ),
+    ],
+)
+def test_raw_ineligibility_names_each_file_that_the_service_reads(spec, reason) -> None:
+    text = "services:\n  a:\n    image: x\n" + spec
+    assert [r for r in raw_ineligibility(text) if r.startswith(reason)], (
+        raw_ineligibility(text)
+    )
+    # A host path outside the checkout is still readable by a raw record.
+    absolute = text.replace("./", "/etc/")
+    assert raw_ineligibility(absolute) == []
+
+
+def test_raw_ineligibility_names_a_top_level_include() -> None:
+    text = "include:\n  - ./other.yaml\nservices:\n  a:\n    image: x\n"
+    assert raw_ineligibility(text) == [
+        "top-level `include:` reads files; raw has no checkout"
+    ]
+
+
 def test_unreadable_compiled_text_is_never_raw_eligible() -> None:
     assert raw_ineligibility(": [")
     assert raw_ineligibility("services: {}\n")

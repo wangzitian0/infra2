@@ -463,6 +463,35 @@ def upsert_github_compose(
 RAW_COMPOSE_PATH = "./docker-compose.yml"
 
 
+#: The record fields that ``upsert_github_compose`` and ``upsert_raw_compose`` write,
+#: as ``compose.update`` keyword arguments by Dokploy field name.
+_SOURCE_FIELD_ARGS = {
+    "sourceType": "source_type",
+    "composeFile": "compose_file",
+    "composePath": "composePath",
+    "githubId": "githubId",
+    "repository": "repository",
+    "owner": "owner",
+    "branch": "branch",
+    "env": "env",
+}
+
+
+def source_snapshot(record: dict) -> dict[str, Any]:
+    """The ``compose.update`` arguments that put ``record``'s source back.
+
+    A failed deploy restores this snapshot. An upsert can change the source type,
+    the compose text and the compose path, not only the env (infra2#1822).
+    """
+    snapshot: dict[str, Any] = {
+        arg: record[field]
+        for field, arg in _SOURCE_FIELD_ARGS.items()
+        if record.get(field) is not None
+    }
+    snapshot["autoDeploy"] = False
+    return snapshot
+
+
 def raw_source_fields(compose_file: str) -> dict[str, Any]:
     """The ``compose.update`` fields that make a record run ``compose_file`` (raw source).
 
