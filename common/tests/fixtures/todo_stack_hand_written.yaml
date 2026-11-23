@@ -2,7 +2,7 @@
 # hand-written form before #1822 Slice 2. Tests compare the compiled x-infra2 file with it.
 # Tests replace its Canary image with the live pin (todo_hand_written_text); the image
 # line below is not read. The todo container drops INTERNAL_DOMAIN and ENV_SUFFIX, which
-# the Canary image has not read since infra2-sdk 4.3.0.
+# the Canary image has not read since the SDK release of #1823 N2.
 # The Cleanup slice of #1822 deletes it together with secrets.ctmpl and vault-agent.hcl.
 services:
   vault-agent:

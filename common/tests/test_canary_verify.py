@@ -1280,7 +1280,7 @@ def test_an_unknown_expected_sdk_fails_the_sdk_check() -> None:
     stdout = _canned_stdout(
         traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
         logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
-        sdk="4.3.0",
+        sdk="9.9.9",
     )
     report, _ = _verify_with_canned_ssh("production", stdout, expected_sdk="")
     assert report.sdk.ok is False
