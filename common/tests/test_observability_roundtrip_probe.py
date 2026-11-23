@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import observability_roundtrip_probe as probe
+from common.observability import observability_roundtrip_probe as probe
 from common.core import registry
 from common.core.service_identity import ServiceIdentity
 from common.observability.openpanel import OPENPANEL_CLIENTS

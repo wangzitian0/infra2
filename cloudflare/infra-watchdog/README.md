@@ -66,7 +66,7 @@ Every 30 minutes, from Cloudflare, outside the VPS:
 | `GET /outages` | `WATCHDOG_STATUS_TOKEN` | `{"outages": [{"environment", "name", "start", "end", ...}]}`, epoch ms, `end: null` while open |
 
 The GitHub daily audit reads `/status` for the Worker's liveness
-(`tools/out_of_band_watchdog.py`); `tools/stability_report.py` reads `/outages`.
+(`common/observability/out_of_band_watchdog.py`); `tools/stability_report.py` reads `/outages`.
 
 ### Heartbeat contract v2
 

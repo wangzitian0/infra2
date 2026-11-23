@@ -143,7 +143,7 @@ class World:
         monkeypatch.chdir(tmp_path)  # no reconcile-result.json: the crash alert
         monkeypatch.setattr(page_dedup, "_api_from_env", lambda env: self.api)
         import common.alerting as alerting
-        import tools.out_of_band_watchdog as watchdog
+        import common.observability.out_of_band_watchdog as watchdog
 
         monkeypatch.setattr(
             watchdog,

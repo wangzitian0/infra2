@@ -7,7 +7,7 @@ Covers both defense lines:
 1. common.observability.breakdown: In-band container breakdown watch running in the resident
    probe runner, detecting exited (non-zero) or dead containers and generating the
    Alertmanager/SigNoz Feishu card payload with log tail reason.
-2. tools.out_of_band_watchdog: Out-of-band SSH watchdog inspecting Docker health,
+2. common.observability.out_of_band_watchdog: Out-of-band SSH watchdog inspecting Docker health,
    detecting non-zero exit codes, failing the check, and firing out-of-band Feishu delivery.
 """
 
@@ -23,7 +23,10 @@ from common.alerting import (
     build_feishu_card_payload,
     format_signoz_alert,
 )
-from tools.out_of_band_watchdog import CheckResult, format_failure_message
+from common.observability.out_of_band_watchdog import (
+    CheckResult,
+    format_failure_message,
+)
 
 
 def test_manually_killed_container_triggers_breakdown_alert():

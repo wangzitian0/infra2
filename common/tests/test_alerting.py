@@ -643,7 +643,7 @@ def test_alerting_dockerfile_installs_every_import_the_packaged_code_needs() -> 
     for path in (
         base / "app.py",
         ROOT / "common/observability/probes.py",
-        ROOT / "tools/infra_probe_runner.py",
+        ROOT / "common/observability/infra_probe_runner.py",
     ):
         required_roots |= _third_party_import_roots(path.read_text(encoding="utf-8"))
 
@@ -660,7 +660,7 @@ def test_alerting_dockerfile_installs_every_import_the_packaged_code_needs() -> 
         f"platform/12.alerting/Dockerfile's pip install does not cover: "
         f"{[_IMPORT_TO_PIP_NAME[r] for r in sorted(unsatisfied)]} — "
         f"required by an import in app.py / common/observability/probes.py / "
-        f"tools/infra_probe_runner.py"
+        f"common/observability/infra_probe_runner.py"
     )
 
 

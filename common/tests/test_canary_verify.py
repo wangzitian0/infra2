@@ -11,7 +11,7 @@ import pytest
 
 from common.observability import local_ledger, signoz_queries
 from common.tests.ambient_env import clear_telemetry_env
-from tools.canary_verify import (
+from common.observability.canary_verify import (
     CanaryRealityReport,
     PillarResult,
     _evaluate_freshness,
@@ -110,7 +110,7 @@ def _verify_with_canned_ssh(
 
     with (
         patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", side_effect=fake_ssh),
+        patch("common.observability.canary_verify._ssh_cmd", side_effect=fake_ssh),
     ):
         mock_resp = MagicMock()
         mock_resp.status = 200
@@ -210,7 +210,8 @@ def test_verify_canary_ssh_failure() -> None:
     with (
         patch("urllib.request.urlopen") as mock_url,
         patch(
-            "tools.canary_verify._ssh_cmd", return_value=(1, "", "Connection refused")
+            "common.observability.canary_verify._ssh_cmd",
+            return_value=(1, "", "Connection refused"),
         ),
     ):
         mock_resp = MagicMock(status=200)
@@ -294,7 +295,10 @@ def test_main_cli_output(capsys: pytest.CaptureFixture[str]) -> None:
     fake_report_pass = _fake_report(True, locked_version)
     fake_report_fail = _fake_report(False, locked_version)
 
-    with patch("tools.canary_verify.verify_canary", return_value=fake_report_pass):
+    with patch(
+        "common.observability.canary_verify.verify_canary",
+        return_value=fake_report_pass,
+    ):
         code = main(["--env", "staging"])
         assert code == 0
         captured = capsys.readouterr()
@@ -302,7 +306,10 @@ def test_main_cli_output(capsys: pytest.CaptureFixture[str]) -> None:
         assert f"Installed SDK:  {locked_version}" in captured.out
         assert "1. SDK:         [OK]" in captured.out
 
-    with patch("tools.canary_verify.verify_canary", return_value=fake_report_pass):
+    with patch(
+        "common.observability.canary_verify.verify_canary",
+        return_value=fake_report_pass,
+    ):
         code_json = main(["--env", "staging", "--json"])
         assert code_json == 0
         captured_json = capsys.readouterr()
@@ -311,7 +318,10 @@ def test_main_cli_output(capsys: pytest.CaptureFixture[str]) -> None:
         assert data["installed_sdk"] == locked_version
         assert data["sdk"]["ok"] is True
 
-    with patch("tools.canary_verify.verify_canary", return_value=fake_report_fail):
+    with patch(
+        "common.observability.canary_verify.verify_canary",
+        return_value=fake_report_fail,
+    ):
         code_fail = main(["--env", "staging"])
         assert code_fail == 1
 
@@ -608,7 +618,7 @@ def test_window_default_is_shared_by_function_and_cli() -> None:
         installed_sdk="x",
     )
     with patch(
-        "tools.canary_verify.verify_canary", return_value=pass_report
+        "common.observability.canary_verify.verify_canary", return_value=pass_report
     ) as mock_verify:
         assert main(["--env", "staging"]) == 0
     assert (
@@ -619,7 +629,7 @@ def test_window_default_is_shared_by_function_and_cli() -> None:
 
 @pytest.mark.parametrize("bad", ["0", "-5", "abc"])
 def test_cli_rejects_non_positive_window(bad: str) -> None:
-    with patch("tools.canary_verify.verify_canary") as mock_verify:
+    with patch("common.observability.canary_verify.verify_canary") as mock_verify:
         with pytest.raises(SystemExit) as excinfo:
             main(["--env", "staging", "--max-age-seconds", bad])
     assert excinfo.value.code == 2
@@ -1182,7 +1192,8 @@ def test_llm_pillar_unconfigured_and_require_llm_flag() -> None:
         base, non_stream={"status": "unconfigured", "detail": "Missing LLM_API_KEY"}
     )
     with patch(
-        "tools.canary_verify._probe_public_summary_sso", return_value=(True, 302)
+        "common.observability.canary_verify._probe_public_summary_sso",
+        return_value=(True, 302),
     ):
         report_soft, _ = _verify_with_canned_ssh(
             "staging",
@@ -1215,7 +1226,8 @@ def test_llm_pillar_happy_path_and_failure_gates() -> None:
     pass_body = {"status": "pass", "input_tokens": 120, "output_tokens": 35}
 
     with patch(
-        "tools.canary_verify._probe_public_summary_sso", return_value=(True, 302)
+        "common.observability.canary_verify._probe_public_summary_sso",
+        return_value=(True, 302),
     ):
         report_ok, cmds = _verify_with_canned_ssh(
             "staging",
@@ -1263,7 +1275,8 @@ def test_llm_pillar_happy_path_and_failure_gates() -> None:
 
     # Reject unprotected public POST /api/todos/summary (HTTP 200 without SSO).
     with patch(
-        "tools.canary_verify._probe_public_summary_sso", return_value=(False, 200)
+        "common.observability.canary_verify._probe_public_summary_sso",
+        return_value=(False, 200),
     ):
         report_sso, _ = _verify_with_canned_ssh(
             "staging",

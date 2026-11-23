@@ -169,7 +169,7 @@ entries:
       - platform/30.todo/env.manifest.json
       - platform/30.todo/runtime-hooks.manifest.json
       - platform/30.todo/dashboard.json
-      - tools/canary_verify.py
+      - common/observability/canary_verify.py
       - common/observability/signoz_queries.py
       - common/tests/test_canary_verify.py
       - common/tests/test_todo_service.py
@@ -360,7 +360,7 @@ entries:
     summary: 服务准入与退役原子 Saga（1Password + Postgres + Vault + Dokploy）
     description: >-
       Service lifecycle automation — atomic zero-compromise onboarding and symmetrical offboarding
-      via tools/service_onboard.py and tools/service_offboard.py, managing 1Password root SSOT,
+      in common/core/service_onboard.py and common/core/service_offboard.py (CLI: tools/), managing 1Password root SSOT,
       PostgreSQL connection-capped user isolation, Vault AppRole synthesis, and Dokploy env injection.
     proofs:
       - common/tests/test_service_onboard.py

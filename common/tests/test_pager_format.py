@@ -615,7 +615,7 @@ def _anchors(path: Path) -> set[str]:
 
 def test_the_anchor_slug_matches_githubs_on_a_known_link() -> None:
     """The slug rule reproduces an anchor already linked from this repo."""
-    from tools.out_of_band_watchdog import STATE_DISCREPANCY_RUNBOOK
+    from common.observability.out_of_band_watchdog import STATE_DISCREPANCY_RUNBOOK
 
     anchor = STATE_DISCREPANCY_RUNBOOK.split("#", 1)[1]
     assert anchor in _anchors(ROOT / "docs/ssot/ops.standards.md")

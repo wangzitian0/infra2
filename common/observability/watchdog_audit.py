@@ -28,7 +28,7 @@ from common.core.registry import service_id_for_component  # noqa: E402
 
 INVENTORY = ROOT / "docs/ssot/watchdog-signals.yaml"
 WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
-OUT_OF_BAND = ROOT / "tools/out_of_band_watchdog.py"
+OUT_OF_BAND = ROOT / "common/observability/out_of_band_watchdog.py"
 
 VALID_OWNERS = {"internal", "cloudflare", "github", "signoz", "excluded", "self"}
 

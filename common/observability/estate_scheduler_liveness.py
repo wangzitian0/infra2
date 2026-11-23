@@ -76,7 +76,7 @@ MAX_DETAIL_ENTRIES = 12
 #: on ``startup_failure``. The first run of a new workflow waits in the queue first.
 QUEUED_RUN_ALLOWANCE = timedelta(hours=1)
 #: A timestamp this far ahead of the local clock is clock skew, not a young run. The
-#: Worker check (``tools/out_of_band_watchdog.py``) reads this one value too.
+#: Worker check (``common/observability/out_of_band_watchdog.py``) reads this one value too.
 CLOCK_SKEW_TOLERANCE_SECONDS = 300
 
 OK = "OK"

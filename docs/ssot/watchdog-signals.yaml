@@ -5,7 +5,7 @@
 #                                deploy.py ProbeFacet declarations (#541;
 #                                common/observability/probe_specs.py::render_probe_spec_text)
 #   primary_owner=cloudflare -> cloudflare/infra-watchdog/wrangler.toml
-#   primary_owner=github     -> tools/out_of_band_watchdog.py
+#   primary_owner=github     -> common/observability/out_of_band_watchdog.py
 #   primary_owner=signoz     -> one row per SigNoz alert rule, derived from the
 #                                alert_rules.json catalogs by watchdog_audit.py
 #                                (a test holds that reader equal to
@@ -499,7 +499,7 @@ signals:
     type: report
 
   # GitHub signals whose failure class another layer pages (#908): the daily audit
-  # still runs them and tools/out_of_band_watchdog.py puts their failures in one
+  # still runs them and common/observability/out_of_band_watchdog.py puts their failures in one
   # daily report to the reports chat, never the pager and never the issue trail.
   # The watchdog reads `type` from this file: a check pages unless it is
   # registered here as `type: report` (a name added only through the
@@ -592,7 +592,7 @@ signals:
     type: report
 
   # Estate scheduler liveness (#1432). truealpha's scheduler-liveness workflow was
-  # deleted in truealpha#1589; tools/out_of_band_watchdog.py
+  # deleted in truealpha#1589; common/observability/out_of_band_watchdog.py
   # run_estate_scheduler_liveness_check (common/observability/estate_scheduler_liveness.py)
   # replaces it. It discovers the scheduled workflows of the estate repositories
   # through the GitHub API. Red when a scheduled workflow is not active, its newest
@@ -614,7 +614,7 @@ signals:
   # job has no runner and no step, so its own `Alert on failure` step never runs,
   # and truealpha's scheduler-liveness counts the run as a tick. #1086: a scheduled
   # ops-checks job waited on its own run's concurrency group on 2026-10-06 and
-  # nothing paged. tools/out_of_band_watchdog.py run_scheduled_job_start_check
+  # nothing paged. common/observability/out_of_band_watchdog.py run_scheduled_job_start_check
   # (common/observability/scheduled_job_start.py) lists the scheduled runs of the last
   # 26 h; a job that started and failed alerts itself and is not a finding. A failed
   # read is red. Daily, so detection lags the failed job by up to 26 h.
@@ -629,7 +629,7 @@ signals:
 
   # Weekly off-host backups and the restore rehearsal (#895). Until this, both only
   # wrote host log files: #618's aborted prod runs went unnoticed for weeks and the
-  # rehearsal cron in #892 had never run. tools/out_of_band_watchdog.py
+  # rehearsal cron in #892 had never run. common/observability/out_of_band_watchdog.py
   # run_backup_checks reads each environment's latest manifest over SSH and judges
   # it with the SOP-004 verifier (every BackupFacet present, within its RPO, sized,
   # checksummed, off-host) plus the manifest's own environment field. The rehearsal
