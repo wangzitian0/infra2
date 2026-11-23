@@ -23,7 +23,7 @@ import pytest
 import yaml
 
 import common.backup.verification as verification
-import tools.out_of_band_watchdog as watchdog
+import common.observability.out_of_band_watchdog as watchdog
 from common.backup.verification import load_backup_inventory
 from tools import run_restore_rehearsal
 
@@ -607,7 +607,7 @@ def test_the_lazy_imports_resolve_with_only_the_jobs_packages() -> None:
     every day in the job while the in-process tests stay green.
     """
     code = _JOB_ONLY_IMPORTS + (
-        "import tools.out_of_band_watchdog as w\n"
+        "import common.observability.out_of_band_watchdog as w\n"
         "results = w.run_backup_checks(w.SshConfig('h', 'u', 22, 'k'),"
         " capture=lambda command: (1, '', 'absent'))\n"
         "print('\\n'.join(r.detail for r in results))\n"
@@ -634,7 +634,7 @@ def test_the_routing_inputs_resolve_with_only_the_jobs_packages() -> None:
     job's packages alone a broken import would page every failure every day.
     """
     code = _JOB_ONLY_IMPORTS + (
-        "import tools.out_of_band_watchdog as w\n"
+        "import common.observability.out_of_band_watchdog as w\n"
         "print(sorted(w.load_report_only_checks()))\n"
         "print(w.worker_status_max_age_seconds())\n"
     )

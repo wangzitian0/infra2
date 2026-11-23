@@ -2,7 +2,7 @@
 # alerts-as: monthly-ops-summary
 
 Thin runner. It reads each environment's ledger file from the VPS over SSH (the
-way ``tools/out_of_band_watchdog.py`` reads backup manifests), fetches the
+way ``common/observability/out_of_band_watchdog.py`` reads backup manifests), fetches the
 production outage intervals the Cloudflare Worker recorded (``GET /outages``;
 the VPS cannot count its own downtime), and delegates the math and the text to
 ``common.observability.ledger``. It runs weekly from GitHub Actions, outside the
