@@ -856,12 +856,24 @@ def test_the_pillar_reads_the_fields_the_writer_writes() -> None:
     assert _monitoring_report(recent_restart).monitoring.ok is False
 
 
-# --- SDK version resolved from release ref's uv.lock (issue #1289) -----------
+# --- SDK version resolved from the release ref's Canary image pin (#1289, #247) -----
 
 
-def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> None:
+def _write_pin(repo, version: str) -> None:
+    """Write the Canary image pin of ``platform/30.todo/compose.yaml`` for ``version``."""
+    stack = repo / "platform/30.todo"
+    stack.mkdir(parents=True, exist_ok=True)
+    digest = "sha256:" + version.replace(".", "").ljust(64, "a")
+    (stack / "compose.yaml").write_text(
+        "services:\n  todo:\n"
+        f"    image: ghcr.io/wangzitian0/infra2-canary-todo:v{version}@{digest}\n",
+        encoding="utf-8",
+    )
+
+
+def test_canary_verify_reads_expected_sdk_from_release_ref_canary_pin(tmp_path) -> None:
     """#1289: production runs v1.2.41 with SDK 3.6.0 while main locks SDK 3.7.3.
-    canary_verify --env production reads expected_sdk from git show v1.2.41:uv.lock
+    canary_verify --env production reads expected_sdk from the Canary pin at v1.2.41
     and exits 0; mutating the marker's locked SDK fails the SDK check."""
     import subprocess
 
@@ -876,18 +888,9 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
         check=True,
     )
 
-    def _lock_with(ver: str) -> str:
-        return (
-            "version = 1\n\n"
-            "[[package]]\n"
-            'name = "infra2-sdk"\n'
-            f'version = "{ver}"\n'
-            f'source = {{ url = "https://example.invalid/infra2_sdk-{ver}-py3-none-any.whl" }}\n'
-        )
-
     # v1.2.41 (production marker): SDK 3.6.0
-    (repo / "uv.lock").write_text(_lock_with("3.6.0"), encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "uv.lock"], check=True)
+    _write_pin(repo, "3.6.0")
+    subprocess.run(["git", "-C", str(repo), "add", "platform"], check=True)
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-m", "v1.2.41"],
         check=True,
@@ -897,8 +900,8 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     subprocess.run(["git", "-C", str(repo), "tag", "production/v1.2.41"], check=True)
 
     # v1.2.44 (newest release tag): SDK 3.7.1
-    (repo / "uv.lock").write_text(_lock_with("3.7.1"), encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "uv.lock"], check=True)
+    _write_pin(repo, "3.7.1")
+    subprocess.run(["git", "-C", str(repo), "add", "platform"], check=True)
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-m", "v1.2.44"],
         check=True,
@@ -907,8 +910,8 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     subprocess.run(["git", "-C", str(repo), "tag", "v1.2.44"], check=True)
 
     # main (unreleased HEAD): SDK 3.7.3
-    (repo / "uv.lock").write_text(_lock_with("3.7.3"), encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "uv.lock"], check=True)
+    _write_pin(repo, "3.7.3")
+    subprocess.run(["git", "-C", str(repo), "add", "platform"], check=True)
     subprocess.run(
         ["git", "-C", str(repo), "commit", "-m", "main"],
         check=True,
@@ -920,7 +923,7 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     )
     assert _resolve_locked_sdk_version(environment="staging", repo_root=repo) == "3.7.1"
 
-    # Production container serves 3.6.0 -> passes even though checkout uv.lock is 3.7.3
+    # Production container serves 3.6.0 -> passes even though the checkout pins 3.7.3
     prod_stdout = _canned_stdout(
         traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
         logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
@@ -931,7 +934,7 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     assert prod_report.expected_sdk == "3.6.0"
     assert prod_report.all_ok is True
 
-    # Mutation: change production marker's locked SDK to 3.6.1 -> SDK check fails
+    # Mutation: move the production marker to v1.2.44 (3.7.1) -> SDK check fails
     subprocess.run(
         ["git", "-C", str(repo), "tag", "-f", "production/v1.2.44"],
         check=True,
@@ -949,15 +952,6 @@ def test_canary_verify_resolves_remote_production_marker_when_local_stale(
 ) -> None:
     """#1559: canary_verify resolves newest refs/tags/production/* from origin and fetches it."""
     import subprocess
-
-    def _lock_with(ver: str) -> str:
-        return (
-            "version = 1\n\n"
-            "[[package]]\n"
-            'name = "infra2-sdk"\n'
-            f'version = "{ver}"\n'
-            f'source = {{ url = "https://example.invalid/infra2_sdk-{ver}-py3-none-any.whl" }}\n'
-        )
 
     origin = tmp_path / "origin.git"
     subprocess.run(
@@ -981,8 +975,8 @@ def test_canary_verify_resolves_remote_production_marker_when_local_stale(
     subprocess.run(
         ["git", "-C", str(author), "config", "user.name", "Test"], check=True
     )
-    (author / "uv.lock").write_text(_lock_with("3.6.0"), encoding="utf-8")
-    subprocess.run(["git", "-C", str(author), "add", "uv.lock"], check=True)
+    _write_pin(author, "3.6.0")
+    subprocess.run(["git", "-C", str(author), "add", "platform"], check=True)
     subprocess.run(
         ["git", "-C", str(author), "commit", "-m", "v1.2.41"],
         check=True,
@@ -1012,8 +1006,8 @@ def test_canary_verify_resolves_remote_production_marker_when_local_stale(
     )
 
     # Origin later advances to v1.2.44 + production/v1.2.44 (SDK 3.7.1) without local fetching.
-    (author / "uv.lock").write_text(_lock_with("3.7.1"), encoding="utf-8")
-    subprocess.run(["git", "-C", str(author), "add", "uv.lock"], check=True)
+    _write_pin(author, "3.7.1")
+    subprocess.run(["git", "-C", str(author), "add", "platform"], check=True)
     subprocess.run(
         ["git", "-C", str(author), "commit", "-m", "v1.2.44"],
         check=True,
