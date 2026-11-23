@@ -33,7 +33,8 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
 ## The single resident entry point (#543)
 
 `infra_probe_runner.py` is the ONE long-running process this repo ships
-(container `platform-alerting-probes`). Everything resident runs inside its
+(container `platform-alerting-probes`). Its logic is in
+`common/observability/infra_probe_runner.py`; the file here is the entry point. Everything resident runs inside its
 loop: the minute-tier service probes (`INFRA_PROBE_SPECS`), the public-route
 probes (`PUBLIC_ROUTE_PROBE_SPECS`), and the `ResidentWatcher` plugins
 (`common/observability/watchers/resident.py` — container-breakdown watch and the deploy-queue
@@ -269,7 +270,8 @@ that a truncated restore cannot pass.
 ## out_of_band_watchdog.py
 
 The daily out-of-band audit, run from GitHub Actions outside the infra2 host
-(ops.observability.md SOP-005B). It pages Feishu directly only for the failure
+(logic in `common/observability/out_of_band_watchdog.py`; this file is its CLI entry point;
+ops.observability.md SOP-005B). It pages Feishu directly only for the failure
 classes the GitHub layer owns (#908), and only when the set of paged checks changes
 (#962, `common/observability/page_dedup.py`; the same set later is a `[报告] 仍未恢复`
 in the reports chat, an emptied set one RESOLVED page): Cloudflare Worker liveness (`/status`

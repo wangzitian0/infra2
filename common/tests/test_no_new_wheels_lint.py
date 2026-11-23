@@ -190,7 +190,7 @@ def test_e2e_smoke_job_opens_and_closes_one_issue(monkeypatch, capsys) -> None:
     schedule-signal-exempt marker. The daily watchdog reports the open issue first."""
     from common.observability import page_dedup as pd
     from common.tests.test_page_dedup import SCHEDULED, FakeIssues, _execute, _steps
-    from tools import out_of_band_watchdog as watchdog
+    from common.observability import out_of_band_watchdog as watchdog
 
     text = (ROOT / ".github/workflows/ops-checks.yml").read_text(encoding="utf-8")
     block = text.split("\n  e2e-regressions-smoke:\n", 1)[1].split("\n  [a-z", 1)[0]
@@ -228,7 +228,7 @@ def test_e2e_smoke_job_opens_and_closes_one_issue(monkeypatch, capsys) -> None:
 def test_unreadable_e2e_state_is_a_warning_note_not_silence(monkeypatch) -> None:
     """#1649: a failed GitHub state read shows as a warning line in the report."""
     from common.observability import page_dedup as pd
-    from tools import out_of_band_watchdog as watchdog
+    from common.observability import out_of_band_watchdog as watchdog
 
     class Broken:
         def open_issues(self, *, with_body: bool = False):

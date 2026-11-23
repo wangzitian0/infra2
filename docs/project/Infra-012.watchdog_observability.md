@@ -297,4 +297,4 @@ User can now see: "Outage was 10:00-10:15 (15 min), root cause was HTTP 502 (lik
 - Prior: [Infra-011](./archive/README.md#infra-011) (stage contract + failure domains)
 - Watchdog audit: the original audit report was a session-local file and was never committed; the live signal inventory it fed is `docs/ssot/watchdog-signals.yaml`
 - Config: `docs/ssot/ops.observability.md`, `docs/ssot/watchdog-signals.yaml`
-- Code: `cloudflare/infra-watchdog/worker.js`, `tools/out_of_band_watchdog.py`, `platform/12.alerting/`
+- Code: `cloudflare/infra-watchdog/worker.js`, `common/observability/out_of_band_watchdog.py`, `platform/12.alerting/`

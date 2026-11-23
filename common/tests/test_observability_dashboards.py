@@ -42,7 +42,7 @@ OBS_DIR = ROOT / "finance_report" / "finance_report" / "observability"
 APPLY_OBSERVABILITY_WORKFLOW = (
     ROOT / ".github" / "workflows" / "apply-observability.yml"
 )
-SIGNOZ_ALERT_PROBE = ROOT / "tools" / "signoz_alert_rule_probe.py"
+SIGNOZ_ALERT_PROBE = ROOT / "common" / "signoz_alert_rule_probe.py"
 
 
 def test_openpanel_analytics_spec_is_valid_and_funnel_is_well_formed() -> None:
@@ -3246,6 +3246,7 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
         "platform/30.todo/dashboard.json",
         "common/alerting/*",
         "common/observability_dashboards.py",
+        "common/signoz_alert_rule_probe.py",
         "tools/signoz_alert_rule_probe.py",
     ]
     assert train_patterns == expected_patterns

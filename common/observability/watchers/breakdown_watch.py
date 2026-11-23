@@ -38,7 +38,7 @@ DEFAULT_LOG_TAIL = 25
 # briefly reporting "restarting" mid-deploy) never pages, short enough that a real
 # crash-loop (which keeps re-entering Docker's restart backoff every few seconds)
 # is caught well within one incident's first several minutes. Matches
-# tools/infra_probe_runner.py's own DEFAULT_FAILURE_THRESHOLD at the same 60s
+# common/observability/infra_probe_runner.py's own DEFAULT_FAILURE_THRESHOLD at the same 60s
 # cadence -- same reasoning, same codebase convention.
 DEFAULT_FAILURE_THRESHOLD = 3
 # 5 consecutive HEALTHY polls (~5 minutes) before RESOLVED. Deliberately more

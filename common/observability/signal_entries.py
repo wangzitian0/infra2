@@ -10,7 +10,7 @@ declaring service's ``SignalFacet`` (#425 T5 tier/type + structured debounce).
 
 Cross-plane entries (cloudflare / github / self / excluded) STAY handwritten
 in the YAML — they describe watchers outside the probe runner whose configs
-live in wrangler.toml, tools/out_of_band_watchdog.py, or their own sidecar
+live in wrangler.toml, common/observability/out_of_band_watchdog.py, or their own sidecar
 code, so no single in-repo declaration can derive them.
 
 Equivalence proof: the pre-deletion handwritten section is frozen at

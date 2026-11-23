@@ -65,7 +65,7 @@ ENV_SUFFIX_PLACEHOLDER = "${ENV_SUFFIX}"
 
 @dataclass(frozen=True)
 class ProbeFacet:
-    """One probe of the owning service, as consumed by tools/infra_probe_runner.
+    """One probe of the owning service, as consumed by common/observability/infra_probe_runner.
 
     Renders to one ``INFRA_PROBE_SPECS`` line:
     ``name|kind|target|expected|severity|timeout_seconds|depends_on|service_id``

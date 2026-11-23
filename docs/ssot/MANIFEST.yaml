@@ -169,7 +169,7 @@ entries:
       - platform/30.todo/env.manifest.json
       - platform/30.todo/runtime-hooks.manifest.json
       - platform/30.todo/dashboard.json
-      - tools/canary_verify.py
+      - common/observability/canary_verify.py
       - common/observability/signoz_queries.py
       - common/tests/test_canary_verify.py
       - common/tests/test_todo_service.py

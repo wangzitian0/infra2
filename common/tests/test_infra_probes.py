@@ -37,7 +37,7 @@ def _production_probe_environment(monkeypatch):
 
 def _load_probe_runner():
     return load_repo_module(
-        "tools/infra_probe_runner.py", "infra_probe_runner_under_test"
+        "common/observability/infra_probe_runner.py", "infra_probe_runner_under_test"
     )
 
 

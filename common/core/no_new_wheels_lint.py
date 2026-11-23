@@ -49,7 +49,7 @@ PAGER_ONLY_PRIMITIVES = (
 # The primitives' own defining modules and the shared engine are the plumbing,
 # not callsites; tests exercise callsites by design.
 SCAN_EXEMPT_FILES = {
-    "tools/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
+    "common/observability/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
     "common/alerting/delivery.py",  # defines deliver_infra2_report + the shared engine
     "common/alerting/release_card.py",  # defines publish_card release/stage card primitive
     "common/observability/probes.py",  # defines post_alert_bridge_payload
