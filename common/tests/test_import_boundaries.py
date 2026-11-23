@@ -1,6 +1,6 @@
 """Import-boundary guard for infra2 (infra2#955, #846, #847; #1823 Step 4.3).
 
-The layer definition is in docs/ssot/core.harness.md §5.3. This test applies it with the SDK
+docs/ssot/core.harness.md §5.3 defines the layers; the ranks below implement it with the SDK
 checker ``infra2_sdk.rules.imports.check_import_boundaries`` (version: uv.lock) over the whole
 repository. A module may import from its own layer and from lower ranks only:
 
@@ -103,7 +103,6 @@ def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
     (common / "tests").mkdir()
     (tmp_path / "tools").mkdir()
     (tmp_path / "bootstrap").mkdir()
-    (tmp_path / ".venv" / "lib").mkdir(parents=True)
     (common / "__init__.py").write_text("")
     (common / "dom" / "__init__.py").write_text("")
     (common / "console.py").write_text("")
@@ -121,7 +120,9 @@ def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
     )
     (tmp_path / "tools" / "x.py").write_text("import bootstrap.thing\n")
     (tmp_path / "bootstrap" / "thing.py").write_text("")
-    (tmp_path / ".venv" / "lib" / "a.py").write_text("import tools.x\n")
+    (common / "dom" / "typed.py").write_text(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import tools.x\n"
+    )
     # common/tests is the top layer: it may import everything
     (common / "tests" / "test_x.py").write_text("import common.flat\nimport tools.x\n")
 
@@ -130,6 +131,7 @@ def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
         ("common.dom.bad", "bootstrap.thing"),
         ("common.other", "tools.x"),
         ("common.dom.late", "tools.x"),
+        ("common.dom.typed", "tools.x"),
         ("tools.x", "bootstrap.thing"),
     }
 
@@ -356,3 +358,57 @@ def test_docs_do_not_cite_retired_flat_common_modules() -> None:
         "Documentation cites retired common/ shims or libs/ paths:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )
+
+
+def _upper_layer_imports(root: Path) -> set[tuple[str, str]]:
+    """Import statements in ``common/`` (not tests) whose top name is an upper layer.
+
+    The SDK check sees an edge only when its target is a file under the root. This catches
+    the rest: ``import tools``, an import of a module that does not exist (a ``try``/``except
+    ImportError`` fallback), and ``__import__("tools.x")``.
+    """
+    upper = {"tools", "platform", "bootstrap"}
+    found: set[tuple[str, str]] = set()
+    for path in sorted((root / "common").rglob("*.py")):
+        rel = path.relative_to(root)
+        if "tests" in rel.parts or "__pycache__" in rel.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names = [node.module]
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "__import__"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                names = [node.args[0].value]
+            for name in names:
+                if name.split(".")[0] in upper and name != "platform":
+                    found.add((rel.as_posix(), name))
+    return found
+
+
+def test_common_names_no_upper_layer_even_without_a_target_file() -> None:
+    assert _upper_layer_imports(ROOT) == set()
+
+
+def test_upper_layer_imports_on_a_synthetic_tree(tmp_path: Path) -> None:
+    common = tmp_path / "common"
+    (common / "tests").mkdir(parents=True)
+    (common / "a.py").write_text("import tools\nimport platform\n")
+    (common / "b.py").write_text(
+        "try:\n    from tools.gone import x\nexcept ImportError:\n    x = None\n"
+    )
+    (common / "c.py").write_text('m = __import__("bootstrap.thing")\n')
+    (common / "tests" / "test_x.py").write_text("import tools\n")
+    assert _upper_layer_imports(tmp_path) == {
+        ("common/a.py", "tools"),
+        ("common/b.py", "tools.gone"),
+        ("common/c.py", "bootstrap.thing"),
+    }
