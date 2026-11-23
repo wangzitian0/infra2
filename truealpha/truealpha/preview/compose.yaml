@@ -15,7 +15,7 @@
 #      at teardown removes that volume, so the database is genuinely ephemeral.
 #   2. The rendered DATABASE_URL is OVERRIDDEN to point at that local `db` service, AFTER
 #      sourcing the Vault-rendered /secrets/.env (so Vault still supplies the OTHER app
-#      secrets — SEC_USER_AGENT, S3 — and only the DB is local/ephemeral).
+#      secrets — S3 — and only the DB is local/ephemeral).
 #   3. Everything else (vault-agent, llm, web, Traefik labels, healthchecks) mirrors the
 #      staging/prod template so a preview is a faithful, functional copy of the app.
 #
