@@ -35,7 +35,7 @@ reached through an SSH tunnel when needed. Postgres uses its existing loopback p
 ## Boot Validation
 
 `dagster-entrypoint.sh` sources the Vault-rendered `/secrets/.env`. Then it runs
-`truealpha_runtime.boot.assert_environment` against `apps/data-engine/required-env.generated.json`
+`infra2_sdk.runtime.config_schema.assert_environment` against `apps/data-engine/required-env.generated.json`
 in the image. If the process lacks a declared variable, the container exits with code 1 and
 names the missing variables. It never prints values. The deploy health check then fails.
 
