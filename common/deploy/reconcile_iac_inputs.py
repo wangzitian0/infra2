@@ -89,6 +89,7 @@ from common.deploy.canary_pin import (
     rewrite_canary_pin,
 )
 from common.deploy.stage_record_reader import verified_sdk_versions
+from common.deploy.yaml_text import safe_load_text
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
@@ -586,7 +587,7 @@ def iac_pinned_services() -> list[str]:
 
 
 def _parse_repos_yaml_release_tags(raw_text: str) -> dict[str, str]:
-    data = yaml.safe_load(raw_text) or {}
+    data = safe_load_text(yaml, raw_text) or {}
     entries = (
         (data.get("repositories") or data.get("repos"))
         if isinstance(data, Mapping)
