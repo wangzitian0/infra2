@@ -206,7 +206,9 @@ def test_ast_guard_no_hardcoded_observability_file_tuples() -> None:
     assert seen_derived == derived_constants
 
     reconcile_tree = ast.parse(
-        (ROOT / "tools" / "reconcile_iac_inputs.py").read_text(encoding="utf-8")
+        (ROOT / "common" / "deploy" / "reconcile_iac_inputs.py").read_text(
+            encoding="utf-8"
+        )
     )
     for node in reconcile_tree.body:
         target_names = []

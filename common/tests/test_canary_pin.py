@@ -16,7 +16,7 @@ from common.deploy.canary_pin import (
     canary_sdk_version,
     in_app_sdk_range,
 )
-from tools import reconcile_iac_inputs as reconcile
+from common.deploy import reconcile_iac_inputs as reconcile
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIGEST = "sha256:" + "a" * 64
