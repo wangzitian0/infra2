@@ -1,7 +1,7 @@
 # Canary Todo SSOT
 
 > **SSOT Key**: `platform.canary_todo`
-> **Definition**: Canary Todo (`platform/30.todo`) is a synthetic service at `todo.zitian.party`. It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres read-only login and session temporary-table write/read/delete roundtrip, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
+> **Definition**: Canary Todo (`platform/30.todo`) is a synthetic service at `todo.zitian.party`. It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres login of the app role with a session temporary-table write/read/delete roundtrip, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
 > **Scope**: Canary Todo is the one Canary of infra2 (#1477): no CI job, schedule or deploy step deploys an App to prove infra2.
 
 ---
@@ -56,7 +56,7 @@ The document returns HTTP 200 only when every gating check passes. It returns HT
 
 `failed` lists gating checks in state `fail`. `unconfigured` lists gating checks in state `unconfigured`. A missing credential never appears in `failed`.
 
-**One run at a time.** Each run does real writes and opens a Postgres connection, and the role allows 5. The service runs one set of checks at a time. Other requests wait and get that result for up to 30 s. The 30 s limit is shorter than the 60 s probe interval, so every probe round sees a fresh run. `age_seconds` states how old the result is.
+**One run at a time.** Each run does real writes and opens a Postgres connection, and the role allows 20. The service runs one set of checks at a time. Other requests wait and get that result for up to 30 s. The 30 s limit is shorter than the 60 s probe interval, so every probe round sees a fresh run. `age_seconds` states how old the result is.
 
 ## 3. Surfaces and Consumers
 
@@ -102,14 +102,13 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 |----------|--------------|--------|-----------------|
 | `REDIS_PASSWORD` | `runtime`, `provided_by` | Vault `platform/<env>/redis` key `password` | None |
 | `DATABASE_URL` | `runtime`, `store_key`, `composed_from` | Vault key `TODO_POSTGRES_PASSWORD` (its `store_key`) holds a password generated once; `TodoDeployer` sets it on role `todo_app` at each supply. `secrets.ctmpl` composes the URL from it, role `todo_app` and host `platform-postgres<suffix>`; only the URL enters the process. The Canary reads only this name for Postgres | None |
-| Postgres role `canary_ro` | none | Not used and not provisioned. Staging: dropped on 2026-11-22. Production: the role stays until one manual `DROP ROLE canary_ro`. Its Vault key `CANARY_POSTGRES_PASSWORD` is pruned at the first deploy after #1878 | Owner present for the production `DROP ROLE` |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` (Vault keys `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY`) | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
 | `LLM_API_KEY` | `human`, `empty_ok` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | `uv run invoke env.set LLM_API_KEY=<KEY> --project=platform --env=<env> --service=todo --credential-type=root_vars` |
 | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_SMALL_MODEL` | `code`, `empty_ok` | `LlmSettings` defaults in `infra2_sdk.runtime.llm` | Optional compose override |
 
 The policy lets the canary read only `platform/<env>/todo` and `platform/<env>/redis`. It cannot read the Postgres or S3 root credentials.
 
-**Postgres role.** `TodoDeployer.apply_secret_supply` runs on every sync. After the supply succeeds, it runs idempotent SQL as `postgres` over SSH. The SQL goes through stdin, so the password never appears in an argument list. The session first sets `log_min_error_statement = 'panic'`, `log_statement = 'none'` and `log_min_duration_statement = -1`. Without them, the server logs a failed `ALTER ROLE` with its password. The deployer also removes the password from any psql error it prints. The role has `LOGIN`, no superuser, no create rights, `CONNECTION LIMIT 5`, `default_transaction_read_only = on`, and no `GRANT`. `SELECT 1` needs only `CONNECT`, which `PUBLIC` holds. A rotated Vault password takes effect on the next sync.
+**Postgres role.** `TodoDeployer.apply_secret_supply` runs on every sync. After the supply succeeds, it runs idempotent SQL as `postgres` over SSH. The SQL goes through stdin, so the password never appears in an argument list. The session first sets `log_min_error_statement = 'panic'`, `log_statement = 'none'` and `log_min_duration_statement = -1`. Without them, the server logs a failed `ALTER ROLE` with its password. The deployer also removes the password from any psql error it prints. The one role is `todo_app`. It has `LOGIN`, no superuser, no create rights and `CONNECTION LIMIT 20`. The same SQL creates the `todos` table and grants `SELECT`, `INSERT`, `UPDATE` and `DELETE` on it, and `USAGE` and `SELECT` on its sequence. The Postgres check logs in with this role: its temporary-table write needs the `TEMP` privilege on the database, which `PUBLIC` holds. A rotated Vault password takes effect on the next sync.
 
 **First deploy.** The secret supply restarts the vault-agent and the app container after a value changes. On the first deploy neither exists. `Deployer.apply_secret_supply` restarts only the consumers that exist, so the sync reaches the role creation. If the host cannot list its containers, the supply fails.
 
