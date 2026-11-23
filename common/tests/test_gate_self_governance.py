@@ -294,6 +294,9 @@ def test_scheduled_automation_scripts_are_in_the_closure() -> None:
     found = gate.self_governing_files()
     assert "tools/host_hygiene_schedule.py" in found
     assert "tools/facet_reconcile.py" in found
+    # #1823 Step 4.3: the logic of each entry point lives in common/deploy.
+    assert "common/deploy/host_hygiene_schedule.py" in found
+    assert "common/deploy/facet_reconcile.py" in found
     assert "common/tests/test_host_hygiene_schedule.py" in found
     assert "common/tests/test_facet_reconcile.py" in found
 
