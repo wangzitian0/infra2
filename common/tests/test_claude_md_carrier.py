@@ -118,12 +118,12 @@ def test_agents_md_points_at_the_function_that_actually_decides_provability() ->
     backticked *paths* in AGENTS.md exist; this checks the *symbol*, because a
     rename would leave the path valid and the sentence meaningless.
     """
-    import tools.pr_merge_gate as gate
+    import common.gate.pr_merge_gate as gate
 
     name = "_direction_proof_for"
     assert hasattr(gate, name), (
         f"AGENTS.md §6 delegates the provable-file question to {name}(), which no "
-        "longer exists in tools/pr_merge_gate.py. Either restore it or rewrite "
+        "longer exists in common/gate/pr_merge_gate.py. Either restore it or rewrite "
         "the rule -- a rule that points at nothing is worse than one that repeats "
         "itself, because it reads as delegated."
     )
