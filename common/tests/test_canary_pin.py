@@ -163,7 +163,7 @@ def test_canary_verify_production_fallback_never_reads_the_new_pin(tmp_path) -> 
         environment="production", repo_root=tmp_path, runner=no_git
     )
     assert staging == "9.8.7"
-    assert production != "9.8.7"
+    assert production == ""
 
 
 def test_probe_health_reads_the_pin_format_that_canary_pin_owns() -> None:

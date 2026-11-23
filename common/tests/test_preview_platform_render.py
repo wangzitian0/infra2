@@ -189,7 +189,7 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
         assert slot[field] == prod[field], field
     assert slot["healthcheck"]["test"] == prod["healthcheck"]["test"]
     shared = set(slot["environment"]) & set(prod["environment"])
-    assert len(shared) == 19
+    assert len(shared) == 17
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
     } == set()

@@ -253,12 +253,6 @@ def _summary_probe_command(container: str, *, stream: bool) -> str:
     )
 
 
-def _parse_sdk_version_from_lock_text(lock_text: str) -> str:
-    from infra2_sdk.deploy import parse_wheel_version
-
-    return parse_wheel_version(lock_text)
-
-
 def _parse_canary_sdk_version_from_compose_text(compose_text: str) -> str:
     """SDK version of the Canary image pin (common/deploy/canary_pin.py), or "" (infra2-sdk#247)."""
     from common.deploy.canary_pin import CanaryPinError, canary_image_from_compose_text
@@ -269,47 +263,29 @@ def _parse_canary_sdk_version_from_compose_text(compose_text: str) -> str:
         return ""
 
 
-def _read_locked_sdk_version_file(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return _parse_sdk_version_from_lock_text(path.read_text(encoding="utf-8"))
-
-
 def _sdk_version_of_checkout(root: Path) -> str:
-    """The Canary SDK of a checkout: the compose image pin, else (releases before #247) uv.lock."""
+    """The Canary SDK of a checkout: its compose image pin, or "" without one."""
     compose = root / "platform/30.todo/compose.yaml"
-    if compose.exists():
-        version_str = _parse_canary_sdk_version_from_compose_text(
-            compose.read_text(encoding="utf-8")
-        )
-        if version_str:
-            return version_str
-    return _read_locked_sdk_version_file(root / "uv.lock")
+    if not compose.exists():
+        return ""
+    return _parse_canary_sdk_version_from_compose_text(
+        compose.read_text(encoding="utf-8")
+    )
 
 
 def _sdk_version_at_ref(root: Path, ref: str, runner) -> tuple[bool, str]:
-    """``(found, version)`` of the Canary SDK at ``ref``: the compose pin, else uv.lock."""
+    """``(found, version)`` of the Canary SDK at ``ref``: the compose image pin."""
     compose = runner(
         ["git", "-C", str(root), "show", f"{ref}:platform/30.todo/compose.yaml"],
         capture_output=True,
         text=True,
     )
-    if compose.returncode == 0:
-        version_str = _parse_canary_sdk_version_from_compose_text(compose.stdout)
-        if version_str:
-            return True, version_str
-    lock = runner(
-        ["git", "-C", str(root), "show", f"{ref}:uv.lock"],
-        capture_output=True,
-        text=True,
-    )
-    if lock.returncode != 0:
+    if compose.returncode != 0:
         return False, ""
-    return True, _parse_sdk_version_from_lock_text(lock.stdout)
+    return True, _parse_canary_sdk_version_from_compose_text(compose.stdout)
 
 
 def _resolve_locked_sdk_version(
-    lock_path: Path | None = None,
     *,
     environment: str = "production",
     repo_root: Path | None = None,
@@ -318,10 +294,8 @@ def _resolve_locked_sdk_version(
     """The SDK version the deployed Canary must run (#1289, infra2-sdk#247).
 
     It reads the release that the environment serves: the Canary image pin of
-    ``platform/30.todo/compose.yaml``, else ``uv.lock`` for a release before #247.
+    ``platform/30.todo/compose.yaml``. Every release since #247 pins the image there.
     """
-    if lock_path is not None:
-        return _read_locked_sdk_version_file(lock_path)
     root = repo_root or Path(__file__).resolve().parents[1]
     try:
         from common.deploy.release_markers import (
@@ -366,13 +340,11 @@ def _resolve_locked_sdk_version(
             return version_str
     except Exception:
         pass
-    # Production still serves a host-built Canary until a promotion carries the pin: its
-    # last fallback is uv.lock, never the checkout's new pin.
-    version_str = (
-        _read_locked_sdk_version_file(root / "uv.lock")
-        if environment == "production"
-        else _sdk_version_of_checkout(root)
-    )
+    # Production never falls back to the checkout: its pin can be newer than the release
+    # that production serves. An empty expected version fails the SDK check.
+    if environment == "production":
+        return ""
+    version_str = _sdk_version_of_checkout(root)
     if version_str:
         return version_str
     try:
@@ -801,14 +773,24 @@ def verify_canary(
     )
 
     # Parse SDK Version against locked requirement
+    # Fail closed: without an expected version (no Canary pin found for the served
+    # release) the check has nothing to compare and does not pass.
     sdk_ok = True
-    if check_sdk and expected_sdk:
-        sdk_ok = bool(installed_sdk == expected_sdk)
+    if check_sdk:
+        sdk_ok = bool(expected_sdk) and installed_sdk == expected_sdk
+    if sdk_ok:
+        sdk_summary = (
+            f"Installed SDK {installed_sdk} matches locked release {expected_sdk}"
+        )
+    elif not expected_sdk:
+        sdk_summary = (
+            "Expected SDK unknown: no Canary image pin found for the served release"
+        )
+    else:
+        sdk_summary = f"Installed SDK {installed_sdk} does not match locked release {expected_sdk}"
     sdk_pillar = PillarResult(
         ok=sdk_ok,
-        summary=f"Installed SDK {installed_sdk} matches locked release {expected_sdk}"
-        if sdk_ok
-        else f"Installed SDK {installed_sdk} does not match locked release {expected_sdk}",
+        summary=sdk_summary,
         details={"installed_sdk": installed_sdk, "expected_sdk": expected_sdk},
     )
 
@@ -859,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--expected-sdk",
         default=None,
-        help="Override expected SDK version (default: from uv.lock)",
+        help="Override the expected SDK version (default: the Canary image pin of the served release)",
     )
     parser.add_argument(
         "--skip-sdk-check",
