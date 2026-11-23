@@ -28,9 +28,9 @@ from common.deploy.compose_compile import (
 from common.deploy.config_hash import config_hash_from_items
 from common.tests.conftest import load_repo_module
 from common.tests.test_compose_compile import (
-    TODO_HAND_WRITTEN,
     _todo_source,
     _x_stack,
+    todo_hand_written_text,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -314,9 +314,7 @@ def test_release_template_sha256_of_a_plain_stack_hashes_secrets_ctmpl(
     import common.security.vault_audit as va
 
     # The hand-written todo, with a template that the registry renderer cannot give.
-    _repo_with(
-        monkeypatch, tmp_path, TODO, TODO_HAND_WRITTEN.read_text(encoding="utf-8")
-    )
+    _repo_with(monkeypatch, tmp_path, TODO, todo_hand_written_text())
     (tmp_path / TODO_DIR / "secrets.ctmpl").write_text("plain\n", encoding="utf-8")
     monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
     want = hashlib.sha256(b"plain\n").hexdigest()

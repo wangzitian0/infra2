@@ -31,6 +31,21 @@ TODO = "platform/30.todo/compose.yaml"
 TODO_HAND_WRITTEN = ROOT / "common/tests/fixtures/todo_stack_hand_written.yaml"
 # The stacks on x-infra2. A migration adds its file here and proves its equivalence.
 X_INFRA2_FILES = {TODO}
+
+
+def todo_hand_written_text() -> str:
+    """The hand-written todo stack, with the Canary image of the live compose.
+
+    The pin bot moves the image in `platform/30.todo/compose.yaml` only (one pin source,
+    `common.deploy.canary_pin`). The fixture keeps its own copy of the rest.
+    """
+    from common.deploy.canary_pin import canary_image_from_compose_text
+
+    text = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
+    live = canary_image_from_compose_text((ROOT / TODO).read_text(encoding="utf-8"))[0]
+    return text.replace(canary_image_from_compose_text(text)[0], live)
+
+
 # The Canary image has no default hosts: /api/canary/status turns red when the compiled
 # todo service lacks one of these. The values are those of the hand-written file.
 CANARY_HOSTS = {
@@ -181,7 +196,7 @@ def test_unreadable_compiled_text_is_never_raw_eligible() -> None:
 
 def test_real_stacks_classify_as_measured() -> None:
     """Real files: a vault mount and a build block raw; portal has neither (#1822)."""
-    assert raw_ineligibility(TODO_HAND_WRITTEN.read_text(encoding="utf-8")) == [
+    assert raw_ineligibility(todo_hand_written_text()) == [
         "services.vault-agent mounts './vault-agent.hcl' from the checkout; raw has no checkout",
         "services.vault-agent mounts './secrets.ctmpl' from the checkout; raw has no checkout",
     ]
@@ -379,7 +394,7 @@ def test_the_real_todo_file_is_equivalent_and_a_missing_env_suffix_is_found() ->
     source = _todo_source()
     files = _todo_base_files()
     compiled = _todo_compiled()
-    base = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
+    base = todo_hand_written_text()
     assert equivalence_problems(source, compiled, base, files) == []
     without = base.replace(
         "      # secrets.ctmpl reads it to compose DATABASE_URL.\n      ENV_SUFFIX: ${ENV_SUFFIX:-}\n",
@@ -395,9 +410,9 @@ def test_the_compiled_todo_sets_each_canary_host_as_the_hand_written_file() -> N
     """The Canary image at 4.3.0 has no default hosts (#1822 Slice 2)."""
     want = {
         name: value
-        for name, value in yaml.safe_load(
-            TODO_HAND_WRITTEN.read_text(encoding="utf-8")
-        )["services"]["todo"]["environment"].items()
+        for name, value in yaml.safe_load(todo_hand_written_text())["services"]["todo"][
+            "environment"
+        ].items()
         if name in CANARY_HOSTS
     }
     assert want == CANARY_HOSTS
@@ -425,7 +440,7 @@ def test_the_compiled_sidecar_forwards_each_env_that_the_template_reads() -> Non
 def test_equivalence_finds_a_canary_host_that_the_source_drops(name: str) -> None:
     source = _todo_without(_todo_source(), name)
     files = _todo_base_files()
-    base = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
+    base = todo_hand_written_text()
     assert equivalence_problems(source, _todo_compiled(source), base, files) == [
         f"services.todo.environment.{name}: only in the base file"
     ]
@@ -435,7 +450,7 @@ def test_equivalence_reports_a_changed_label_template_or_command() -> None:
     source = _todo_source()
     files = _todo_base_files()
     compiled = _todo_compiled()
-    base = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
+    base = todo_hand_written_text()
     assert equivalence_problems(source, compiled, base, files) == []
     label = base.replace("priority=100", "priority=99")
     assert any(
@@ -460,7 +475,7 @@ def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> Non
     stack.mkdir(parents=True)
     for name in ("secrets.ctmpl", "vault-agent.hcl"):
         (stack / name).write_bytes((ROOT / "platform/30.todo" / name).read_bytes())
-    (stack / "compose.yaml").write_bytes(TODO_HAND_WRITTEN.read_bytes())
+    (stack / "compose.yaml").write_text(todo_hand_written_text(), encoding="utf-8")
     (tmp_path / "platform/21.portal").mkdir(parents=True)
     (tmp_path / "platform/21.portal/compose.yaml").write_bytes(
         (ROOT / "platform/21.portal/compose.yaml").read_bytes()
