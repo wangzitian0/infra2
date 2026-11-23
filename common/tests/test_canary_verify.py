@@ -873,7 +873,7 @@ def _write_pin(repo, version: str) -> None:
 
 def test_canary_verify_reads_expected_sdk_from_release_ref_canary_pin(tmp_path) -> None:
     """#1289: production runs v1.2.41 with SDK 3.6.0 while main locks SDK 3.7.3.
-    canary_verify --env production reads expected_sdk from the Canary pin at v1.2.41
+    canary_verify --env production reads expected_sdk from the Canary image of release v1.2.41
     and exits 0; mutating the marker's locked SDK fails the SDK check."""
     import subprocess
 
