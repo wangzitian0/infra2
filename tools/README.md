@@ -267,7 +267,8 @@ that a truncated restore cannot pass.
 ## out_of_band_watchdog.py
 
 The daily out-of-band audit, run from GitHub Actions outside the infra2 host
-(ops.observability.md SOP-005B). It pages Feishu directly only for the failure
+(logic in `common/observability/out_of_band_watchdog.py`; this file is its CLI entry point;
+ops.observability.md SOP-005B). It pages Feishu directly only for the failure
 classes the GitHub layer owns (#908), and only when the set of paged checks changes
 (#962, `common/observability/page_dedup.py`; the same set later is a `[报告] 仍未恢复`
 in the reports chat, an emptied set one RESOLVED page): Cloudflare Worker liveness (`/status`

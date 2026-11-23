@@ -403,7 +403,7 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
   按天、按探测周期(60 s)折算为该环境**每个**信号的失败次数——没有这一步,一台自己宕机的 VPS 会把幸存的日子报成 100%。读不懂的
   outage 记录计数并写进报告,不静默丢弃。
 - **日报与周报/月报(#1385 / #1392)**:`tools/stability_report.py --daily` 在 GitHub `ops-checks.yml` 的 `watchdog` job 每日运行;7d 周报与 30d 月报(每月 1 日 `--monthly`)在 `ops-checks.yml` 的 `digest` job 由 `tools/watchdog_weekly_digest.py`(内聚 `common/observability/digest.py::collect_weekly_stability_section`)统一执行,经 SSH 读两个环境的账本文件(同
-  `out_of_band_watchdog.py` 读备份 manifest 的方式),再取 Worker `/outages` → Lark。**production** 账本缺失、为空、超过 6 h 未更新或
+  `common/observability/out_of_band_watchdog.py` 读备份 manifest 的方式),再取 Worker `/outages` → Lark。**production** 账本缺失、为空、超过 6 h 未更新或
   `/outages` 读不到,一律让任务失败并由该 job 的失败告警发出——不出报告好过出一份虚高的报告;**staging** 单独一行,缺失或过期只在报告里
   写明,不阻塞 production 报告。
 - **Delivery section (#1645).** The weekly and monthly digest has a section "Delivery". For each env (`preview`, `staging`,
@@ -521,7 +521,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 - **预算(#904 验收)**:每次运行子请求 = 3 个入口 GET + 2 个 prod 心跳读 + 状态读 + **恰好一次** KV 写 + 死人开关 = 8;报警运行 +token+send = 10;Feishu send 失败转 email = 11。KV 写:转换时写状态文档(告警、入口连续失败、失联边沿、运行记录),否则只写 `watchdog:last-run`。runner 心跳 verdict 每 `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS`(1800)刷新,verdict(`ok` 或失败路由集合)变化提前写,每 key 每 UTC 日至多 24 次;liveness ping **不得改写** verdict;`ops-checks-scheduler` 间隔 43200 s、状态变化至多 2 次/天(上限 4/天);只存 `WATCHDOG_HEARTBEATS_JSON` 里的 key。最坏 `2×(48+24)+4+48=196/天`,健康日实测 145。事故先例:2026-09-15/16 liveness 与失败 verdict 交替、每次交替都写 → 1198 / 1157 put/天。证明:`common/tests/test_cloudflare_watchdog_kv_budget.py`(node 回放整日两个 runner + 48 次 cron)与 `common/tests/test_cloudflare_watchdog.py`(行为契约);CPU 本地测不了,部署后以 Cloudflare 分析验收 cron CPU p99 < 5 ms;每日 `tools/secrets_reconcile.py` 报告 `cloudflare.kv.write` 近 7 日 + 今日趋势。
 
 ### SOP-005B: GitHub 兜底带外 watchdog(日级)
-活在 GitHub Actions(在 infra2 宿主之外),**日级**;`tools/out_of_band_watchdog.py`。按 §1.1 **只 page 本层拥有的故障类**,其余只报告(#908):
+活在 GitHub Actions(在 infra2 宿主之外),**日级**;入口 `tools/out_of_band_watchdog.py`,逻辑在 `common/observability/out_of_band_watchdog.py`。按 §1.1 **只 page 本层拥有的故障类**,其余只报告(#908):
 - **Page(直发 Feishu 告警群;同一结论只在身份变化时呼,见下「跨运行去重」)**:`cloudflare-worker-status`(watchdog-liveness,**存活 = 在跑且能投递**:Worker 最近一次运行 ≤ 其 `WATCHDOG_STATUS_MAX_AGE_SECONDS`(值从 `cloudflare/infra-watchdog/wrangler.toml` 读,不另抄一份)且该次运行无 `deliveryError`;超龄、未来时钟偏差 >300s、从未运行、投递失败、`/status` 读不到 = 红)· `infra2-backup-production` 与 `infra2-restore-rehearsal`(data-protection)· `estate-scheduler-liveness`(peer-scheduler)· `infra2-scheduled-job-start`(scheduled-job-start)· **watchdog 自身失效**:任何 `configuration` 失败(缺 SSH 配置、缺或被拒(401/403)的 `DOKPLOY_API_KEY`、缺 status token、registry 读不到)与报告通道缺失/投递失败。
 - **哪些检查只报告由 [`watchdog-signals.yaml`](watchdog-signals.yaml) 决定**:`primary_owner: github` 且 `type: report` 的信号只报告(`dokploy-status:*` 各单元归入已注册的 `infra2-dokploy-status`);**其余一律 page**,包括只经 `vars.INFRA2_WATCHDOG_{HTTP,SSH}_TARGETS` 加入、registry 与审计都看不到的 target(未知 ≠ 只报告)。registry 读不到 → 全部 page(fail loud)。
 - **只报告(日报,infra2 reports 群,`common/alerting/delivery.py::deliver_infra2_report`,`INFRA2_REPORTS_FEISHU_{APP_ID,APP_SECRET,CHAT_ID}`)**:`infra2-public-entrypoint`、`infra2-ssh`、`infra2-docker`、`infra2-docker-health`(命令仍强制:任何 `unhealthy`/`starting`/`Restarting`/非零退出容器即红,不可移除)、`infra2-alert-bridge`、`infra2-backup-staging`(staging 永不 page)、Dokploy 状态族。它们照常运行、照常出结论,失败汇成**一条**日报;另附信息行:Worker 那次运行已自行投递的发现(`ok`/failures——Worker 已 page 过)与过期的 Dokploy 记录。**全绿的一天本 job 不发日报**:其它日报的送达已自证报告通道(§2)。
