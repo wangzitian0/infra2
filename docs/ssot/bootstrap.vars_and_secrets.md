@@ -101,7 +101,9 @@ Vault 历史里，`vault kv rollback` 可回退）。**不要**手工 `env.set` 
 ### 1.5 模板由 manifest 生成（infra2-sdk contract v2）
 
 每个服务的 `secrets.ctmpl` 与 `vault-policy.hcl` 不再手写，而是由 `tools/secrets_render.py`
-从环境 manifest 生成。
+从环境 manifest 生成。`x-infra2` 栈（`compose.yaml` 带 `x-infra2`，例如 `platform/30.todo`）
+在 git 里只保留 `vault-policy.hcl`：部署时渲染模板，并把模板和 `vault-agent.hcl` 编译进 sidecar
+（`common/deploy/compose_compile.py`）。
 
 Each service keeps its baseline manifest in `env.manifest.json` in its stack directory. Vendored App manifest copies under `contracts/` are forbidden (#1320); `harness/repos.yaml` declares each App's `release_tag`. `tools/fetch_app_manifests.py` guards against vendored App manifests reappearing under `contracts/`.
 

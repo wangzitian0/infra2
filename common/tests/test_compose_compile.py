@@ -16,6 +16,7 @@ from common.deploy.compose_compile import (
     has_x_infra2,
     load_stack,
     raw_ineligibility,
+    vault_template_for,
 )
 from common.deploy.compose_equivalence import (
     check,
@@ -26,28 +27,12 @@ from common.deploy.config_hash import config_hash_from_items
 
 ROOT = Path(__file__).resolve().parents[2]
 TODO = "platform/30.todo/compose.yaml"
-# The last hand-written form of TODO (infra2@5856103f), before #1822 Slice 2 moved it to
-# x-infra2. The Cleanup slice of #1822 deletes it.
-TODO_HAND_WRITTEN = ROOT / "common/tests/fixtures/todo_stack_hand_written.yaml"
 # The stacks on x-infra2. A migration adds its file here and proves its equivalence.
 X_INFRA2_FILES = {TODO}
 
 
-def todo_hand_written_text() -> str:
-    """The hand-written todo stack, with the Canary image of the live compose.
-
-    The pin bot moves the image in `platform/30.todo/compose.yaml` only (one pin source,
-    `common.deploy.canary_pin`). The fixture keeps its own copy of the rest.
-    """
-    from common.deploy.canary_pin import canary_image_from_compose_text
-
-    text = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
-    live = canary_image_from_compose_text((ROOT / TODO).read_text(encoding="utf-8"))[0]
-    return text.replace(canary_image_from_compose_text(text)[0], live)
-
-
 # The Canary image has no default hosts: /api/canary/status turns red when the compiled
-# todo service lacks one of these. The values are those of the hand-written file.
+# todo service lacks one of these.
 CANARY_HOSTS = {
     "REDIS_HOST": "platform-redis${ENV_SUFFIX}",
     "S3_ENDPOINT": "http://platform-s3${ENV_SUFFIX}:9000",
@@ -195,8 +180,13 @@ def test_unreadable_compiled_text_is_never_raw_eligible() -> None:
 
 
 def test_real_stacks_classify_as_measured() -> None:
-    """Real files: a vault mount and a build block raw; portal has neither (#1822)."""
-    assert raw_ineligibility(todo_hand_written_text()) == [
+    """A vault mount and a build block raw; portal has neither (#1822)."""
+    mounted = (
+        "services:\n  vault-agent:\n    image: hashicorp/vault:1.15\n    volumes:\n"
+        "      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro\n"
+        "      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro\n"
+    )
+    assert raw_ineligibility(mounted) == [
         "services.vault-agent mounts './vault-agent.hcl' from the checkout; raw has no checkout",
         "services.vault-agent mounts './secrets.ctmpl' from the checkout; raw has no checkout",
     ]
@@ -354,7 +344,7 @@ def test_the_dokploy_client_sends_raw_source_and_compose_file() -> None:
     assert sent[0]["sourceType"] == "raw" and sent[0]["composeFile"] == "services: {}\n"
 
 
-# --- equivalence with the real hand-written file -----------------------------------------
+# --- the real todo source -----------------------------------------------------------------
 
 
 def _todo_source() -> str:
@@ -362,17 +352,16 @@ def _todo_source() -> str:
     return (ROOT / TODO).read_text(encoding="utf-8")
 
 
-def _todo_base_files() -> dict[str, str]:
-    d = ROOT / "platform/30.todo"
-    return {
-        n: (d / n).read_text(encoding="utf-8")
-        for n in ("secrets.ctmpl", "vault-agent.hcl")
-    }
+def _todo_template() -> str:
+    """The Vault template that the deploy renders for the todo stack (no file in git)."""
+    template = vault_template_for(TODO, _todo_source())
+    assert template and template.startswith("{{- /* Generated from"), template
+    return template
 
 
 def _todo_compiled(source: str | None = None) -> str:
     source = _todo_source() if source is None else source
-    return compile_stack(source, vault_template=_todo_base_files()["secrets.ctmpl"])
+    return compile_stack(source, vault_template=_todo_template())
 
 
 def _todo_without(source: str, name: str) -> str:
@@ -388,43 +377,25 @@ def _todo_without(source: str, name: str) -> str:
     return source.replace(lines[0], "")
 
 
-def test_the_real_todo_file_is_equivalent_and_a_missing_env_suffix_is_found() -> None:
-    """The x-vault sidecar carries ENV_SUFFIX (infra2-sdk#268), which
-    30.todo/secrets.ctmpl reads (#1864). A base without it differs."""
-    source = _todo_source()
-    files = _todo_base_files()
-    compiled = _todo_compiled()
-    base = todo_hand_written_text()
-    assert equivalence_problems(source, compiled, base, files) == []
-    without = base.replace(
-        "      # secrets.ctmpl reads it to compose DATABASE_URL.\n      ENV_SUFFIX: ${ENV_SUFFIX:-}\n",
-        "",
-    )
-    assert without != base
-    assert equivalence_problems(source, compiled, without, files) == [
-        "services.vault-agent.environment.ENV_SUFFIX: only in the compiled file"
-    ]
-
-
-def test_the_compiled_todo_sets_each_canary_host_as_the_hand_written_file() -> None:
+def test_the_compiled_todo_sets_each_canary_host() -> None:
     """The Canary image at 4.3.0 has no default hosts (#1822 Slice 2)."""
-    want = {
-        name: value
-        for name, value in yaml.safe_load(todo_hand_written_text())["services"]["todo"][
-            "environment"
-        ].items()
-        if name in CANARY_HOSTS
-    }
-    assert want == CANARY_HOSTS
     env = yaml.safe_load(_todo_compiled())["services"]["todo"]["environment"]
     assert {name: env.get(name) for name in CANARY_HOSTS} == CANARY_HOSTS
 
 
+@pytest.mark.parametrize("name", sorted(CANARY_HOSTS))
+def test_a_todo_source_that_drops_a_canary_host_compiles_without_it(name: str) -> None:
+    source = _todo_without(_todo_source(), name)
+    env = yaml.safe_load(_todo_compiled(source))["services"]["todo"]["environment"]
+    assert name not in env
+    assert {n: env.get(n) for n in CANARY_HOSTS} != CANARY_HOSTS
+
+
 def test_the_compiled_sidecar_forwards_each_env_that_the_template_reads() -> None:
-    """secrets.ctmpl builds DATABASE_URL with `env "ENV_SUFFIX"` (#1864)."""
+    """The todo template builds DATABASE_URL with `env "ENV_SUFFIX"` (#1864)."""
     import re
 
-    template = _todo_base_files()["secrets.ctmpl"]
+    template = _todo_template()
     reads = set(re.findall(r'env "([A-Z_]+)"', template))
     assert reads == {"ENV", "ENV_SUFFIX"}
     sidecar = yaml.safe_load(_todo_compiled())["services"]["vault-agent"]
@@ -434,35 +405,101 @@ def test_the_compiled_sidecar_forwards_each_env_that_the_template_reads() -> Non
         "ENV": "${ENV}",
         "ENV_SUFFIX": "${ENV_SUFFIX:-}",
     }
+    assert env["VAULT_SECRETS_TEMPLATE"].replace("$$", "$") == template
 
 
-@pytest.mark.parametrize("name", sorted(CANARY_HOSTS))
-def test_equivalence_finds_a_canary_host_that_the_source_drops(name: str) -> None:
-    source = _todo_without(_todo_source(), name)
-    files = _todo_base_files()
-    base = todo_hand_written_text()
-    assert equivalence_problems(source, _todo_compiled(source), base, files) == [
-        f"services.todo.environment.{name}: only in the base file"
+# --- equivalence with a hand-written file (synthetic stack) ------------------------------
+
+_EQ_TEMPLATE = 'KEY={{ env "ENV_SUFFIX" }}\n'
+_EQ_SOURCE = """\
+x-infra2:
+  vault:
+    name: svc
+services:
+  app:
+    image: a:1
+    container_name: app${ENV_SUFFIX}
+    command: ["run", "--now"]
+    x-vault: {}
+    environment:
+      A: "1"
+      B: "2"
+    labels:
+      - traefik.http.routers.app.priority=100
+"""
+
+
+def _eq_case() -> tuple[str, str, dict[str, str | None]]:
+    """The compiled synthetic stack, its hand-written base, and the base files.
+
+    The base is the compiled text in the hand-written form: the sidecar mounts its
+    files (no inline env) and the app entrypoint ends in `exec <command>`.
+    """
+    compiled = compile_stack(_EQ_SOURCE, vault_template=_EQ_TEMPLATE)
+    doc = yaml.safe_load(compiled)
+    env = doc["services"]["vault-agent"]["environment"]
+    hcl = env.pop("VAULT_AGENT_HCL").replace("$$", "$")
+    assert env.pop("VAULT_SECRETS_TEMPLATE").replace("$$", "$") == _EQ_TEMPLATE
+    app = doc["services"]["app"]
+    app["entrypoint"] = ["sh", "-c", "set -e\n. /secrets/.env\nexec run --now\n"]
+    del app["command"]
+    base = yaml.safe_dump(doc, sort_keys=False, width=10**6)
+    files: dict[str, str | None] = {
+        "secrets.ctmpl": _EQ_TEMPLATE,
+        "vault-agent.hcl": hcl.replace(
+            "/vault/secrets.ctmpl", "/etc/vault/secrets.ctmpl"
+        ),
+    }
+    return compiled, base, files
+
+
+def test_an_equivalent_hand_written_file_has_no_problem() -> None:
+    compiled, base, files = _eq_case()
+    assert equivalence_problems(_EQ_SOURCE, compiled, base, files) == []
+
+
+def test_equivalence_finds_a_sidecar_env_that_the_base_lacks() -> None:
+    compiled, base, files = _eq_case()
+    without = base.replace("      ENV_SUFFIX: ${ENV_SUFFIX:-}\n", "", 1)
+    assert without != base
+    assert equivalence_problems(_EQ_SOURCE, compiled, without, files) == [
+        "services.vault-agent.environment.ENV_SUFFIX: only in the compiled file"
     ]
 
 
-def test_equivalence_reports_a_changed_label_template_or_command() -> None:
-    source = _todo_source()
-    files = _todo_base_files()
-    compiled = _todo_compiled()
-    base = todo_hand_written_text()
-    assert equivalence_problems(source, compiled, base, files) == []
+def test_equivalence_finds_an_env_that_the_source_drops() -> None:
+    compiled, base, files = _eq_case()
+    source = _EQ_SOURCE.replace('      A: "1"\n', "")
+    dropped = compile_stack(source, vault_template=_EQ_TEMPLATE)
+    assert equivalence_problems(source, dropped, base, files) == [
+        "services.app.environment.A: only in the base file"
+    ]
+
+
+def test_equivalence_reports_a_changed_label_template_config_or_command() -> None:
+    compiled, base, files = _eq_case()
     label = base.replace("priority=100", "priority=99")
+    assert label != base
     assert any(
-        "labels" in p for p in equivalence_problems(source, compiled, label, files)
+        "labels" in p for p in equivalence_problems(_EQ_SOURCE, compiled, label, files)
     )
-    other = dict(files, **{"secrets.ctmpl": files["secrets.ctmpl"] + "X=1\n"})
-    assert "template differs" in " ".join(
-        equivalence_problems(source, compiled, base, other)
-    )
-    cmd = base.replace("exec python /app/app.py", "exec python /app/other.py")
+    other = dict(files, **{"secrets.ctmpl": _EQ_TEMPLATE + "X=1\n"})
+    assert equivalence_problems(_EQ_SOURCE, compiled, base, other) == [
+        "vault-agent: the compiled template differs from the base secrets.ctmpl"
+    ]
+    hcl = dict(files, **{"vault-agent.hcl": str(files["vault-agent.hcl"]) + "x = 1\n"})
+    assert equivalence_problems(_EQ_SOURCE, compiled, base, hcl) == [
+        "vault-agent: the compiled config differs from the base vault-agent.hcl"
+    ]
+    missing: dict[str, str | None] = {"secrets.ctmpl": None, "vault-agent.hcl": None}
+    assert equivalence_problems(_EQ_SOURCE, compiled, base, missing) == [
+        "vault-agent: the base ref has no secrets.ctmpl to compare",
+        "vault-agent: the base ref has no vault-agent.hcl to compare",
+    ]
+    cmd = base.replace("exec run --now", "exec run --later")
+    assert cmd != base
     assert "does not end in" in " ".join(
-        equivalence_problems(source, compiled, cmd, files)
+        equivalence_problems(_EQ_SOURCE, compiled, cmd, files)
     )
 
 
@@ -470,20 +507,10 @@ def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, timeout=60)
 
 
-def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> None:
-    stack = tmp_path / "platform/30.todo"
-    stack.mkdir(parents=True)
-    for name in ("secrets.ctmpl", "vault-agent.hcl"):
-        (stack / name).write_bytes((ROOT / "platform/30.todo" / name).read_bytes())
-    (stack / "compose.yaml").write_text(todo_hand_written_text(), encoding="utf-8")
-    (tmp_path / "platform/21.portal").mkdir(parents=True)
-    (tmp_path / "platform/21.portal/compose.yaml").write_bytes(
-        (ROOT / "platform/21.portal/compose.yaml").read_bytes()
-    )
-    _git(tmp_path, "init", "-q")
-    _git(tmp_path, "add", ".")
+def _commit(root: Path) -> None:
+    _git(root, "add", ".")
     _git(
-        tmp_path,
+        root,
         "-c",
         "user.email=t@example.test",
         "-c",
@@ -492,6 +519,21 @@ def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> Non
         "-qm",
         "base",
     )
+
+
+def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> None:
+    synth = "platform/99.synth/compose.yaml"
+    source = _x_stack(environment={"A": "1", "B": "2"})
+    stack = tmp_path / synth
+    stack.parent.mkdir(parents=True)
+    # The hand-written base is the compiled text, committed as a plain file.
+    stack.write_text(compile_stack(source), encoding="utf-8")
+    (tmp_path / "platform/21.portal").mkdir(parents=True)
+    (tmp_path / "platform/21.portal/compose.yaml").write_bytes(
+        (ROOT / "platform/21.portal/compose.yaml").read_bytes()
+    )
+    _git(tmp_path, "init", "-q")
+    _commit(tmp_path)
     base = check("HEAD", root=tmp_path)
     assert (base.files, base.plain_identical, base.x_infra2, base.problems) == (
         2,
@@ -499,7 +541,7 @@ def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> Non
         0,
         [],
     )
-    (stack / "compose.yaml").write_text(_todo_source(), encoding="utf-8")
+    stack.write_text(source, encoding="utf-8")
     report = check("HEAD", root=tmp_path)
     assert (report.files, report.plain_identical, report.x_infra2, report.compared) == (
         2,
@@ -508,13 +550,15 @@ def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> Non
         1,
     )
     assert report.problems == []
-    # A source that drops a Canary host fails the check (#1822 Slice 2).
-    (stack / "compose.yaml").write_text(
-        _todo_without(_todo_source(), "AUTHENTIK_ENDPOINT"), encoding="utf-8"
-    )
+    # A source that drops an env value fails the check.
+    stack.write_text(_x_stack(environment={"A": "1"}), encoding="utf-8")
     assert check("HEAD", root=tmp_path).problems == [
-        f"{TODO}: services.todo.environment.AUTHENTIK_ENDPOINT: only in the base file"
+        f"{synth}: services.app.environment.B: only in the base file"
     ]
+    # A file that is x-infra2 at the base too has no hand-written base to compare.
+    _commit(tmp_path)
+    again = check("HEAD", root=tmp_path)
+    assert (again.x_infra2, again.compared, again.problems) == (1, 0, [])
 
 
 def test_check_on_this_tree_proves_every_plain_file_and_fails_on_an_empty_scan(

@@ -125,8 +125,9 @@ services:
     # its S3 key through a vault-agent, like every other platform service (AppRole auth).
     auth_method: approle
     compose_path: platform/30.todo/compose.yaml
-    vault_agent_config_path: platform/30.todo/vault-agent.hcl
-    secret_template_path: platform/30.todo/secrets.ctmpl
+    # x-infra2 since infra2#1822: the compiled compose holds the agent config and template.
+    vault_agent_config_path: platform/30.todo/compose.yaml
+    secret_template_path: platform/30.todo/compose.yaml
     vault_path_template: secret/data/platform/{env}/todo
     vault_agent_container: platform-todo-vault-agent${ENV_SUFFIX}
     app_containers:

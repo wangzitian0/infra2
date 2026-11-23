@@ -1939,6 +1939,8 @@ def scan_stack_compose(
     compiled file names the source file and a source line (``_compose_source_line``); the
     compiled line is in ``extra["compiled_line"]``. ``root`` holds the manifests that the
     Vault template reads. A compile failure is a parse error and the source text is scanned.
+    The Vault template of the stack has no file in git: it is scanned as a ``ctmpl`` of
+    ``path``, with its template line in ``extra["template_line"]`` (infra2#1822).
     """
     from common.deploy.compose_compile import (
         X_INFRA2,
@@ -1951,9 +1953,8 @@ def scan_stack_compose(
         scan_compose(inv, repo, path, text)
         return
     try:
-        compiled = compile_stack(
-            text, vault_template=vault_template_for(path, text, manifest_root=root)
-        )
+        template = vault_template_for(path, text, manifest_root=root)
+        compiled = compile_stack(text, vault_template=template)
     except Exception as exc:  # noqa: BLE001 - any compile failure is a reported parse error
         inv.errors.append(f"compose compile: {repo}:{path}: {exc}")
         scan_compose(inv, repo, path, text)
@@ -1986,6 +1987,13 @@ def scan_stack_compose(
             (tok, _compose_source_line(source_lines, tok, "read", origin), *rest)
             for tok, _ln, *rest in toks[start:]
         ]
+    if template is None:
+        return
+    template_start = len(inv.occ)
+    scan_ctmpl(inv, repo, path, template)
+    for o in inv.occ[template_start:]:
+        o.extra = {**o.extra, "template_line": o.line}
+        o.line = origin
 
 
 # ---------------------------------------------------------------------------------------------
@@ -3414,7 +3422,8 @@ def contract(inv, keys, services, comp_of=None, comps=None):
             for o in inv.occ
             if o.layer == "vault-template"
             and o.repo == "infra2"
-            and o.path == f"{d}/secrets.ctmpl"
+            # An x-infra2 stack renders its template from the manifest (infra2#1822).
+            and o.path in (f"{d}/secrets.ctmpl", f"{d}/compose.yaml")
         }
         comp = {}
         for o in inv.occ:

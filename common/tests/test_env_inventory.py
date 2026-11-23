@@ -1301,6 +1301,27 @@ def test_g1_reads_the_compiled_x_infra2_stack(repo_scan):
     assert [source[o.line - 1].strip() for o in port] == ['PORT: "8000"']
 
 
+def test_g1_reads_the_rendered_vault_template_of_an_x_infra2_stack(repo_scan):
+    """infra2#1822 Cleanup: git holds no todo secrets.ctmpl. G1 scans the template that
+    the deploy renders from the manifest, under the compose path."""
+    inv_, _keys, rows, _docs_only = repo_scan
+    assert not (envinv.REPO_ROOT / "platform/30.todo/secrets.ctmpl").exists()
+    rendered = {
+        o.key
+        for o in inv_.occ
+        if o.repo == "infra2" and o.path == TODO_COMPOSE and o.layer == "vault-template"
+    }
+    assert {"DATABASE_URL", "REDIS_PASSWORD", "S3_ACCESS_KEY"} <= rendered, rendered
+    source = (envinv.REPO_ROOT / TODO_COMPOSE).read_text(encoding="utf-8").split("\n")
+    origin = source.index("x-infra2:") + 1
+    template = [
+        o for o in inv_.occ if o.path == TODO_COMPOSE and "template_line" in o.extra
+    ]
+    assert template and all(o.line == origin for o in template)
+    todo = next(r for r in rows if r["directory"] == "platform/30.todo")
+    assert todo["ctmpl_keys"] == len(rendered) and todo["store_key_not_rendered"] == []
+
+
 X_INFRA2_FIXTURE = """\
 # comment
 x-infra2: {}

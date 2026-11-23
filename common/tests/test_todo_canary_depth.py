@@ -56,6 +56,17 @@ def _load(name: str, path: Path):
     return load_repo_module(path, name)
 
 
+def _todo_template() -> str:
+    """The Vault template that the deploy compiles into the todo sidecar (#1822)."""
+    from common.deploy.compose_compile import vault_template_for
+
+    template = vault_template_for(
+        "platform/30.todo/compose.yaml", COMPOSE.read_text(encoding="utf-8")
+    )
+    assert template, "the todo stack sets x-infra2.vault"
+    return template
+
+
 @pytest.fixture(autouse=True)
 def _no_ambient_telemetry_env(monkeypatch):
     """The app starts telemetry while it loads. The shell of a developer must not decide
@@ -157,7 +168,7 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
     assert not url.provided_by, "a generated value, not the Postgres superuser password"
     assert url.store_backed and url.key == "TODO_POSTGRES_PASSWORD"
     assert url.composed_keys == ("TODO_POSTGRES_PASSWORD",)
-    template = (SERVICE_DIR / "secrets.ctmpl").read_text(encoding="utf-8")
+    template = _todo_template()
     assert "TODO_POSTGRES_PASSWORD=" not in template
     assert ".Data.data.TODO_POSTGRES_PASSWORD" in template
 
@@ -252,7 +263,7 @@ def test_the_canary_ro_login_is_gone_and_the_prune_removes_its_vault_key(
         assert not hasattr(deployer, name), name
     env = compose_services(COMPOSE)["todo"]["environment"]
     assert [name for name in env if "POSTGRES" in name] == []
-    template = (SERVICE_DIR / "secrets.ctmpl").read_text()
+    template = _todo_template()
     assert "CANARY_POSTGRES_PASSWORD" not in template
     # The supply prune deletes a Vault key that the registry does not list. No entry
     # keeps the key of the removed login (#1823).
@@ -623,8 +634,8 @@ def test_the_compiled_template_label_replaces_the_mount_fingerprints(deploy) -> 
     assert not hasattr(deploy.TodoDeployer, "rendered_mount_fingerprints")
     agent = compose_services(COMPOSE)["vault-agent"]
     assert not [label for label in agent["labels"] if "infra2.mount." in label]
-    # The kept secrets.ctmpl (rollback) is the text that the compiled sidecar ships.
-    want = hashlib.sha256((SERVICE_DIR / "secrets.ctmpl").read_bytes()).hexdigest()
+    # The label is the SHA-256 of the template that the manifest renders.
+    want = hashlib.sha256(_todo_template().encode()).hexdigest()
     assert f"infra2.vault.template.sha256={want}" in agent["labels"]
 
 

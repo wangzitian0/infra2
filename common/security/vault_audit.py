@@ -138,14 +138,21 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
             "declares none and the facet does not override it)"
         )
     compose_dir = compose_path.rsplit("/", 1)[0]
+    # An x-infra2 stack ships its agent config and template inside the compiled compose
+    # (infra2#1822), so the compose file is the release source of both.
+    agent_config, template = (
+        (compose_path, compose_path)
+        if _compose_path_is_x_infra2(compose_path)
+        else (f"{compose_dir}/vault-agent.hcl", f"{compose_dir}/secrets.ctmpl")
+    )
     return VaultService(
         id=facet.service_id or meta.service_id,
         project=meta.project,
         dokploy_service=meta.service,
         legacy_dokploy_services=getattr(meta, "legacy_compose_names", ()),
         compose_path=compose_path,
-        vault_agent_config_path=f"{compose_dir}/vault-agent.hcl",
-        secret_template_path=f"{compose_dir}/secrets.ctmpl",
+        vault_agent_config_path=agent_config,
+        secret_template_path=template,
         vault_path_template=facet.vault_path_template
         or vault_path_template(meta.project, meta.service),
         vault_agent_container=facet.vault_agent_container,
@@ -731,12 +738,17 @@ def _vault_addr_from_env(env_vars: dict[str, str | None]) -> str | None:
     return None
 
 
-def _compose_is_x_infra2(service: VaultService) -> bool:
-    """True when the stack compose file of ``service`` is an ``x-infra2`` source."""
+def _compose_path_is_x_infra2(compose_path: str) -> bool:
+    """True when the repository file ``compose_path`` is an ``x-infra2`` source."""
     from common.deploy.compose_compile import has_x_infra2
 
-    compose = REPO_ROOT / service.compose_path
+    compose = REPO_ROOT / compose_path
     return compose.is_file() and has_x_infra2(compose.read_text(encoding="utf-8"))
+
+
+def _compose_is_x_infra2(service: VaultService) -> bool:
+    """True when the stack compose file of ``service`` is an ``x-infra2`` source."""
+    return _compose_path_is_x_infra2(service.compose_path)
 
 
 def _release_template_sha256(service: VaultService) -> str:
