@@ -273,15 +273,38 @@ def _lock_for(version: str) -> bytes:
     return (
         '[[package]]\nname = "infra2-sdk"\n'
         f'version = "{version}"\nsource = {{ url = "{url}" }}\n'
+        "dependencies = []\nwheels = [\n"
+        f'    {{ url = "{url}", hash = "sha256:{"a" * 64}" }},\n]\n'
     ).encode()
 
 
 def test_sdk_at_ref_reads_the_infra2_sdk_pin_of_uv_lock() -> None:
     import common.deploy.config_drift as drift
 
-    version, url = drift.sdk_at_ref("HEAD")
+    version, url, sha256 = drift.sdk_at_ref("HEAD")
     assert version == drift.installed_sdk_version()
     assert url.endswith(f"/v{version}/infra2_sdk-{version}-py3-none-any.whl")
+    lock = (ROOT / "uv.lock").read_text(encoding="utf-8")
+    assert f'{{ url = "{url}", hash = "sha256:{sha256}" }}' in lock
+
+
+def test_sdk_at_ref_reads_the_wheel_hash_of_a_lock_block(monkeypatch) -> None:
+    import common.deploy.config_drift as drift
+
+    monkeypatch.setattr(
+        drift, "contents_at_ref", lambda ref, paths: {"uv.lock": _lock_for(OTHER_SDK)}
+    )
+    assert drift.sdk_at_ref("v") == (
+        OTHER_SDK,
+        f"https://example.test/download/{_WHEEL_STEM}{OTHER_SDK}-py3-none-any.whl",
+        "a" * 64,
+    )
+    # A lock block without the wheel hash is not usable: None, so the guard fails closed.
+    no_hash = _lock_for(OTHER_SDK).split(b"wheels")[0]
+    monkeypatch.setattr(
+        drift, "contents_at_ref", lambda ref, paths: {"uv.lock": no_hash}
+    )
+    assert drift.sdk_at_ref("v") is None
 
 
 def test_config_drift_does_not_compile_an_x_infra2_ref_with_another_sdk(
@@ -326,17 +349,49 @@ def test_the_release_run_imports_the_sdk_that_the_release_pins(
     monkeypatch.setenv("PYTHONPATH", "/inherited")
     monkeypatch.setattr(drift, "_on_main", lambda commit, root: True)
     monkeypatch.setattr(drift, "run_at_ref", run_at_ref)
-    monkeypatch.setattr(drift, "sdk_at_ref", lambda ref: (OTHER_SDK, "u"))
-    monkeypatch.setattr(drift, "_sdk_dir_for", lambda version, url: tmp_path / version)
+    monkeypatch.setattr(drift, "sdk_at_ref", lambda ref: (OTHER_SDK, "u", "h"))
+    monkeypatch.setattr(
+        drift, "_sdk_dir_for", lambda version, url, sha256: tmp_path / version
+    )
     drift.hashes_with_ref_code("abc", ["platform/todo"])
     # The release SDK goes first; an inherited path stays after it.
     assert seen["env"]["PYTHONPATH"] == f"{tmp_path / OTHER_SDK}{os.pathsep}/inherited"
     # The same SDK as this process: nothing to put first.
     monkeypatch.setattr(
-        drift, "sdk_at_ref", lambda ref: (drift.installed_sdk_version(), "u")
+        drift, "sdk_at_ref", lambda ref: (drift.installed_sdk_version(), "u", "h")
     )
     drift.hashes_with_ref_code("abc", ["platform/todo"])
     assert seen["env"]["PYTHONPATH"] == "/inherited"
+
+
+def test_the_release_run_goes_on_when_the_release_sdk_is_unavailable(
+    monkeypatch, capsys
+) -> None:
+    """A plain stack does not need the SDK: a failed download must not stop its run."""
+    import common.deploy.config_drift as drift
+
+    seen: dict = {}
+
+    def run_at_ref(ref, args, *, root, timeout, env):
+        seen["env"] = env
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout='REF_HASHES {"version": "v1", "services": {"platform/redis": {"hash": "h1", "missing": []}}}',
+            stderr="",
+        )
+
+    def unavailable(version, url, sha256):
+        raise OSError("network is unreachable")
+
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.setattr(drift, "_on_main", lambda commit, root: True)
+    monkeypatch.setattr(drift, "run_at_ref", run_at_ref)
+    monkeypatch.setattr(drift, "sdk_at_ref", lambda ref: (OTHER_SDK, "u", "h"))
+    monkeypatch.setattr(drift, "_sdk_dir_for", unavailable)
+    result = drift.hashes_with_ref_code("abc", ["platform/redis"])
+    assert result["services"]["platform/redis"]["hash"] == "h1"
+    assert "PYTHONPATH" not in seen["env"]
+    assert "network is unreachable" in capsys.readouterr().err
 
 
 def test_sdk_dir_for_unpacks_a_pure_python_wheel_once(monkeypatch) -> None:
@@ -355,11 +410,18 @@ def test_sdk_dir_for_unpacks_a_pure_python_wheel_once(monkeypatch) -> None:
         drift, "_fetch", lambda url: fetched.append(url) or buf.getvalue()
     )
     url = f"https://x/{_WHEEL_STEM}{OTHER_SDK}-py3-none-any.whl"
-    target = drift._sdk_dir_for(OTHER_SDK, url)
+    good = hashlib.sha256(buf.getvalue()).hexdigest()
+    with pytest.raises(RuntimeError, match="uv.lock records"):
+        drift._sdk_dir_for(OTHER_SDK, url, "0" * 64)
+    assert drift._SDK_DIRS == {}
+    target = drift._sdk_dir_for(OTHER_SDK, url, good)
     assert (target / "infra2_sdk/__init__.py").read_text() == "MARK = 1\n"
-    assert drift._sdk_dir_for(OTHER_SDK, url) == target and fetched == [url]
+    assert drift._sdk_dir_for(OTHER_SDK, url, good) == target
+    assert fetched == [url, url]
     with pytest.raises(RuntimeError, match="not a pure-Python wheel"):
-        drift._sdk_dir_for("other", f"https://x/{_WHEEL_STEM}other-cp312-macosx.whl")
+        drift._sdk_dir_for(
+            "other", f"https://x/{_WHEEL_STEM}other-cp312-macosx.whl", good
+        )
 
 
 def test_config_drift_stops_when_the_manifest_is_absent_at_the_ref(monkeypatch) -> None:

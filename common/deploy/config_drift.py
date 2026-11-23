@@ -113,18 +113,21 @@ def contents_at_ref(ref: str, paths: list[str]) -> dict[str, bytes]:
 _SDK_LOCK_RE = re.compile(
     r'\[\[package\]\]\nname = "infra2-sdk"\nversion = "(?P<version>[^"]+)"\n'
     r'source = \{ url = "(?P<url>[^"]+)" \}'
+    r'(?:\n(?!\[\[package\]\]).*)*?\n\s*\{ url = "(?P=url)", hash = "sha256:(?P<sha256>[0-9a-f]{64})"'
 )
 # How long the download of one release's SDK wheel may take.
 SDK_DOWNLOAD_TIMEOUT_S = 60
 
 
-def sdk_at_ref(ref: str) -> tuple[str, str] | None:
-    """``(version, wheel_url)`` of infra2-sdk in ``uv.lock`` at ``ref``; None if absent."""
+def sdk_at_ref(ref: str) -> tuple[str, str, str] | None:
+    """``(version, wheel_url, sha256)`` of infra2-sdk in ``uv.lock`` at ``ref``.
+
+    None when ``uv.lock`` is absent at ``ref`` or does not hold all three."""
     lock = contents_at_ref(ref, ["uv.lock"]).get("uv.lock")
     if lock is None:
         return None
     match = _SDK_LOCK_RE.search(lock.decode("utf-8", "replace"))
-    return (match["version"], match["url"]) if match else None
+    return (match["version"], match["url"], match["sha256"]) if match else None
 
 
 def installed_sdk_version() -> str:
@@ -144,8 +147,10 @@ def _fetch(url: str) -> bytes:
         return response.read()
 
 
-def _sdk_dir_for(version: str, url: str) -> Path:
+def _sdk_dir_for(version: str, url: str, sha256: str) -> Path:
     """A directory that holds the infra2-sdk wheel ``url``; one download per version.
+
+    The download must have the ``sha256`` that ``uv.lock`` records.
 
     The wheel is pure Python (``py3-none-any``), so its unpacked files are an install
     that ``import`` and ``importlib.metadata`` read. Its dependencies come from this
@@ -159,8 +164,16 @@ def _sdk_dir_for(version: str, url: str) -> Path:
             raise RuntimeError(
                 f"infra2-sdk {version}: {url} is not a pure-Python wheel"
             )
+        import hashlib
+
+        data = _fetch(url)
+        got = hashlib.sha256(data).hexdigest()
+        if got != sha256:
+            raise RuntimeError(
+                f"infra2-sdk {version}: {url} has sha256 {got}, uv.lock records {sha256}"
+            )
         target = Path(tempfile.mkdtemp(prefix=f"infra2-sdk-{version}-"))
-        with zipfile.ZipFile(io.BytesIO(_fetch(url))) as wheel:
+        with zipfile.ZipFile(io.BytesIO(data)) as wheel:
             wheel.extractall(target)
         _SDK_DIRS[version] = target
     return _SDK_DIRS[version]
@@ -323,10 +336,21 @@ def hashes_with_ref_code(
     # stack is in the SDK, so another SDK can give other compiled bytes.
     pinned = sdk_at_ref(ref)
     if pinned is not None and pinned[0] != installed_sdk_version():
-        first = str(_sdk_dir_for(*pinned))
-        env["PYTHONPATH"] = os.pathsep.join(
-            part for part in (first, env.get("PYTHONPATH", "")) if part
-        )
+        try:
+            first = str(_sdk_dir_for(*pinned))
+        except Exception as exc:  # noqa: BLE001 - a plain stack does not need the SDK
+            # The release run goes on with this process's SDK. A plain compose hashes
+            # its own bytes; the code of a release with the compile guard reports an
+            # x-infra2 stack as an error, not as DRIFT.
+            print(
+                f"config drift: {ref}: infra2-sdk {pinned[0]} is unavailable ({exc}); "
+                "the release run uses this process's SDK",
+                file=sys.stderr,
+            )
+        else:
+            env["PYTHONPATH"] = os.pathsep.join(
+                part for part in (first, env.get("PYTHONPATH", "")) if part
+            )
     proc = run_at_ref(
         ref,
         [sys.executable, "-c", _REF_HASH_SCRIPT, json.dumps(service_ids)],
