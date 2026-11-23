@@ -63,16 +63,20 @@ BLOCKING_CLOSING_ISSUE_LABELS = frozenset({"needs-prod-proof", "prod-pending"})
 Runner = Callable[[Sequence[str]], str]
 
 
+# The module whose attributes tests monkeypatch; `tools/pr_merge_gate.py` is its CLI.
+GATE_MODULE = "common.gate.pr_merge_gate"
+
+
 def _gate_path(attr: str, default: Path) -> Path:
-    """Resolve a path attribute on tools.pr_merge_gate when monkeypatched in tests."""
-    gate_mod = sys.modules.get("tools.pr_merge_gate")
+    """Resolve a path attribute on the gate module when monkeypatched in tests."""
+    gate_mod = sys.modules.get(GATE_MODULE)
     if gate_mod and hasattr(gate_mod, attr):
         return Path(getattr(gate_mod, attr))
     return default
 
 
 def _get_root() -> Path:
-    """Dynamic resolver for repository root, honoring test monkeypatches on tools.pr_merge_gate."""
+    """Dynamic resolver for repository root, honoring test monkeypatches on the gate module."""
     return _gate_path("ROOT", ROOT)
 
 
@@ -83,7 +87,7 @@ def _get_workflow_dir() -> Path:
 
 def _get_yaml():
     """Dynamic resolver for yaml parser, honoring test monkeypatches."""
-    gate_mod = sys.modules.get("tools.pr_merge_gate")
+    gate_mod = sys.modules.get(GATE_MODULE)
     if gate_mod and hasattr(gate_mod, "yaml"):
         return gate_mod.yaml
     import yaml
@@ -93,7 +97,7 @@ def _get_yaml():
 
 def _get_subprocess():
     """Dynamic resolver for subprocess module, honoring test monkeypatches."""
-    gate_mod = sys.modules.get("tools.pr_merge_gate")
+    gate_mod = sys.modules.get(GATE_MODULE)
     if gate_mod and hasattr(gate_mod, "subprocess"):
         return gate_mod.subprocess
     return subprocess

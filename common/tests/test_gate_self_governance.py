@@ -23,7 +23,7 @@ import pytest
 
 from common.gate.self_governance import PACKAGE_FILES
 from common.gate.types import DEFAULT_REPO
-from tools import pr_merge_gate as gate
+from common.gate import pr_merge_gate as gate
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -61,10 +61,26 @@ def test_an_import_reaches_the_protected_set(tmp_path) -> None:
     """The property that makes the closure a ratchet: importing something new
     protects it, with nobody having to remember."""
     module = "common/console.py"
-    assert module in gate._repo_deps("tools/pr_merge_gate.py"), (
+    assert module in gate._repo_deps("common/gate/pr_merge_gate.py"), (
         "the dependency walk stopped finding a module this file imports; the "
         "closure is no longer following imports"
     )
+    # The CLI entry point holds no logic; the walk must reach the module that does.
+    assert "common/gate/pr_merge_gate.py" in gate._repo_deps("tools/pr_merge_gate.py")
+
+
+def test_the_entry_point_and_its_logic_module_are_both_protected() -> None:
+    """#1823 Step 4.3 moved the gate logic out of `tools/pr_merge_gate.py`. The
+    closure starts at the entry point, so both files and the one test of the
+    logic must stay in it."""
+    found = gate.self_governing_files()
+    for path in (
+        "tools/pr_merge_gate.py",
+        "common/gate/pr_merge_gate.py",
+        "common/tests/test_pr_merge_gate.py",
+    ):
+        assert path in found, path
+        assert gate.is_self_governing(path), path
 
 
 def test_rule_texts_are_listed_because_no_code_reads_them() -> None:
@@ -74,14 +90,15 @@ def test_rule_texts_are_listed_because_no_code_reads_them() -> None:
     walk deliberately does not follow prose — following it would sweep in
     every path ever mentioned in a docstring.
     """
-    source = (ROOT / "tools/pr_merge_gate.py").read_text(encoding="utf-8")
-    for rel in gate.RULE_TEXT_FILES:
-        assert rel in gate.self_governing_files()
-        assert (
-            f'"{rel}"'
-            not in source.replace(f'RULE_TEXT_FILES = ("AGENTS.md", "{rel}")', "")
-            or rel == "AGENTS.md"
-        ), f"{rel} is now read by code; compute it instead"
+    for code in ("tools/pr_merge_gate.py", "common/gate/pr_merge_gate.py"):
+        source = (ROOT / code).read_text(encoding="utf-8")
+        for rel in gate.RULE_TEXT_FILES:
+            assert rel in gate.self_governing_files()
+            assert (
+                f'"{rel}"'
+                not in source.replace(f'RULE_TEXT_FILES = ("AGENTS.md", "{rel}")', "")
+                or rel == "AGENTS.md"
+            ), f"{rel} is now read by {code}; compute it instead"
 
 
 def test_the_set_is_never_empty() -> None:

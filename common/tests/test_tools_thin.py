@@ -46,7 +46,6 @@ DEBT: dict[str, Size] = {
     "infra_probe_runner.py": (1, 774),
     "service_onboard.py": (0, 510),
     "scaffold.py": (0, 453),
-    "pr_merge_gate.py": (0, 437),
     "host_hygiene_schedule.py": (0, 406),
     "run_restore_rehearsal.py": (0, 377),
     "observability_roundtrip_probe.py": (2, 323),
