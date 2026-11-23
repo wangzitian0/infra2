@@ -29,7 +29,7 @@ HTTP_PROBE_HEADERS = {
 }
 PROBE_CLIENT_BLOCKED_MARKERS = ("error code: 1010",)
 # A `command` probe exits EX_CONFIG when it could not run because its OWN configuration
-# is missing (tools/observability_roundtrip_probe.py): the result says nothing about the
+# is missing (common/observability/observability_roundtrip_probe.py): the result says nothing about the
 # target, and the probe runner keeps it out of the failing stream (#726).
 MISCONFIGURED_EXIT_CODE = os.EX_CONFIG
 

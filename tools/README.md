@@ -32,7 +32,8 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
 ## The single resident entry point (#543)
 
 `infra_probe_runner.py` is the ONE long-running process this repo ships
-(container `platform-alerting-probes`). Everything resident runs inside its
+(container `platform-alerting-probes`). Its logic is in
+`common/observability/infra_probe_runner.py`; the file here is the entry point. Everything resident runs inside its
 loop: the minute-tier service probes (`INFRA_PROBE_SPECS`), the public-route
 probes (`PUBLIC_ROUTE_PROBE_SPECS`), and the `ResidentWatcher` plugins
 (`common/observability/watchers/resident.py` — container-breakdown watch and the deploy-queue

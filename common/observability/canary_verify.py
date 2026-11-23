@@ -296,7 +296,7 @@ def _resolve_locked_sdk_version(
     It reads the release that the environment serves: the Canary image pin of
     ``platform/30.todo/compose.yaml``. Every release since #247 pins the image there.
     """
-    root = repo_root or Path(__file__).resolve().parents[1]
+    root = repo_root or Path(__file__).resolve().parents[2]
     try:
         from common.deploy.release_markers import (
             PRODUCTION_MARKER_PREFIX,

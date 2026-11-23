@@ -188,8 +188,6 @@ def _governed_files() -> list[Path]:
     ]
     return [
         *library,
-        ROOT / "tools/infra_probe_runner.py",
-        ROOT / "tools/observability_roundtrip_probe.py",
     ]
 
 
