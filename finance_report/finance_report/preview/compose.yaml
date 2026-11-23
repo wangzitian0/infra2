@@ -68,7 +68,6 @@ services:
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
-      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
     healthcheck:
       test:
         - CMD-SHELL
@@ -146,7 +145,6 @@ services:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
-      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
       # This alias's ENV token (main / pr-<N> / commit-<sha7>); the entrypoint uses
       # it to override ENVIRONMENT AFTER sourcing Vault secrets (see CHECKPOINT-1c) —
       # mirrors the existing DATABASE_URL override for the same reason.

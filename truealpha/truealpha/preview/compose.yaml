@@ -251,6 +251,8 @@ services:
       # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
       # same instance the staging stack uses.
       ENVIRONMENT: preview
+      # The app-web origin resolver reads it (truealpha v0.2.132); no fixed host.
+      LLM_SERVICE_URL: http://truealpha-llm${ENV_SUFFIX}:8000
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3-staging:9000
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}

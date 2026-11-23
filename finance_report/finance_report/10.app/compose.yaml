@@ -25,7 +25,6 @@
 # the default happened to be the right name there.
 x-app-runtime-env: &app_runtime_env
   ENVIRONMENT: ${ENV}
-  INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV}}
   LLM_PROVIDER: ${LLM_PROVIDER:-zai}
   S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
   S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}
@@ -88,7 +87,6 @@ services:
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
-      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV}}
       # secrets.ctmpl is generated from the app manifest; DATABASE_URL / REDIS_URL are
       # composed with the service suffix read from this variable.
       ENV_SUFFIX: ${ENV_SUFFIX:-}
