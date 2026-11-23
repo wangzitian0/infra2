@@ -44,7 +44,6 @@ def test_the_template_no_longer_carries_the_value_so_compose_is_the_only_source(
 #: statements: same object store, same models, same environment identity.
 SHARED_RUNTIME_KEYS = (
     "ENVIRONMENT",
-    "INFRA_ENVIRONMENT",
     "S3_ENDPOINT",
     "S3_PUBLIC_ENDPOINT",
     "S3_BUCKET",
