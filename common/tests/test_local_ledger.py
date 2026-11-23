@@ -277,7 +277,8 @@ def test_to_report_days_is_the_report_shape_in_date_order() -> None:
 
 def _load_runner():
     spec = importlib.util.spec_from_file_location(
-        "infra_probe_runner_ledger_under_test", ROOT / "tools/infra_probe_runner.py"
+        "infra_probe_runner_ledger_under_test",
+        ROOT / "common/observability/infra_probe_runner.py",
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 from common.tests.fakes import FakeSecrets
-from tools import dokploy_env, env_tool, local_init
+from common.core import local_init
+from tools import dokploy_env, env_tool
 
 ROOT = Path(__file__).resolve().parents[2]
 

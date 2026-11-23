@@ -3,7 +3,7 @@
 The Worker stands down its entrypoint page only for a route the VPS says it paged
 (#903 `failing_public_routes`: failing now AND covered by a delivered, still-open
 page) and only if that delivery is recent enough (#904). Each case below runs
-tools/infra_probe_runner.py's own `run_once` with a scripted probe and bridge,
+common/observability/infra_probe_runner.py's own `run_once` with a scripted probe and bridge,
 captures the heartbeat it POSTs, and replays that exact body into
 cloudflare/infra-watchdog/worker.js (fixtures/watchdog_contract_harness.mjs),
 which then sees the same route unreachable from Cloudflare for two runs.
@@ -49,7 +49,7 @@ def _runner_beat(
 ) -> dict:
     spec = importlib.util.spec_from_file_location(
         f"infra_probe_runner_contract_{threshold}_{bridge_fails}_{maintenance}",
-        ROOT / "tools/infra_probe_runner.py",
+        ROOT / "common/observability/infra_probe_runner.py",
     )
     runner = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

@@ -145,7 +145,7 @@ def test_plan_units_carry_sdk_unknown_when_the_pin_is_unreadable(
 
 
 def test_canary_verify_production_fallback_never_reads_the_new_pin(tmp_path) -> None:
-    from tools import canary_verify
+    from common.observability import canary_verify
 
     compose = tmp_path / "platform/30.todo/compose.yaml"
     compose.parent.mkdir(parents=True)

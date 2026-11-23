@@ -5,7 +5,7 @@ SSOT for ``common.observability``'s container breakdown triage.
 The layered monitoring already in place catches the *symptom* but not the *cause*:
 
   * cloudflare/infra-watchdog (black-box HTTP) — "public route down"
-  * tools/infra_probe_runner.py — "service probe failed"
+  * common/observability/infra_probe_runner.py — "service probe failed"
   * common/observability/watchers/deploy_queue_guard.py — "deploy stuck in the queue"
 
 None of them says *"container X is restart-looping because <reason>"*. So when an

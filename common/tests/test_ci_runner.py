@@ -1,4 +1,4 @@
-"""Tests for tools.ci_runner unified CI gate runner (#1000)."""
+"""Tests for common.gate.ci_runner unified CI gate runner (#1000)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tools.ci_runner import (
+from common.gate.ci_runner import (
     DUMMY_COMPOSE_ENV,
     GATES,
     _resolve_changed_test_targets,
@@ -54,7 +54,7 @@ def test_ci_runner_dummy_compose_env_complete() -> None:
 
 def test_ci_runner_uses_the_one_compose_env_and_command() -> None:
     """infra2#1884: ci_runner and the CI job share one env and one command builder."""
-    import tools.ci_runner as runner
+    import common.gate.ci_runner as runner
     from common.deploy import compose_validate
 
     assert runner.DUMMY_COMPOSE_ENV is compose_validate.CI_COMPOSE_ENV
@@ -102,7 +102,7 @@ def test_ci_runner_compose_gate_validates_compiled_x_infra2_text(monkeypatch) ->
     """
     import subprocess
 
-    import tools.ci_runner as runner
+    import common.gate.ci_runner as runner
     from common.deploy.compose_compile import has_x_infra2, load_stack
 
     calls: list[tuple[list[str], str | None]] = []
@@ -175,7 +175,7 @@ def test_ci_runner_vault_mutation_fails(
     bad_hcl = test_root / "vault-agent.hcl"
     bad_hcl.write_text("exit_on_retry_failure = true\n", encoding="utf-8")
 
-    monkeypatch.setattr("tools.ci_runner.ROOT", test_root)
+    monkeypatch.setattr("common.gate.ci_runner.ROOT", test_root)
     ret = run_vault(agents_only=True, verbose=False)
     assert ret == 1
     captured = capsys.readouterr()
@@ -198,7 +198,7 @@ def test_ci_runner_deployer_mutation_fails(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("tools.ci_runner.ROOT", test_root)
+    monkeypatch.setattr("common.gate.ci_runner.ROOT", test_root)
     ret = run_deployers(verbose=False)
     assert ret == 1
     captured = capsys.readouterr()
@@ -216,7 +216,7 @@ def test_ci_runner_unit_tests_timeout_fails(
             raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.01)
         return subprocess.CompletedProcess(args=args[0], returncode=0)
 
-    monkeypatch.setattr("tools.ci_runner._run_cmd", mock_run_cmd)
+    monkeypatch.setattr("common.gate.ci_runner._run_cmd", mock_run_cmd)
     ret = run_unit_tests(
         targets=["common/tests/test_ci_runner.py"], verbose=False, timeout=0.01
     )
@@ -255,9 +255,9 @@ def test_run_unit_tests_runs_the_diff_targets_in_one_process(
         recorded_cmds.append(list(cmd))
         return subprocess.CompletedProcess(args=cmd, returncode=0)
 
-    monkeypatch.setattr("tools.ci_runner._run_cmd", mock_run_cmd)
+    monkeypatch.setattr("common.gate.ci_runner._run_cmd", mock_run_cmd)
     monkeypatch.setattr(
-        "tools.ci_runner._resolve_changed_test_targets",
+        "common.gate.ci_runner._resolve_changed_test_targets",
         lambda: ["common/tests/test_ci_runner.py", "common/tests/test_harness.py"],
     )
     ret = main(argv)
@@ -290,11 +290,16 @@ def test_select_changed_compose_targets_scopes_services_and_contracts() -> None:
         _select_changed_compose_targets(all_compose, ["tools/ci_runner.py"])
         == all_compose
     )
+    # The runner logic lives in common/gate/ci_runner.py (infra2#1823 Step 4.3).
+    assert (
+        _select_changed_compose_targets(all_compose, ["common/gate/ci_runner.py"])
+        == all_compose
+    )
     assert _select_changed_compose_targets(all_compose, ["docs/README.md"]) == []
 
 
 def test_legacy_test_affected_wrapper_is_retired() -> None:
-    """Enforce one diff-scoped test runner (tools.ci_runner) with no duplicate CLI wrapper."""
+    """Enforce one diff-scoped test runner (common.gate.ci_runner) with no duplicate CLI wrapper."""
     assert not (ROOT / "tools/test_affected.py").exists()
     for doc_rel in (
         "docs/ssot/core.engineering.md",

@@ -29,6 +29,7 @@ Modules in `common/` that provide direct integrations or operational clients:
 |--------|---------|-------------|
 | [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper | `DokployClient`, `get_dokploy()` |
 | [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
+| [`signoz_alert_rule_probe.py`](./signoz_alert_rule_probe.py) | Disabled SigNoz alert-rule canary (entry: `tools/signoz_alert_rule_probe.py`). It is a flat module because it imports `observability_dashboards.py`, and a domain package must not import a flat module. | `main()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`common.py`](./common.py) | Operator SSH health check helper | `check_service()` |
 
