@@ -293,7 +293,7 @@ def test_editing_unclassified_scheduled_jobs_in_ops_checks_fails_contract(job_na
 
 def test_unreadable_base_ops_checks_fails_closed(tmp_path, monkeypatch):
     """#1340: workflow_contract_failures fails closed when base ops-checks.yml cannot be read."""
-    from tools import pr_merge_gate as gate
+    from common.gate import pr_merge_gate as gate
 
     texts = {
         path.name: path.read_text(encoding="utf-8")

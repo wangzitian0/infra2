@@ -492,7 +492,7 @@ def test_the_review_request_reports_true_only_when_copilot_is_pending():
 
 
 def _main(gh, capsys, *, at_seconds: float, extra=()) -> tuple[int, str]:
-    from tools import pr_merge_gate
+    from common.gate import pr_merge_gate
 
     rc = pr_merge_gate.main(
         ["704", "--repo", "wangzitian0/truealpha", "--policy", "either", *extra],
@@ -536,7 +536,7 @@ def test_the_gate_reads_the_verification_comment_end_to_end(capsys):
 
 
 def test_the_help_text_states_the_settle_in_seconds(capsys):
-    from tools import pr_merge_gate
+    from common.gate import pr_merge_gate
 
     with pytest.raises(SystemExit):
         pr_merge_gate.main(["--help"])

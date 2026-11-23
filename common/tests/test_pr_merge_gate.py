@@ -9,7 +9,7 @@ import pytest
 
 from common.gate.inventory import _required_check_workflows
 from common.gate.types import _normalized_path
-from tools import pr_merge_gate as gate
+from common.gate import pr_merge_gate as gate
 
 ROOT = Path(__file__).resolve().parents[2]
 

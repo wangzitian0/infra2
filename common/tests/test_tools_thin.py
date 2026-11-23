@@ -40,7 +40,6 @@ Size = tuple[int, int]
 # production paths (AGENTS.md merge gate rule 6): the owner approves their edits.
 DEBT: dict[str, Size] = {
     "reconcile_iac_inputs.py": (7, 3764),
-    "pr_merge_gate.py": (0, 437),
     "host_hygiene_schedule.py": (0, 406),
     "facet_reconcile.py": (1, 214),
 }
