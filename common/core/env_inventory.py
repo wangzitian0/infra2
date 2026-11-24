@@ -50,8 +50,6 @@ SKIP_NAMES = {
     "bun.lock",
     "bun.lockb",
 }
-# `run` skips any legacy files under `contracts/` when scanning infra2 itself.
-VENDORED_CONTRACTS = "contracts/"
 MAX_BYTES = 1_500_000
 
 ENV_MAP_NAMES = {
@@ -210,9 +208,7 @@ def route(path: str) -> str | None:
 
 def scope_of(path: str) -> str:
     norm = path.replace("\\", "/").lower()
-    if norm.endswith("apps/app-web/scripts/seed-e2e-fixture.ts") or norm.endswith(
-        "common/runtime/src/truealpha_runtime/testing.py"
-    ):
+    if norm.endswith("common/runtime/src/truealpha_runtime/testing.py"):
         return "test"
     parts = norm.split("/")
     name = parts[-1]
@@ -2692,11 +2688,7 @@ ROUTED_SCANNERS = {
 
 
 def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
-    files = [
-        f
-        for f in list_files(root)
-        if not (repo == "infra2" and f.startswith(VENDORED_CONTRACTS))
-    ]
+    files = list_files(root)
     consts = build_consts(repo, root, files)
     for f in files:
         kind = route(f)
