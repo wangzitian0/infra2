@@ -15,20 +15,16 @@
 ```
 finance_report/
 ├── 01.postgres/
-│   ├── compose.yaml       # PostgreSQL with vault-agent sidecar
-│   ├── deploy.py          # PostgresDeployer
-│   ├── shared_tasks.py    # status() check
-│   ├── vault-agent.hcl    # Vault agent config
+│   ├── compose.yaml       # PostgreSQL; x-infra2 adds the vault-agent sidecar
+│   ├── deploy.py          # PostgresDeployer: a PostgresStackDeployer preset with `project`
+│   ├── env.manifest.json  # Vault secret keys
 │   ├── vault-policy.hcl   # Vault policy
-│   ├── secrets.ctmpl      # Secrets template
 │   └── README.md
 ├── 02.redis/
-│   ├── compose.yaml       # Redis with vault-agent sidecar
-│   ├── deploy.py          # RedisDeployer
-│   ├── shared_tasks.py    # status() check
-│   ├── vault-agent.hcl    # Vault agent config
+│   ├── compose.yaml       # Redis; x-infra2 adds the vault-agent sidecar
+│   ├── deploy.py          # RedisDeployer: a RedisStackDeployer preset with `project`
+│   ├── env.manifest.json  # Vault secret keys
 │   ├── vault-policy.hcl   # Vault policy
-│   ├── secrets.ctmpl      # Secrets template
 │   └── README.md
 └── 10.app/
     ├── compose.yaml       # Backend + Frontend with vault-agent

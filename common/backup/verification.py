@@ -15,6 +15,7 @@ import yaml
 
 from common.core.service_identity import ServiceIdentity
 from common.core.constants import REPO_ROOT
+from common.core.stack_preset_facts import preset_defaults
 
 
 class BackupManifestError(ValueError):
@@ -133,7 +134,10 @@ def discover_deployer_data_paths(root: Path = REPO_ROOT) -> dict[str, str]:
         if ".venv" in deploy_path.parts:
             continue
         tree = ast.parse(deploy_path.read_text(encoding="utf-8"))
-        data_path = _class_string_attr(tree, "data_path")
+        # A stack preset (#1825) derives data_path from `project`; a literal wins.
+        data_path = _class_string_attr(tree, "data_path") or preset_defaults(tree).get(
+            "data_path"
+        )
         if not data_path:
             continue
         service_id = _service_id_from_deploy_path(deploy_path.relative_to(root))

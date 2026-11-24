@@ -15,6 +15,7 @@
 | Module | Role | Key Exports |
 |--------|------|-------------|
 | `deployer.py` | Platform & app deployment base class | `Deployer`, `make_tasks()`, `Deployer.apply_secret_supply()` |
+| `stack_presets.py` | App PostgreSQL/Redis stack presets; facts come from `common/core/stack_preset_facts.py` | `PostgresStackDeployer`, `RedisStackDeployer`, `stack_tasks()` |
 | `promote.py` | Staging & production promotion pipeline | `deploy()`, fixed environment orchestration |
 | `preview.py` | Dynamic preview stack lifecycle | `up()`, `down()`, preview slot routing |
 | `schema_gate.py` | Pre-deploy enum schema gate against live DB (SDK `schema_check` in the app image) | `SchemaCheckSpec`, `SchemaGateError`, `gate_applies()`, `run_schema_gate()` |

@@ -24,7 +24,7 @@ Secrets stored at: `secret/data/finance_report/<env>/postgres`
 python -m tools.deploy_v2 --service finance_report/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
-invoke finance_report.postgres.status
+invoke fr-postgres.shared.status
 
 # Connect (from within Docker network)
 docker exec -it finance_report-postgres psql -U postgres -d finance_report

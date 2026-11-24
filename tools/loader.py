@@ -32,10 +32,16 @@ def _load_module(file_path, module_name):
 
 
 def _add_tasks(module, collection):
-    """Add all tasks from a module to a collection"""
+    """Add all tasks and sub-collections from a module to a collection.
+
+    A module-level Collection becomes a sub-collection with the attribute name:
+    a stack preset deploy.py (#1825) exports `shared` with its `status` task.
+    """
     for name in dir(module):
         obj = getattr(module, name)
-        if isinstance(obj, Task):
+        if isinstance(obj, Collection) and obj.tasks:
+            collection.add_collection(obj, name=name)
+        elif isinstance(obj, Task):
             try:
                 collection.add_task(obj)
             except ValueError as e:
