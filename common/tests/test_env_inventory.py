@@ -1403,42 +1403,58 @@ def test_g3_no_dead_writes_or_stale_declarations_or_phantom_ssot_names(repo_scan
     assert g3_violations(keys_map, docs_only) == {}
 
 
-def test_all_sdk_keys_used_and_code_reads_declared(repo_scan):
-    _inv, keys_map, rows, _docs_only = repo_scan
-    c3_keys = [
+def sdk_key_and_code_read_violations(
+    keys_map: dict[str, envinv.K], rows: list[dict]
+) -> dict[str, list[str]]:
+    """Each SDK key has a user (no C3 key); each production code read is declared."""
+    violations: dict[str, list[str]] = {}
+    c3_keys = sorted(
         k.key
         for k in keys_map.values()
         if k.info.get("sdk_class") == "C3 SDK names it, nobody uses it"
-    ]
-    assert len(c3_keys) == 0, f"C3 keys found: {c3_keys}"
+    )
+    if c3_keys:
+        violations["C3"] = c3_keys
     for r in rows:
-        assert r["code_reads_not_declared"] == [], (
-            f"Undeclared code reads in {r['service']}: {r['code_reads_not_declared']}"
-        )
-        assert r["code_reads_default_only_not_declared"] == [], (
-            f"Undeclared default-only code reads in {r['service']}: {r['code_reads_default_only_not_declared']}"
-        )
+        for field_name in (
+            "code_reads_not_declared",
+            "code_reads_default_only_not_declared",
+        ):
+            if r[field_name]:
+                violations[f"{r['service']}:{field_name}"] = list(r[field_name])
+    return violations
 
 
-def test_all_sdk_keys_used_and_code_reads_declared_mutation():
-    fake_k = envinv.K(
+def test_all_sdk_keys_used_and_code_reads_declared(repo_scan):
+    _inv, keys_map, rows, _docs_only = repo_scan
+    assert rows, "no service rows scanned"
+    assert sdk_key_and_code_read_violations(keys_map, rows) == {}
+
+
+def test_all_sdk_keys_used_and_code_reads_declared_mutation(tmp_path):
+    # A real scan: the SDK names OTEL_SERVICE_NAME and no file of the fixture uses it.
+    w(tmp_path, "app/settings.py", "import os\nos.environ['UNDECLARED_KEY']\n")
+    inv_ = envinv.run({"fx": tmp_path})
+    keys_map, *_ = envinv.analyze(inv_)
+    clean_row = {
+        "service": "svc",
+        "code_reads_not_declared": [],
+        "code_reads_default_only_not_declared": [],
+    }
+    bad_row = dict(clean_row, code_reads_not_declared=["UNDECLARED_KEY"])
+    assert "OTEL_SERVICE_NAME" not in keys_map
+    used = {"UNDECLARED_KEY": keys_map["UNDECLARED_KEY"]}
+    assert sdk_key_and_code_read_violations(used, [clean_row]) == {}
+    assert sdk_key_and_code_read_violations(used, [bad_row]) == {
+        "svc:code_reads_not_declared": ["UNDECLARED_KEY"]
+    }
+    unused = envinv.K(
         key="MUTATED_C3_KEY",
-        flags=[],
         info={"sdk_class": "C3 SDK names it, nobody uses it"},
     )
-    c3_keys = [
-        k.key
-        for k in {"MUTATED_C3_KEY": fake_k}.values()
-        if k.info.get("sdk_class") == "C3 SDK names it, nobody uses it"
-    ]
-    assert len(c3_keys) == 1
-    fake_row = {
-        "service": "platform/mutated",
-        "code_reads_not_declared": ["MUTATED_UNDECLARED_READ"],
-        "code_reads_default_only_not_declared": ["MUTATED_DEFAULT_ONLY"],
-    }
-    assert fake_row["code_reads_not_declared"] != []
-    assert fake_row["code_reads_default_only_not_declared"] != []
+    assert sdk_key_and_code_read_violations(
+        dict(used, MUTATED_C3_KEY=unused), [clean_row]
+    ) == {"C3": ["MUTATED_C3_KEY"]}
 
 
 def test_the_app_manifests_are_counted_once_under_the_app_name(repo_scan):
@@ -1611,16 +1627,40 @@ def test_g3_mutation_rejects_dead_writes_and_stale_declarations_and_doc_only():
 def test_sdk_read_otel_is_derived_from_sdk_vocabulary():
     vocab = envinv.sdk_vocabulary()
     assert "SERVICE_NAME" not in vocab
-    assert "SERVICE_NAME" not in envinv.SDK_READ_OTEL
-    assert "OTEL_SERVICE_NAME" in envinv.SDK_READ_OTEL
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in envinv.SDK_READ_OTEL
-    assert "GITHUB_ACTIONS" in envinv.SDK_READ_OTEL
-    assert "GIT_COMMIT_SHA" not in envinv.SDK_READ_OTEL
+    read_otel = envinv._sdk_read_otel()
+    assert "SERVICE_NAME" not in read_otel
+    assert "OTEL_SERVICE_NAME" in read_otel
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in read_otel
+    assert "GITHUB_ACTIONS" in read_otel
+    assert "GIT_COMMIT_SHA" not in read_otel
     mutated = dict(
         vocab,
         MUTATED_OTEL_ALIAS={"kind": "alias", "canonical": "OTEL_SERVICE_NAME"},
     )
     assert "MUTATED_OTEL_ALIAS" in envinv._sdk_read_otel(mutated)
+
+
+def test_an_empty_sdk_vocabulary_stops_the_analysis(tmp_path, monkeypatch):
+    """infra2#1857: an empty SDK contract raises; it does not give a green empty report."""
+    import infra2_sdk.runtime.environment as sdk_env
+
+    w(tmp_path, "app/settings.py", "import os\nos.environ['SOME_KEY']\n")
+    inv_ = envinv.run({"fx": tmp_path})
+    keys_map, *_ = envinv.analyze(inv_)
+    assert "SOME_KEY" in keys_map
+    with pytest.raises(ValueError, match="the SDK vocabulary is empty"):
+        envinv.analyze(inv_, vocab={})
+    with pytest.raises(ValueError, match="the SDK vocabulary is empty"):
+        envinv.doc_only(inv_, {"fx": tmp_path}, vocab={})
+    monkeypatch.setattr(sdk_env, "runtime_env_contract", lambda: {"variables": []})
+    for call in (
+        envinv.sdk_vocabulary,
+        envinv._sdk_read_otel,
+        lambda: envinv.analyze(inv_),
+        lambda: envinv.doc_only(inv_, {"fx": tmp_path}),
+    ):
+        with pytest.raises(ValueError, match="names no variable"):
+            call()
 
 
 def test_doc_only_treats_sdk_vocabulary_as_known_and_mutation_fails(tmp_path):
