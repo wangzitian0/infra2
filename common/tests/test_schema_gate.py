@@ -103,8 +103,11 @@ def test_ssh_host_raises_without_either_env_var(monkeypatch):
 
 
 def test_vault_agent_container_resolves_from_the_real_compose_file():
-    text = FIXED_FINANCE_REPORT_COMPOSE.read_text(encoding="utf-8")
+    from common.deploy.compose_compile import load_stack
     from common.deploy.in_service import container_names
+
+    # The compiled text holds the sidecar of the x-infra2 stack (#1822 Slice 3).
+    text = load_stack(FIXED_FINANCE_REPORT_COMPOSE).compiled
 
     assert container_names(text, "-staging")["vault-agent"] == (
         "finance_report-app-vault-agent-staging"

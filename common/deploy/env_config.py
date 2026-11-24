@@ -57,7 +57,8 @@ class EnvConfig:
     requires_staging_first: bool = False  # this env (prod) requires a staging deploy
     dynamic: bool = False  # per-PR; compose_id/suffix are resolved at deploy time
     # R17 (#750): the short-swap promote — deterministic (tag/iac_ref-hashed) vault-agent
-    # cache-bust, fast healthcheck start interval, migrations applied before the swap.
+    # cache-bust and migrations applied before the swap. The truealpha app sidecar has no
+    # fast healthcheck start interval since #1822 Slice 3: the SDK sidecar sets none.
     # Opted in per service and env (``_ComposeOverride.fast_swap``); the owner put it on
     # staging only (2026-09-17: "先在 staging 做吧，prod 回头再说").
     fast_swap: bool = False

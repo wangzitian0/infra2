@@ -33,6 +33,8 @@ X_INFRA2_FILES = {
     "finance_report/finance_report/01.postgres/compose.yaml",
     "finance_report/finance_report/02.redis/compose.yaml",
     "truealpha/truealpha/01.postgres/compose.yaml",
+    "finance_report/finance_report/10.app/compose.yaml",
+    "truealpha/truealpha/10.app/compose.yaml",
 }
 
 
@@ -500,6 +502,22 @@ def test_equivalence_finds_a_sidecar_env_that_the_base_lacks() -> None:
     assert without != base
     assert equivalence_problems(_EQ_SOURCE, compiled, without, files) == [
         "services.vault-agent.environment.ENV_SUFFIX: only in the compiled file"
+    ]
+
+
+def test_equivalence_allows_only_the_release_template_injection_in_the_base() -> None:
+    """An app sidecar takes the release template as `${VAULT_SECRETS_TEMPLATE:-}` (#1822
+    Slice 3). Only that exact form is dropped; any other base value is a difference."""
+    compiled, base, files = _eq_case()
+    marker = "      ENV_SUFFIX: ${ENV_SUFFIX:-}\n"
+    assert marker in base
+    injected = base.replace(
+        marker, marker + "      VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}\n", 1
+    )
+    assert equivalence_problems(_EQ_SOURCE, compiled, injected, files) == []
+    fixed = base.replace(marker, marker + "      VAULT_SECRETS_TEMPLATE: abc\n", 1)
+    assert equivalence_problems(_EQ_SOURCE, compiled, fixed, files) == [
+        "services.vault-agent.environment.VAULT_SECRETS_TEMPLATE: only in the base file"
     ]
 
 

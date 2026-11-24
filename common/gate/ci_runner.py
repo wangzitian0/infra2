@@ -527,10 +527,19 @@ def run_vault(
                 continue
             if "vault-agent:" not in content:
                 continue
+            # An x-infra2 source names `vault-agent` only in depends_on; the SDK writes
+            # the sidecar into the compiled text (#1822). Check the compiled text, where
+            # the token lookup is the `lookup-self` call (the SDK script has no comment).
+            token_marker = "vault token lookup"
+            from common.deploy.compose_compile import has_x_infra2, load_stack
+
+            if has_x_infra2(content):
+                content = load_stack(rel).compiled
+                token_marker = "/v1/auth/token/lookup-self"
             if "rm -f /vault/secrets/.env" not in content:
                 print(f"  ❌ Vault agent does not clear stale secrets in {rel}")
                 failed = True
-            if "vault token lookup" not in content:
+            if token_marker not in content:
                 print(f"  ❌ Vault agent healthcheck missing token lookup in {rel}")
                 failed = True
             if "<no value>" not in content:

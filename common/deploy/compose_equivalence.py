@@ -15,7 +15,9 @@ Normalizations (the intended differences, from the infra2-sdk#238 design):
   ``entrypoint`` and the ``VAULT_AGENT_HCL`` / ``VAULT_SECRETS_TEMPLATE`` values, after
   it proves that the template equals the base ``secrets.ctmpl`` and the config equals
   the base ``vault-agent.hcl`` (``/etc/vault/`` written as ``/vault/``). It compares
-  the healthcheck script by code lines.
+  the healthcheck script by code lines. It drops the base env entry
+  ``VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}`` (the release template that the
+  app promote path injects); the promote path compares that template with the compiled one.
 - An ``x-vault`` service: the hand entrypoint ends in ``exec <command>``; the compiled
   one runs ``exec "$@"`` with ``command``. The check proves both run the same process,
   then drops ``entrypoint`` and ``command``.
@@ -42,6 +44,7 @@ _GIT_TIMEOUT = 60
 _SIDECAR = "vault-agent"
 _SIDECAR_DROPPED = ("volumes", "labels", "entrypoint")
 _SIDECAR_ENV_DROPPED = ("VAULT_AGENT_HCL", "VAULT_SECRETS_TEMPLATE")
+_RELEASE_TEMPLATE_INJECTION = "${VAULT_SECRETS_TEMPLATE:-}"
 
 
 def _yaml():
@@ -171,6 +174,15 @@ def _normalize_sidecar(pair: _Pair, base_files: dict[str, str | None]) -> None:
             spec.pop(key, None)
     for key in _SIDECAR_ENV_DROPPED:
         env.pop(key, None)
+    # An app sidecar takes the release template from the deploy as base64 (#1822 Slice 3).
+    # The compiled sidecar embeds the template, proven equal above; the promote path
+    # stops when the release template differs (common.deploy.promote).
+    hand_env = hand.get("environment")
+    if (
+        isinstance(hand_env, dict)
+        and hand_env.get("VAULT_SECRETS_TEMPLATE") == _RELEASE_TEMPLATE_INJECTION
+    ):
+        hand_env.pop("VAULT_SECRETS_TEMPLATE")
 
 
 def _normalize_x_vault(pair: _Pair, name: str) -> None:
