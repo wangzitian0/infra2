@@ -853,6 +853,48 @@ def test_reconcile_job_runs_on_ubuntu_24_04_for_playwright() -> None:
     }
 
 
+def test_post_job_restores_app_tool_caches_before_the_hooks_run() -> None:
+    """#1843: the hook bootstrap installs Playwright and bun on a fresh runner each time. The
+    post job restores their caches (restore only) before the Post phase step; the warm
+    workflow saves them on main, the only ref a tag run can restore from."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["post"]["steps"]
+    names = [step.get("name") for step in steps]
+    restore = steps[names.index("Restore App tool caches")]
+    assert restore["uses"] == "./.github/actions/app-caches"
+    assert "warm" not in restore.get("with", {})
+    assert names.index("Set up the train") < names.index("Restore App tool caches")
+    assert names.index("Restore App tool caches") < names.index("Post phase")
+
+    root = WORKFLOW.parents[2]
+    action = yaml.safe_load(
+        (root / ".github/actions/app-caches/action.yml").read_text("utf-8")
+    )
+    uses = [step["uses"] for step in action["runs"]["steps"] if "uses" in step]
+    # The job env of `post` holds secrets, so every action is pinned by commit SHA.
+    assert uses and all(
+        re.fullmatch(r"actions/cache/(restore|save)@[0-9a-f]{40}", u) for u in uses
+    )
+    assert action["inputs"]["warm"]["default"] == "false"
+    keys = [step["with"]["key"] for step in action["runs"]["steps"] if "uses" in step]
+    assert all("steps.keys.outputs.truealpha" in key for key in keys)
+
+    warm = yaml.safe_load(
+        (root / ".github/workflows/warm-app-caches.yml").read_text("utf-8")
+    )
+    assert warm["permissions"] == {"contents": "read"}
+    assert warm["jobs"]["warm"]["if"] == "${{ github.ref == 'refs/heads/main' }}"
+    assert "secrets." not in (root / ".github/workflows/warm-app-caches.yml").read_text(
+        "utf-8"
+    )
+    uses_warm = [
+        s
+        for s in warm["jobs"]["warm"]["steps"]
+        if s.get("uses") == "./.github/actions/app-caches"
+    ]
+    assert [s["with"] for s in uses_warm] == [{"warm": "true"}]
+
+
 def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     """2026-09-07: v1.1.61 was promoted to production while its own staging reconcile had
     failed; production alerting crash-looped until the rollback. The guard is the
