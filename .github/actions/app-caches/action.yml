@@ -33,7 +33,7 @@ runs:
           echo "finance=$(fp finance_report tests/e2e/requirements.txt)"
         } >> "$GITHUB_OUTPUT"
 
-    # Pinned by SHA (v4.2.3) because the job env of `post` holds secrets.
+    # Each action is fixed to a commit SHA because the job env of `post` holds secrets.
     - name: Restore Playwright browsers
       id: browsers
       uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
