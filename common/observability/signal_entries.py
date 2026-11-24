@@ -13,10 +13,7 @@ in the YAML — they describe watchers outside the probe runner whose configs
 live in wrangler.toml, common/observability/out_of_band_watchdog.py, or their own sidecar
 code, so no single in-repo declaration can derive them.
 
-Equivalence proof: the pre-deletion handwritten section is frozen at
-``common/tests/fixtures/watchdog_internal_signals_frozen.yaml`` and
-``common/tests/test_watchdog_signal_entries.py`` keeps the derivation
-field-level equivalent to it forever.
+``common/tests/test_watchdog_signal_entries.py`` tests the derivation.
 """
 
 from __future__ import annotations

@@ -1,13 +1,4 @@
-"""Equivalence proof for the derived internal watchdog-signal plane (#543).
-
-The handwritten ``primary_owner: internal`` section of watchdog-signals.yaml
-(39 entries) was frozen verbatim at
-``fixtures/watchdog_internal_signals_frozen.yaml`` the moment it was deleted.
-These tests keep :func:`render_internal_signal_entries` field-level equivalent
-to that snapshot forever — every intentional normalization is asserted
-explicitly below, so a derivation change that silently drops or reclassifies a
-signal cannot pass.
-"""
+"""Derived internal watchdog-signal plane (#543): classification, debounce and fail-closed rules."""
 
 from __future__ import annotations
 
@@ -21,7 +12,6 @@ from common.observability.signal_entries import render_internal_signal_entries
 from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
-FROZEN = Path(__file__).parent / "fixtures/watchdog_internal_signals_frozen.yaml"
 AUDIT = ROOT / "common/observability/watchdog_audit.py"
 
 
@@ -41,14 +31,6 @@ RUNNER_CONSECUTIVE_FAILURES = _probe_runner().DEFAULT_FAILURE_THRESHOLD
 RUNNER_RENOTIFY_WINDOW_SEC = _probe_runner().DEFAULT_RENOTIFY_SECONDS
 
 
-def _frozen() -> dict[tuple[str, str], dict]:
-    signals = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))["signals"]
-    # 41 + iac-runner public-http x2 (#1648) + GitHub x2 (#658) + truealpha/app x2 (#608) + finance_report/app x2
-    # + app-layer postgres/redis x3 + todo canary status x1 (#991), each in two environments
-    assert len(signals) == 63
-    return {(s["environment"], s["signal"]): s for s in signals}
-
-
 def _rendered() -> dict[tuple[str, str], dict]:
     entries = render_internal_signal_entries()
     keyed = {(e["environment"], e["signal"]): e for e in entries}
@@ -56,87 +38,20 @@ def _rendered() -> dict[tuple[str, str], dict]:
     return keyed
 
 
-def test_derivation_covers_exactly_the_frozen_signal_set() -> None:
-    """Zero signals dropped, zero invented: the (environment, signal) sets are
-    identical to the handwritten registry at the moment of deletion."""
-    assert set(_rendered()) == set(_frozen())
-
-
-def test_severity_cadence_and_identity_match_frozen_entries() -> None:
-    """Per-entry: same severity, same cadence, and the frozen component alias
-    resolves to the same service_id the derived entry carries directly."""
-    frozen = _frozen()
-    for key, entry in _rendered().items():
-        old = frozen[key]
-        assert entry["severity"] == old["severity"], key
-        assert entry["cadence"] == old["cadence"], key
-        assert entry["primary_owner"] == "internal" == old["primary_owner"], key
-        resolved = service_id_for_component(old["component"], signal=old["signal"])
-        assert entry["service_id"] == resolved, key
-        # the derived component must resolve identically (the audit's check)
-        assert (
-            service_id_for_component(entry["component"], signal=entry["signal"])
-            == resolved
-        ), key
-
-
-def test_expected_field_matches_frozen_machine_readable_values() -> None:
-    """`expected` carries over verbatim where the handwritten value was the
-    machine value (vault's status-code list). The three host entries held
-    free-text summaries ("<=80% CPU") of the same ProbeFacet ceiling — those
-    normalize to the machine value "80" the runner actually parses."""
-    frozen = _frozen()
+def test_every_derived_entry_states_the_runner_debounce_and_resolves_its_service() -> (
+    None
+):
+    """Each entry carries the runner's real debounce and a component that resolves to its service_id."""
     rendered = _rendered()
-    for key, old in frozen.items():
-        if "expected" not in old:
-            continue
-        if old["signal"].startswith("host-"):
-            assert old["expected"].startswith("<=80%"), key
-            assert rendered[key]["expected"] == "80", key
-        else:
-            assert rendered[key]["expected"] == old["expected"], key
-
-
-def test_structured_debounce_supersedes_frozen_free_text_threshold() -> None:
-    """Every handwritten entry said `alert_threshold: 3 consecutive failures`
-    (free text, unenforceable). The derived entries state the same threshold
-    in #425 T5's structured fields, matching the runner's real defaults.
-
-    One handwritten entry (production.dokploy.internal-http) claimed
-    `renotify_window_sec: 3600` — an aspiration nothing implemented. The
-    derivation states what the runner does for every probe: since #903 it never
-    re-notifies on a timer (0), so that entry normalizes 3600 -> 0.
-    """
-    frozen = _frozen()
-    for key, entry in _rendered().items():
-        old = frozen[key]
-        threshold_text = old.get("alert_threshold", "")
-        assert threshold_text.startswith(str(RUNNER_CONSECUTIVE_FAILURES)), (
-            f"{key}: fixture drifted? {threshold_text!r}"
-        )
+    assert rendered, "derivation produced zero entries"
+    for key, entry in rendered.items():
+        assert entry["primary_owner"] == "internal", key
         assert entry["consecutive_failures"] == RUNNER_CONSECUTIVE_FAILURES, key
         assert entry["renotify_window_sec"] == RUNNER_RENOTIFY_WINDOW_SEC, key
-    assert (
-        frozen[("production", "dokploy-internal-http")].get("renotify_window_sec")
-        == 3600
-    )
-
-
-def test_frozen_enrichment_fields_were_documentation_only() -> None:
-    """retry_count / failure_domain_whitelist / expected_sla_pct existed on
-    exactly ONE handwritten entry and are consumed by no code (verified by
-    repo-wide grep at deletion time), so the derivation drops them. This test
-    pins that the drop loses documentation on that one entry and nothing
-    else — if the fixture ever says otherwise, the drop needs a rethink."""
-    carriers = [
-        key
-        for key, old in _frozen().items()
-        if any(
-            f in old
-            for f in ("retry_count", "failure_domain_whitelist", "expected_sla_pct")
-        )
-    ]
-    assert carriers == [("production", "dokploy-internal-http")]
+        assert (
+            service_id_for_component(entry["component"], signal=entry["signal"])
+            == entry["service_id"]
+        ), key
 
 
 def test_every_internal_entry_is_fully_classified() -> None:

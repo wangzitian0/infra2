@@ -182,8 +182,7 @@ It is read-only and must not rotate, renew, restart, or redeploy services.
 The authoritative inventory is DERIVED (#542) from each service Deployer's
 `SecretsFacet` declarations (`common/core/facets.py` →
 `common/security/vault_audit.load_inventory`); the former handwritten
-`vault-self-refresh-inventory.yaml` is deleted (equivalence frozen as
-`common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml`). Each active
+`vault-self-refresh-inventory.yaml` is deleted. Each active
 compose file with a `vault-agent` service must have exactly one derived entry
 unless the compose file is explicitly a non-deployed alternate.
 

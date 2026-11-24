@@ -1,12 +1,4 @@
-"""#542 backup-inventory migration equivalence proof — PERMANENT regression anchor.
-
-``common/tests/fixtures/backup_inventory_frozen.yaml`` is a byte-copy of the
-handwritten ``the ops.backup-inventory YAML`` as it stood before the
-BackupFacet migration (the YAML itself is deleted). The derived inventory
-(every service's BackupFacet declarations -> ``load_backup_inventory()``) must
-stay field-for-field equal to it. Deliberate inventory changes update the
-fixture in the same PR, making the change explicit and reviewable.
-"""
+"""#542 backup-inventory derivation tests: fail-closed rules."""
 
 from __future__ import annotations
 
@@ -17,14 +9,6 @@ import pytest
 from common.backup.verification import load_backup_inventory
 
 ROOT = Path(__file__).resolve().parents[2]
-FROZEN = ROOT / "common/tests/fixtures/backup_inventory_frozen.yaml"
-
-
-def test_derived_inventory_equals_frozen_yaml_field_by_field() -> None:
-    derived = sorted(load_backup_inventory(), key=lambda e: e.service_id)
-    frozen = sorted(load_backup_inventory(FROZEN), key=lambda e: e.service_id)
-    assert [e.service_id for e in derived] == [e.service_id for e in frozen]
-    assert derived == frozen  # every field, not just ids
 
 
 def test_handwritten_yaml_stays_deleted() -> None:

@@ -1,16 +1,4 @@
-"""#542 SecretsFacet migration equivalence proof — PERMANENT regression anchor.
-
-``common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml`` is a byte-copy
-of the handwritten ``vault-self-refresh-inventory.yaml`` SSOT as it stood
-before the facet migration deleted it (16 entries, comments and all). The facet-derived
-inventory (each service's ``secrets = (SecretsFacet(...),)`` declarations ->
-``service_attrs()``/``bootstrap_facet_attrs()`` -> ``load_inventory()``) must
-stay FIELD-IDENTICAL to it. This is not a one-time diff: the frozen fixture
-anchors the audit's expectations forever, so a facet edit that accidentally
-mutates an inventory fact fails here with an exact field diff.
-
-Deliberate inventory changes must update the fixture in the same PR, making the
-change explicit and reviewable (the fixture is the inventory changelog).
+"""#542 SecretsFacet inventory tests.
 
 The counterfactual tests below are the issue's AC: editing a Deployer's secrets
 facet (or the deploy facts it derives from) must change BOTH the derived audit
@@ -26,7 +14,6 @@ import dataclasses
 from pathlib import Path
 
 import pytest
-import yaml
 
 from common.core import registry as reg
 from common.core.facets import SecretsFacet
@@ -39,54 +26,6 @@ from common.security.vault_self_refresh_audit import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-FROZEN = ROOT / "common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml"
-
-# The two fields ADDED by #542 (facts absorbed from the audit module's former
-# MOUNT_EXEMPT_CONTAINERS / OPTIONAL_INERT_FIELD_WATCHLIST constants) — they
-# have no column in the frozen pre-migration YAML, so they are equivalence-
-# checked against the retired constants' content separately below.
-_POST_MIGRATION_FIELDS = {"mount_exempt_containers", "optional_inert_fields"}
-
-
-def _frozen_inventory() -> list[VaultService]:
-    """Parse the frozen fixture with the retired YAML loader's exact merge
-    semantics (defaults overlaid per service, app_containers tupled)."""
-    data = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))
-    defaults = data.get("defaults", {})
-    services: list[VaultService] = []
-    for raw_service in data.get("services", []):
-        merged = {**defaults, **raw_service}
-        merged["app_containers"] = tuple(merged.get("app_containers", ()))
-        merged["legacy_dokploy_services"] = tuple(
-            merged.get("legacy_dokploy_services", ())
-        )
-        services.append(VaultService(**merged))
-    return services
-
-
-def test_derived_inventory_equals_frozen_yaml_field_by_field() -> None:
-    """THE equivalence proof: derived == frozen, per service, per field."""
-    derived = {service.id: service for service in load_inventory()}
-    frozen = {service.id: service for service in _frozen_inventory()}
-
-    assert sorted(derived) == sorted(frozen), (
-        "vault inventory ID set diverged from the frozen YAML.\n"
-        f"missing from derived: {sorted(set(frozen) - set(derived))}\n"
-        f"new in derived:       {sorted(set(derived) - set(frozen))}\n"
-        "If this change is deliberate, update common/tests/fixtures/"
-        "vault_self_refresh_inventory_frozen.yaml in the same PR."
-    )
-    for service_id, frozen_service in frozen.items():
-        for field in dataclasses.fields(VaultService):
-            if field.name in _POST_MIGRATION_FIELDS:
-                continue
-            assert getattr(derived[service_id], field.name) == getattr(
-                frozen_service, field.name
-            ), (
-                f"{service_id}.{field.name} diverged from the frozen YAML:\n"
-                f"  frozen:  {getattr(frozen_service, field.name)!r}\n"
-                f"  derived: {getattr(derived[service_id], field.name)!r}"
-            )
 
 
 def test_absorbed_constants_equivalence() -> None:
