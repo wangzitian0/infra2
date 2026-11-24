@@ -507,9 +507,8 @@ def test_remote_template_identity_reads_a_compiled_sidecar_and_drops_the_printf_
     audit, commands = _fake_ssh(monkeypatch, "compiled\n" + template + "\n")
     got = audit._remote_template_identity("vps", "c-1")
     assert got == ("compiled", hashlib.sha256(template.encode()).hexdigest())
-    assert len(commands) == 1 and commands[0].startswith("docker exec c-1 sh -c ")
-    assert "/vault/secrets.ctmpl" in commands[0]
-    assert "/etc/vault/secrets.ctmpl" in commands[0]
+    assert len(commands) == 1 and commands[0].startswith("sh -c ")
+    assert "infra2.vault.template.sha256" in commands[0]
     # A file without the printf newline is not what the sidecar wrote: unreadable.
     audit, _ = _fake_ssh(monkeypatch, "compiled\n" + template.rstrip("\n"))
     assert audit._remote_template_identity("vps", "c-1") == ("compiled", "")
@@ -518,56 +517,97 @@ def test_remote_template_identity_reads_a_compiled_sidecar_and_drops_the_printf_
 def test_remote_template_identity_reads_a_hand_written_sidecar(monkeypatch) -> None:
     audit, _ = _fake_ssh(monkeypatch, "hand-written\nabc123\n")
     assert audit._remote_template_identity("vps", "c-1") == ("hand-written", "abc123")
-    # Neither file in the container, or an SSH failure: the form is unknown.
+    # No template file, or an SSH failure: the form is unknown.
     audit, _ = _fake_ssh(monkeypatch, "")
     assert audit._remote_template_identity("vps", "c-1") == ("", "")
 
 
-def test_remote_template_identity_script_picks_the_form_the_container_has(
-    tmp_path: Path,
+_FAKE_DOCKER = """#!/bin/sh
+# inspect prints the label; exec runs the rest of the command on this host.
+[ -n "$FAKE_MISSING" ] && exit 1
+if [ "$1" = inspect ]; then
+  printf '%s\\n' "$FAKE_LABEL"; exit 0
+fi
+shift 2
+exec "$@"
+"""
+
+
+@pytest.mark.parametrize(
+    ("label", "files", "expected_form"),
+    [
+        # A compiled sidecar: the label is set.
+        ("a" * 64, ("compiled",), "compiled"),
+        # A hand-written sidecar that writes /vault/secrets.ctmpl from
+        # VAULT_SECRETS_TEMPLATE and also mounts /etc/vault/secrets.ctmpl: the path
+        # does not make it compiled; the missing label makes it hand-written.
+        ("", ("compiled", "mounted"), "hand-written"),
+        ("<no value>", ("mounted",), "hand-written"),
+    ],
+)
+def test_remote_template_identity_script_takes_the_form_from_the_label(
+    tmp_path: Path, monkeypatch, label: str, files: tuple[str, ...], expected_form: str
 ) -> None:
-    """Run the real shell script against a fake root: each layout gives its form."""
+    """Run the real shell script with a fake docker: the label gives the form."""
     import subprocess
 
     import common.security.vault_self_refresh_audit as audit
 
     template = _template()
-    for layout, expected_form in (
-        ("compiled", "compiled"),
-        ("mounted", "hand-written"),
-    ):
-        root = tmp_path / layout
-        compiled = root / "vault/secrets.ctmpl"
-        mounted = root / "etc/vault/secrets.ctmpl"
-        target = compiled if layout == "compiled" else mounted
-        target.parent.mkdir(parents=True)
-        target.write_text(template + "\n", encoding="utf-8")
-        captured: list[str] = []
+    paths = {
+        "compiled": tmp_path / "vault/secrets.ctmpl",
+        "mounted": tmp_path / "etc/vault/secrets.ctmpl",
+    }
+    for name in files:
+        paths[name].parent.mkdir(parents=True, exist_ok=True)
+        paths[name].write_text(template + "\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(_FAKE_DOCKER, encoding="utf-8")
+    docker.chmod(0o755)
+    monkeypatch.setattr(audit, "COMPILED_TEMPLATE_PATH", str(paths["compiled"]))
+    monkeypatch.setattr(audit, "HAND_WRITTEN_TEMPLATE_PATH", str(paths["mounted"]))
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_LABEL": label}
 
-        def ssh(host, command, _root=root):
-            captured.append(command)
-            script = command.split(" sh -c ", 1)[1]
-            script = script.replace(
-                "/vault/secrets.ctmpl", f"{_root}/vault/secrets.ctmpl"
-            )
-            script = script.replace(
-                f"/etc{_root}/vault/secrets.ctmpl", f"{_root}/etc/vault/secrets.ctmpl"
-            )
+    def ssh(host, command):
+        return subprocess.run(
+            command, shell=True, capture_output=True, text=True, env=env
+        )
+
+    monkeypatch.setattr(audit, "_ssh", ssh)
+    form, sha = audit._remote_template_identity("vps", "c-1")
+    assert form == expected_form
+    if expected_form == "compiled":
+        assert sha == hashlib.sha256(template.encode()).hexdigest()
+    else:
+        assert sha == hashlib.sha256((template + "\n").encode()).hexdigest()
+
+
+def test_remote_template_identity_script_is_unknown_without_the_file_or_container(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import subprocess
+
+    import common.security.vault_self_refresh_audit as audit
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(_FAKE_DOCKER, encoding="utf-8")
+    docker.chmod(0o755)
+    monkeypatch.setattr(audit, "COMPILED_TEMPLATE_PATH", str(tmp_path / "none-c"))
+    monkeypatch.setattr(audit, "HAND_WRITTEN_TEMPLATE_PATH", str(tmp_path / "none-m"))
+    for extra in ({"FAKE_LABEL": ""}, {"FAKE_LABEL": "a" * 64}, {"FAKE_MISSING": "1"}):
+        env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", **extra}
+
+        def ssh(host, command, _env=env):
             return subprocess.run(
-                f"sh -c {script}", shell=True, capture_output=True, text=True
+                command, shell=True, capture_output=True, text=True, env=_env
             )
 
-        audit_ssh = audit._ssh
-        audit._ssh = ssh
-        try:
-            form, sha = audit._remote_template_identity("vps", "c-1")
-        finally:
-            audit._ssh = audit_ssh
-        assert form == expected_form, (layout, captured)
-        if layout == "compiled":
-            assert sha == hashlib.sha256(template.encode()).hexdigest()
-        else:
-            assert sha == hashlib.sha256((template + "\n").encode()).hexdigest()
+        monkeypatch.setattr(audit, "_ssh", ssh)
+        assert audit._remote_template_identity("vps", "c-1") == ("", ""), extra
 
 
 def test_the_audit_passes_a_compiled_sidecar_that_runs_the_release_template(
@@ -608,7 +648,8 @@ def test_the_audit_passes_a_compiled_sidecar_that_runs_the_release_template(
     deployed = observed["deployed_template_sha256"]
     assert observed["deployed_template_form"] == "compiled"
     assert len(seen) == 1
-    assert seen[0].startswith("docker exec platform-todo-vault-agent sh -c ")
+    assert seen[0].startswith("sh -c ")
+    assert "docker exec platform-todo-vault-agent cat " in seen[0]
     result = va.classify_deployed_template(service, deployed, "compiled")
     assert result.status == "pass", result
     # The message names the compiled compose, not the secrets.ctmpl that is not deployed.
