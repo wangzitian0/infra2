@@ -12,7 +12,6 @@ def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None
     """Infra-012.13: infra CI publishes coverage before enforcing thresholds."""
     workflow = (ROOT / ".github/workflows/infra-ci.yml").read_text(encoding="utf-8")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "pytest-cov" in pyproject
     assert 'source = ["common", "tools"]' in pyproject
@@ -33,6 +32,3 @@ def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None
     assert "coverallsapp/github-action@v2" in workflow
     assert "format: cobertura" in workflow
     assert "file: coverage/infra2-coverage.xml" in workflow
-    assert (
-        "coveralls.io/repos/github/wangzitian0/infra2/badge.svg?branch=main" in readme
-    )

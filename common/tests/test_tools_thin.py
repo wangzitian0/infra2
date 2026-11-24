@@ -8,22 +8,13 @@ file under `tools/` and applies two limits:
 2. the module has at most `MAX_CODE_LINES` lines of top-level statements, decorators
    included and the module docstring excluded.
 
-`DEBT` lists each tool that broke a limit when this test was added, with its exact
-measured size. The test checks that each entry equals the measured size; review
-rejects a new entry or a raised size:
-
-- a tool not in `DEBT` that breaks a limit fails;
-- a `DEBT` entry whose tool is gone or now obeys both limits fails (delete the entry);
-- a `DEBT` entry whose recorded size differs from the measured size fails, so a tool
-  that grows fails and a tool that shrinks must lower its recorded size.
+No tool is exempt. A tool that breaks a limit fails the test: move its logic to `common/`.
 """
 
 from __future__ import annotations
 
 import ast
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "tools"
@@ -32,15 +23,8 @@ MAX_CODE_LINES = 200
 #: lost the tree (wrong path or an empty glob) and would pass while checking nothing.
 MIN_SCANNED_TOOLS = 40
 
-Size = tuple[int, int]
 
-# tool path relative to tools/ -> (top-level classes, code lines), measured on
-# 2026-11-22 at infra2@907355ac. Step 4.3 of infra2#1823 moved the logic of each
-# entry to `common/`; the ledger is empty.
-DEBT: dict[str, Size] = {}
-
-
-def measure(source: str) -> Size:
+def measure(source: str) -> tuple[int, int]:
     """Return (top-level classes, lines of top-level statements without the docstring)."""
     body = ast.parse(source).body
     if (
@@ -60,89 +44,18 @@ def measure(source: str) -> Size:
     return classes, lines
 
 
-def violates(size: Size) -> bool:
-    classes, lines = size
-    return classes > 0 or lines > MAX_CODE_LINES
-
-
-def ledger_problems(
-    tools: dict[str, Size], debt: dict[str, Size]
-) -> list[tuple[str, str]]:
-    """Return (kind, tool) for each way `tools` and `debt` disagree.
-
-    `new`: move the tool's logic to common/. `paid`: delete the DEBT entry.
-    `changed`: record the measured size in DEBT (a growth also means: move logic out).
-    """
-    problems = [
-        ("new", name)
-        for name, size in sorted(tools.items())
-        if name not in debt and violates(size)
-    ]
-    for name, recorded in sorted(debt.items()):
-        if name not in tools or not violates(tools[name]):
-            problems.append(("paid", name))
-        elif tools[name] != recorded:
-            problems.append(("changed", name))
-    return problems
-
-
-def current() -> dict[str, Size]:
-    return {
+def test_tools_tree_is_thin() -> None:
+    # The measure counts a decorator line and skips the docstring.
+    assert measure('"""Doc."""\n@a\n@b\nclass A:\n    x = 1\n') == (1, 4)
+    sizes = {
         path.relative_to(TOOLS).as_posix(): measure(path.read_text())
         for path in sorted(TOOLS.rglob("*.py"))
         if "__pycache__" not in path.parts
     }
-
-
-def test_measure_counts_classes_and_statement_lines_without_the_docstring():
-    source = '"""Doc\nline two."""\nimport os\n\n\nclass A:\n    x = 1\n\n\ndef f():\n    return 1\n'
-    assert measure(source) == (1, 5)
-
-
-def test_measure_counts_a_module_without_a_docstring():
-    assert measure("import os\nX = 1\n") == (0, 2)
-
-
-def test_measure_counts_decorator_lines():
-    assert measure("@a\n@b\ndef f():\n    return 1\n") == (0, 4)
-
-
-@pytest.mark.parametrize(
-    ("size", "expected"),
-    [((0, MAX_CODE_LINES), False), ((0, MAX_CODE_LINES + 1), True), ((1, 1), True)],
-)
-def test_violates_applies_both_limits(size, expected):
-    assert violates(size) is expected
-
-
-FAT = (0, MAX_CODE_LINES + 10)
-
-
-@pytest.mark.parametrize(
-    ("tools", "debt", "expected"),
-    [
-        ({"a.py": (0, 10)}, {}, []),
-        ({"a.py": FAT}, {}, [("new", "a.py")]),
-        ({"a.py": FAT}, {"a.py": FAT}, []),
-        ({"a.py": (0, 10)}, {"a.py": FAT}, [("paid", "a.py")]),
-        ({}, {"a.py": FAT}, [("paid", "a.py")]),
-        ({"a.py": (0, FAT[1] + 1)}, {"a.py": FAT}, [("changed", "a.py")]),
-        ({"a.py": (0, FAT[1] - 1)}, {"a.py": FAT}, [("changed", "a.py")]),
-        ({"a.py": (1, FAT[1])}, {"a.py": FAT}, [("changed", "a.py")]),
-    ],
-)
-def test_ledger_problems_on_synthetic_trees(tools, debt, expected):
-    assert ledger_problems(tools, debt) == expected
-
-
-def test_the_scan_sees_the_real_tools_tree():
-    assert len(current()) >= MIN_SCANNED_TOOLS
-
-
-def test_tools_tree_obeys_the_ledger():
-    tools = current()
-    problems = [
-        (kind, name, DEBT.get(name), tools.get(name))
-        for kind, name in ledger_problems(tools, DEBT)
-    ]
-    assert problems == [], f"tools/ must stay thin (core.harness.md §5.3): {problems}"
+    assert len(sizes) >= MIN_SCANNED_TOOLS, "the scan lost the tools/ tree"
+    fat = {
+        name: size
+        for name, size in sizes.items()
+        if size[0] > 0 or size[1] > MAX_CODE_LINES
+    }
+    assert fat == {}, f"tools/ must stay thin (core.harness.md §5.3): {fat}"
