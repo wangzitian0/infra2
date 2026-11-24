@@ -19,7 +19,6 @@ import pathlib
 import subprocess
 import sys
 
-import pytest
 
 from common.gate.self_governance import PACKAGE_FILES
 from common.gate.types import DEFAULT_REPO
@@ -40,73 +39,75 @@ LIST_BEFORE_THE_CLOSURE = frozenset(
 )
 
 
-def test_the_closure_still_covers_everything_the_list_did() -> None:
-    lost = sorted(LIST_BEFORE_THE_CLOSURE - gate.self_governing_files())
-    assert not lost, (
-        f"the computed set no longer protects {lost}, which the hand-written "
-        "list did — a change to those would now be judged by the version it "
-        "introduces"
-    )
+MUST_BE_GOVERNED = (
+    # the hand-written list the closure replaced (a ratchet: grow, never shrink)
+    *sorted(LIST_BEFORE_THE_CLOSURE),
+    # the closure found what the list had missed
+    "common/gate/omca_policy.py",
+    "common/console.py",
+    # entry point, logic module and the one test of the logic (#1823 Step 4.3)
+    "tools/pr_merge_gate.py",
+    "common/gate/pr_merge_gate.py",
+    "common/tests/test_pr_merge_gate.py",
+    # the production lock guard (#1138); the last file is outside test_<stem>.py
+    "common/gate/production_lock.py",
+    "common/gate/production_contract.py",
+    "common/tests/test_production_lock.py",
+    "common/tests/test_production_environment_gate.py",
+    # package files run before gate code (#1138) and the gate tests
+    "common/__init__.py",
+    "common/gate/__init__.py",
+    "common/tests/__init__.py",
+    "tools/__init__.py",
+    "common/tests/test_gate_pipeline.py",
+    "common/tests/test_gate_self_governance.py",
+    "common/tests/test_gate_yaml_parse_cache.py",
+    "common/tests/conftest.py",  # collect_ignore_glob could switch off the gate tests
+    "common/tests/test_required_checks_can_report.py",
+    # scheduled automation run by ops-checks.yml (#1127 / #1147, #1823 Step 4.3)
+    "tools/host_hygiene_schedule.py",
+    "tools/facet_reconcile.py",
+    "common/deploy/host_hygiene_schedule.py",
+    "common/deploy/facet_reconcile.py",
+    "common/tests/test_host_hygiene_schedule.py",
+    "common/tests/test_facet_reconcile.py",
+    # the replay module is gate code (#1653)
+    "common/gate/replay.py",
+    "common/tests/test_gate_replay.py",
+    # rule texts: no code opens them, so the closure lists them
+    *gate.RULE_TEXT_FILES,
+)
 
 
-def test_the_closure_found_what_the_list_had_missed() -> None:
-    """The reason for computing it, asserted rather than described."""
+def test_the_closure_holds_every_path_that_judges_a_pull_request() -> None:
     found = gate.self_governing_files()
-    # pr_merge_gate imports omca_policy, which can block a merge.
-    assert "common/gate/omca_policy.py" in found
-    assert "common/console.py" in found
-
-
-def test_an_import_reaches_the_protected_set(tmp_path) -> None:
-    """The property that makes the closure a ratchet: importing something new
-    protects it, with nobody having to remember."""
-    module = "common/console.py"
-    assert module in gate._repo_deps("common/gate/pr_merge_gate.py"), (
-        "the dependency walk stopped finding a module this file imports; the "
-        "closure is no longer following imports"
-    )
-    # The CLI entry point holds no logic; the walk must reach the module that does.
-    assert "common/gate/pr_merge_gate.py" in gate._repo_deps("tools/pr_merge_gate.py")
-
-
-def test_the_entry_point_and_its_logic_module_are_both_protected() -> None:
-    """#1823 Step 4.3 moved the gate logic out of `tools/pr_merge_gate.py`. The
-    closure starts at the entry point, so both files and the one test of the
-    logic must stay in it."""
-    found = gate.self_governing_files()
+    assert found and len(MUST_BE_GOVERNED) > 30  # an empty set loosens every rule
+    assert gate.RULE_TEXT_FILES, "no rule text is listed"
     for path in (
-        "tools/pr_merge_gate.py",
-        "common/gate/pr_merge_gate.py",
-        "common/tests/test_pr_merge_gate.py",
+        "common/tests/conftest.py",
+        "common/tests/test_required_checks_can_report.py",
+        "common/tests/test_gate_replay.py",
     ):
-        assert path in found, path
-        assert gate.is_self_governing(path), path
-
-
-def test_rule_texts_are_listed_because_no_code_reads_them() -> None:
-    """A closure over code cannot reach a file no code opens.
-
-    Both rule texts appear in `pr_merge_gate.py` only inside comments, and the
-    walk deliberately does not follow prose — following it would sweep in
-    every path ever mentioned in a docstring.
-    """
+        assert (ROOT / path).is_file(), path
+    # A closure over code cannot reach a file no code opens, so the rule texts are
+    # listed. Code that reads one must be followed by the walk instead.
     for code in ("tools/pr_merge_gate.py", "common/gate/pr_merge_gate.py"):
         source = (ROOT / code).read_text(encoding="utf-8")
         for rel in gate.RULE_TEXT_FILES:
-            assert rel in gate.self_governing_files()
-            assert (
-                f'"{rel}"'
-                not in source.replace(f'RULE_TEXT_FILES = ("AGENTS.md", "{rel}")', "")
-                or rel == "AGENTS.md"
-            ), f"{rel} is now read by {code}; compute it instead"
+            assert f'"{rel}"' not in source or rel == "AGENTS.md", (
+                f"{rel} is now read by {code}; compute it instead"
+            )
+    lost = sorted(p for p in MUST_BE_GOVERNED if p not in found)
+    assert not lost, f"the computed set no longer protects {lost}"
+    unjudged = sorted(p for p in MUST_BE_GOVERNED if not gate.is_self_governing(p))
+    assert not unjudged, unjudged
 
 
-def test_the_set_is_never_empty() -> None:
-    """An empty protected set would let every rewrite through — the one
-    outcome worse than a wrong set."""
-    found = gate.self_governing_files()
-    assert found
-    assert "tools/pr_merge_gate.py" in found
+def test_the_dependency_walk_follows_imports() -> None:
+    """Importing something new protects it, with nobody having to remember."""
+    assert "common/console.py" in gate._repo_deps("common/gate/pr_merge_gate.py")
+    # The CLI entry point holds no logic; the walk must reach the module that does.
+    assert "common/gate/pr_merge_gate.py" in gate._repo_deps("tools/pr_merge_gate.py")
 
 
 def test_every_member_exists() -> None:
@@ -115,45 +116,8 @@ def test_every_member_exists() -> None:
     missing = sorted(f for f in gate.self_governing_files() if not (ROOT / f).is_file())
     stale = sorted(set(missing) - set(PACKAGE_FILES))
     assert not stale, f"protected paths that do not exist: {stale}"
-
-
-def test_the_guard_of_the_production_lock_is_in_the_closure() -> None:
-    """With the lock, the gate stops sending workflow changes to the owner (#1138).
-    The code that reads the lock, the contract tables and their tests then decide
-    that, so a change to them must stay with the owner."""
-    found = gate.self_governing_files()
-    for path in (
-        "common/gate/production_lock.py",
-        "common/gate/production_contract.py",
-        "common/tests/test_production_lock.py",
-        # Outside the test_<stem>.py rule; the closure names it explicitly.
-        "common/tests/test_production_environment_gate.py",
-    ):
-        assert path in found, path
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "common/__init__.py",
-        "common/gate/__init__.py",
-        "common/tests/__init__.py",
-        "tools/__init__.py",
-        "common/tests/test_gate_pipeline.py",
-        "common/tests/test_gate_self_governance.py",
-        "common/tests/test_gate_yaml_parse_cache.py",
-    ],
-)
-def test_package_files_and_the_gate_tests_are_in_the_closure(path) -> None:
-    """Python runs each parent `__init__.py` before the gate code (#1138)."""
-    assert path in gate.self_governing_files()
-    assert gate.is_self_governing(path)
-
-
-def test_a_package_file_that_does_not_exist_yet_is_still_protected() -> None:
-    """`python -m tools.pr_merge_gate` would run a `tools/__init__.py` that a PR adds."""
     assert not (ROOT / "tools/__init__.py").exists(), "premise: no tools/__init__.py"
-    assert gate.is_self_governing("tools/__init__.py")
+    assert "tools/__init__.py" in gate.self_governing_files()
 
 
 def _base_tree(skip: str = "", extra: dict[str, str] | None = None):
@@ -166,20 +130,19 @@ def _base_tree(skip: str = "", extra: dict[str, str] | None = None):
     return lambda argv: payload
 
 
-def test_a_package_file_absent_here_and_in_the_base_is_no_drift() -> None:
+def test_rule_drift_against_the_base_tree() -> None:
+    # absent here and in the base: no drift
     assert gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=_base_tree()) == ()
-
-
-def test_a_package_file_the_base_has_and_this_checkout_lacks_is_drift() -> None:
+    # the base has a package file this checkout lacks: drift
     gh = _base_tree(extra={"tools/__init__.py": "0" * 40})
-    drift = gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=gh)
-    assert drift == ("tools/__init__.py",)
-
-
-def test_an_existing_member_missing_from_the_base_is_still_drift() -> None:
+    assert gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=gh) == (
+        "tools/__init__.py",
+    )
+    # an existing member missing from the base: drift
     gh = _base_tree(skip="common/gate/__init__.py")
-    drift = gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=gh)
-    assert drift == ("common/gate/__init__.py",)
+    assert gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=gh) == (
+        "common/gate/__init__.py",
+    )
 
 
 SHADOWS = (
@@ -198,107 +161,66 @@ SHADOWS = (
 )
 
 
-@pytest.mark.parametrize("path", SHADOWS)
-def test_a_file_that_shadows_the_gate_is_self_governing(path) -> None:
-    """#1138 re-audit H2 and M3: each of these runs instead of, or before, gate code."""
-    assert gate.is_self_governing(path)
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "tools/new_tool.py",
-        "common/probe_specs.py",
-        "docs/x.py",
-        "e2e_regressions/conftest.py",
-        "tools/deploy_v2.py",
-    ],
+GOVERNED_SPELLINGS = (
+    # case variants and path tricks: the gate host's disk does not tell case apart
+    "Tools/pr_merge_gate.py",
+    "COMMON/Gate/Evaluator.py",
+    ".github/Workflows/infra-ci.yml",
+    "tools\\pr_merge_gate.py",
+    "./tools/pr_merge_gate.py",
+    "common/gate/../gate/evaluator.py",
+    "Tools/PR_Merge_Gate/__init__.py",
+    # compiled files and virtual environments
+    "common/gate/__pycache__/evaluator.cpython-312.pyc",
+    ".venv/lib/python3.12/site-packages/yaml/__init__.py",
+    "venv/lib/x.py",
+    "docs/site-packages/x.txt",
+    "common/deploy/x.pyc",
+    "common/deploy/x.pyd",
+    "common/deploy/x.pth",
+    "common/deploy/x.so",
+    "common/deploy/x.abi3.so",
+    "common/deploy/x.cpython-312-darwin.so",
+    ".venv/pyvenv.cfg",
+    "common/gate/__pycache__/note.txt",
+    "venv/x.txt",
+    # pytest and site configuration
+    "pytest.ini",
+    "common/pytest.ini",
+    "common/tests/pytest.ini",
+    "tox.ini",
+    "common/tests/tox.ini",
+    "setup.cfg",
+    "COMMON/Setup.cfg",
+    ".coveragerc",
+    "common/sitecustomize.py",
+    "tools/usercustomize.py",
+    "docs/deep/sitecustomize.py",
+    "pyproject.toml",  # carries pytest settings (1035-R4 / #1147)
 )
-def test_an_unrelated_file_is_not_self_governing(path) -> None:
-    assert not gate.is_self_governing(path)
 
-
-def test_the_gate_tests_conftest_is_in_the_closure() -> None:
-    """`collect_ignore_glob` in it would switch off the gate tests (#1138 M3)."""
-    assert (ROOT / "common/tests/conftest.py").is_file()
-    assert "common/tests/conftest.py" in gate.self_governing_files()
-
-
-# --- #1138 round 3 R3-2: case variants, tooling paths, and tool configuration --------
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "Tools/pr_merge_gate.py",
-        "COMMON/Gate/Evaluator.py",
-        ".github/Workflows/infra-ci.yml",
-        "tools\\pr_merge_gate.py",
-        "./tools/pr_merge_gate.py",
-        "common/gate/../gate/evaluator.py",
-        "Tools/PR_Merge_Gate/__init__.py",
-    ],
+UNRELATED = (
+    "tools/new_tool.py",
+    "common/probe_specs.py",
+    "docs/x.py",
+    "e2e_regressions/conftest.py",
+    "tools/deploy_v2.py",
+    "docs/pyproject.toml",
+    # pytest reads settings for common/tests only from the root, common/, common/tests/
+    "e2e_regressions/pytest.ini",
+    "docs/setup.cfg",
+    "common/deploy/tox.ini",
+    "common/tests/fixtures/.coveragerc",
 )
-def test_another_spelling_of_a_gate_path_is_self_governing(path) -> None:
-    """The gate host's disk does not tell case apart (#1138 round 3)."""
-    assert gate.is_self_governing(path)
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "common/gate/__pycache__/evaluator.cpython-312.pyc",
-        ".venv/lib/python3.12/site-packages/yaml/__init__.py",
-        "venv/lib/x.py",
-        "docs/site-packages/x.txt",
-        "common/deploy/x.pyc",
-        "common/deploy/x.pyd",
-        "common/deploy/x.pth",
-        "common/deploy/x.so",
-        "common/deploy/x.abi3.so",
-        "common/deploy/x.cpython-312-darwin.so",
-    ],
-)
-def test_compiled_files_and_virtual_environments_are_self_governing(path) -> None:
-    assert gate.is_self_governing(path)
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "pytest.ini",
-        "common/pytest.ini",
-        "common/tests/pytest.ini",
-        "tox.ini",
-        "common/tests/tox.ini",
-        "setup.cfg",
-        "COMMON/Setup.cfg",
-        ".coveragerc",
-        "common/sitecustomize.py",
-        "tools/usercustomize.py",
-        "docs/deep/sitecustomize.py",
-    ],
-)
-def test_pytest_and_site_configuration_is_self_governing(path) -> None:
-    assert gate.is_self_governing(path)
-
-
-def test_pyproject_toml_is_self_governing() -> None:
-    """1035-R4 / #1147: pyproject.toml carries pytest settings and is in the gate closure."""
-    assert gate.is_self_governing("pyproject.toml")
-    assert not gate.is_self_governing("docs/pyproject.toml")
-
-
-def test_scheduled_automation_scripts_are_in_the_closure() -> None:
-    """#1127 / #1147: scheduled automation scripts run by ops-checks.yml are in the closure."""
-    found = gate.self_governing_files()
-    assert "tools/host_hygiene_schedule.py" in found
-    assert "tools/facet_reconcile.py" in found
-    # #1823 Step 4.3: the logic of each entry point lives in common/deploy.
-    assert "common/deploy/host_hygiene_schedule.py" in found
-    assert "common/deploy/facet_reconcile.py" in found
-    assert "common/tests/test_host_hygiene_schedule.py" in found
-    assert "common/tests/test_facet_reconcile.py" in found
+def test_a_path_that_shadows_or_configures_the_gate_is_self_governing() -> None:
+    """#1138 re-audit H2, M3, round 3 and round 4: each runs instead of, or before, gate code."""
+    paths = SHADOWS + GOVERNED_SPELLINGS
+    assert SHADOWS and GOVERNED_SPELLINGS
+    assert len(set(paths)) == len(paths)
+    loose = [p for p in paths if not gate.is_self_governing(p)]
+    assert not loose, loose
 
 
 # Thirty tracked paths, chosen across docs, tools, common, platform and bootstrap.
@@ -336,45 +258,13 @@ ORDINARY_PATHS = (
 )
 
 
-def test_ordinary_tracked_paths_are_not_self_governing() -> None:
+def test_an_unrelated_path_is_not_self_governing() -> None:
     """The rules must not send every PR to the owner."""
-    assert len(ORDINARY_PATHS) == 30
+    assert UNRELATED and len(ORDINARY_PATHS) == 30
     missing = [p for p in ORDINARY_PATHS if not (ROOT / p).is_file()]
     assert not missing, f"pick other tracked paths: {missing}"
-    governed = [p for p in ORDINARY_PATHS if gate.is_self_governing(p)]
+    governed = [p for p in (*UNRELATED, *ORDINARY_PATHS) if gate.is_self_governing(p)]
     assert not governed, governed
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "e2e_regressions/pytest.ini",
-        "docs/setup.cfg",
-        "common/deploy/tox.ini",
-        "common/tests/fixtures/.coveragerc",
-    ],
-)
-def test_pytest_settings_off_the_way_to_the_gate_tests_are_not_held(path) -> None:
-    """#1138 round 4: pytest reads settings for common/tests only from the root,
-    common/ and common/tests/."""
-    assert not gate.is_self_governing(path)
-
-
-@pytest.mark.parametrize(
-    "path", [".venv/pyvenv.cfg", "common/gate/__pycache__/note.txt", "venv/x.txt"]
-)
-def test_each_tooling_directory_name_counts(path) -> None:
-    """#1138 round 4: each name in the rule has a path that only it catches."""
-    assert gate.is_self_governing(path)
-
-
-def test_the_required_check_report_test_is_in_the_closure() -> None:
-    """It proves that a required check can report on any PR, so a change to it
-    changes what the gate trusts (#1138 round 4)."""
-    path = "common/tests/test_required_checks_can_report.py"
-    assert (ROOT / path).is_file()
-    assert path in gate.self_governing_files()
-    assert gate.is_self_governing(path)
 
 
 def test_every_repository_module_the_gate_runs_is_in_the_closure() -> None:
@@ -407,11 +297,3 @@ def test_every_repository_module_the_gate_runs_is_in_the_closure() -> None:
     closure = set(gate.self_governing_files())
     outside = [p for p in loaded if p not in closure]
     assert not outside, f"the gate runs these files outside its closure: {outside}"
-
-
-def test_replay_test_is_in_closure() -> None:
-    """The replay module is gate code: its test changes what the replay proves (#1653)."""
-    path = "common/tests/test_gate_replay.py"
-    assert (ROOT / path).is_file()
-    assert "common/gate/replay.py" in gate.self_governing_files()
-    assert path in gate.self_governing_files()
