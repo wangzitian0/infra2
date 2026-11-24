@@ -98,7 +98,6 @@ class FakeDokploy:
 def healthy_host() -> list[dict]:
     """docker.getContainers as a healthy host answers it, for every registered app
     compose in both fixed environments."""
-    from pathlib import Path
 
     from common.deploy.compose_compile import load_stack
     from common.deploy.in_service import expected_running_containers

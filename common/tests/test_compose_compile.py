@@ -512,7 +512,9 @@ def test_equivalence_allows_only_the_release_template_injection_in_the_base() ->
     marker = "      ENV_SUFFIX: ${ENV_SUFFIX:-}\n"
     assert marker in base
     injected = base.replace(
-        marker, marker + "      VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}\n", 1
+        marker,
+        marker + "      VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}\n",
+        1,
     )
     assert equivalence_problems(_EQ_SOURCE, compiled, injected, files) == []
     fixed = base.replace(marker, marker + "      VAULT_SECRETS_TEMPLATE: abc\n", 1)
