@@ -462,6 +462,11 @@ jobs:
         with:
           bun: "true"
 
+      # Restore only: the Playwright browsers and the bun cache that the hook bootstrap
+      # installs. `warm-app-caches.yml` saves them on main; a cache miss installs as before (#1843).
+      - name: Restore App tool caches
+        uses: ./.github/actions/app-caches
+
       - name: Post phase
         env:
           INPUT_AFTER: ${{ inputs.after || github.ref_name }}

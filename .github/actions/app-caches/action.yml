@@ -1,0 +1,83 @@
+name: App tool caches
+description: Restore the Playwright browsers and the bun cache that the App hook bootstrap installs (#1843). `warm` also fills a missing cache and saves it.
+
+inputs:
+  warm:
+    description: "Install the tools on a cache miss and save the cache. Only a run on main saves a cache that a tag run can restore."
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # The key is the hash of each App lockfile at the commit that `repos/<app>` pins, read from
+    # the raw file (an App checkout does not exist yet). When a file cannot be read, the key
+    # holds the run id, so the cache misses and never serves a stale browser.
+    - name: Fingerprint App lockfiles
+      id: keys
+      shell: bash
+      run: |
+        set -uo pipefail
+        fp() {
+          local repo="$1" path="$2" sha body
+          sha="$(git ls-tree HEAD "repos/${repo}" | awk '{print $3}')"
+          if [[ -n "$sha" ]] && body="$(curl -fsSL --retry 3 --max-time 30 \
+              "https://raw.githubusercontent.com/wangzitian0/${repo}/${sha}/${path}")"; then
+            printf '%s' "$body" | sha256sum | cut -c1-16
+          else
+            echo "unknown-${GITHUB_RUN_ID}"
+          fi
+        }
+        {
+          echo "truealpha=$(fp truealpha apps/app-web/bun.lock)"
+          echo "finance=$(fp finance_report tests/e2e/requirements.txt)"
+        } >> "$GITHUB_OUTPUT"
+
+    # Pinned by SHA (v4.2.3) because the job env of `post` holds secrets.
+    - name: Restore Playwright browsers
+      id: browsers
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}-fr-${{ steps.keys.outputs.finance }}
+
+    - name: Restore bun cache
+      id: bun
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ~/.bun/install/cache
+        key: bun-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}
+
+    # The same commands as the bootstrap of each App manifest, run in a scratch directory
+    # that holds only the manifest and the lockfile.
+    - name: Fill the caches
+      if: ${{ inputs.warm == 'true' && (steps.browsers.outputs.cache-hit != 'true' || steps.bun.outputs.cache-hit != 'true') && !startsWith(steps.keys.outputs.truealpha, 'unknown') && !startsWith(steps.keys.outputs.finance, 'unknown') }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        base="https://raw.githubusercontent.com/wangzitian0"
+        ta_sha="$(git ls-tree HEAD repos/truealpha | awk '{print $3}')"
+        fr_sha="$(git ls-tree HEAD repos/finance_report | awk '{print $3}')"
+        work="$(mktemp -d)"
+        mkdir -p "$work/ta" "$work/fr"
+        curl -fsSL --retry 3 -o "$work/ta/package.json" "$base/truealpha/${ta_sha}/apps/app-web/package.json"
+        curl -fsSL --retry 3 -o "$work/ta/bun.lock" "$base/truealpha/${ta_sha}/apps/app-web/bun.lock"
+        (cd "$work/ta" && bun install --frozen-lockfile && bunx playwright install --only-shell chromium)
+        curl -fsSL --retry 3 -o "$work/fr/requirements.txt" "$base/finance_report/${fr_sha}/tests/e2e/requirements.txt"
+        uv venv "$work/fr/venv" --quiet
+        uv pip install --python "$work/fr/venv/bin/python" --quiet -r "$work/fr/requirements.txt"
+        "$work/fr/venv/bin/playwright" install chromium
+
+    - name: Save Playwright browsers
+      if: ${{ inputs.warm == 'true' && steps.browsers.outputs.cache-hit != 'true' && !startsWith(steps.keys.outputs.truealpha, 'unknown') && !startsWith(steps.keys.outputs.finance, 'unknown') }}
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}-fr-${{ steps.keys.outputs.finance }}
+
+    - name: Save bun cache
+      if: ${{ inputs.warm == 'true' && steps.bun.outputs.cache-hit != 'true' && !startsWith(steps.keys.outputs.truealpha, 'unknown') }}
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: ~/.bun/install/cache
+        key: bun-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}
