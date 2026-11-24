@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 from infra2_sdk.runtime.config_schema import EnvironmentManifest
 
 from common.deploy import app_manifest_sync as sync
-from common.deploy.app_contract import render_release_template, service_for_id
+from common.deploy.app_contract import (
+    parse_compose_contract,
+    render_release_template,
+    service_for_id,
+)
 from common.security import secrets_render
 from common.security.registry import ROOT, SERVICES
+from common.tests.compose_env import compose_services, raw_environment
 
 FR_SHA = "f" * 40
 
@@ -209,3 +215,28 @@ def test_write_copies_rewrites_the_copy_and_the_vault_files_of_each_reader(
         sync.write_copies({"finance_report/app": FR_SHA}, root=tmp_path, fetcher=fetch)
         == []
     )
+
+
+def _supplied_names(directory: Path) -> set[str]:
+    """Names that the stack compose environment or the committed Vault template sets."""
+    names: set[str] = set()
+    for container in compose_services(directory / "compose.yaml").values():
+        names |= set(raw_environment(container))
+    template = (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+    names |= set(re.findall(r"(?m)(?:^|\}\})([A-Z_][A-Z0-9_]*)=", template))
+    return names
+
+
+@pytest.mark.parametrize("service", sync.projected_services(), ids=lambda s: s.id)
+def test_the_stack_supplies_every_contract_field_of_the_generated_copy(service) -> None:
+    """The copy comes from the release, so the deploy preflight cannot catch a gap.
+
+    This check stays independent of the release: each field that the image needs from
+    infra2 (``release``, ``decision``, ``required`` or ``injected``) must be set by the
+    hand-written compose file or rendered by the Vault template.
+    """
+    copy = (ROOT / service.manifests[0]).read_text(encoding="utf-8")
+    contract = parse_compose_contract(copy, label=service.id)
+    assert contract, f"{service.id}: the copy declares no contract field"
+    unsupplied = sorted(set(contract) - _supplied_names(ROOT / service.directory))
+    assert unsupplied == []

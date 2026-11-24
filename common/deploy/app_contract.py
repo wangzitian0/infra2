@@ -274,8 +274,9 @@ def unmet(release: Contract, provided: Sequence[Contract]) -> list[Gap]:
     ``provided`` holds one contract per manifest of the stack. A variable is met when one of
     them declares it with the same attributes (or covers an older primary name as an alias
     with identical contract attributes). ``provided`` may supply more than the release
-    needs: an older release deploys on a newer infra2, and a field that a release dropped
-    stays until no release needs it.
+    needs. The App stack copies are projections of the pinned release (#1822): a field
+    that a newer release dropped leaves the copy when the pin advances, so an older
+    release can show a gap on a newer infra2 and the deploy fails closed.
     """
     gaps = []
     for env, wanted in sorted(release.items()):
@@ -521,7 +522,8 @@ def _gap_remedy(
                 "which predates main. Cut an infra2 release from main, then deploy again"
             )
     return (
-        "add the variable to the stack compose file and env.manifest.json in infra2, "
+        "add the variable to the stack compose file in infra2, regenerate the stack "
+        "env.manifest.json at the release tag (tools/app_manifest_sync.py --write), "
         "merge, cut an infra2 release"
         f"{' and promote it to production' if is_prod else ''}"
         ", then deploy again"
