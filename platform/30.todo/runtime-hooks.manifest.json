@@ -40,15 +40,15 @@
       "cells": {
         "remove": {
           "staging.post": {
-            "reason": "preview_gate runs in preview.post only (schema 2 slot preview_gate)",
+            "reason": "preview_gate runs in preview.post only",
             "issue": "wangzitian0/infra2#1823"
           },
           "prod.post": {
-            "reason": "preview_gate runs in preview.post only (schema 2 slot preview_gate)",
+            "reason": "preview_gate runs in preview.post only",
             "issue": "wangzitian0/infra2#1823"
           },
           "scheduled_audit": {
-            "reason": "preview_gate runs in preview.post only (schema 2 slot preview_gate)",
+            "reason": "preview_gate runs in preview.post only",
             "issue": "wangzitian0/infra2#1823"
           }
         }
@@ -71,15 +71,15 @@
       "cells": {
         "remove": {
           "preview.post": {
-            "reason": "staging_gate runs in staging.post only (schema 2 slot staging_gate)",
+            "reason": "staging_gate runs in staging.post only",
             "issue": "wangzitian0/infra2#1823"
           },
           "prod.post": {
-            "reason": "staging_gate runs in staging.post only (schema 2 slot staging_gate)",
+            "reason": "staging_gate runs in staging.post only",
             "issue": "wangzitian0/infra2#1823"
           },
           "scheduled_audit": {
-            "reason": "staging_gate runs in staging.post only (schema 2 slot staging_gate)",
+            "reason": "staging_gate runs in staging.post only",
             "issue": "wangzitian0/infra2#1823"
           }
         }
@@ -102,15 +102,15 @@
       "cells": {
         "remove": {
           "preview.post": {
-            "reason": "prod_gate runs in prod.post only (schema 2 slot prod_gate)",
+            "reason": "prod_gate runs in prod.post only",
             "issue": "wangzitian0/infra2#1823"
           },
           "staging.post": {
-            "reason": "prod_gate runs in prod.post only (schema 2 slot prod_gate)",
+            "reason": "prod_gate runs in prod.post only",
             "issue": "wangzitian0/infra2#1823"
           },
           "scheduled_audit": {
-            "reason": "prod_gate runs in prod.post only (schema 2 slot prod_gate)",
+            "reason": "prod_gate runs in prod.post only",
             "issue": "wangzitian0/infra2#1823"
           }
         }
@@ -133,15 +133,15 @@
       "cells": {
         "remove": {
           "preview.post": {
-            "reason": "scheduled_audit runs in scheduled_audit only (schema 2 slot scheduled_audit)",
+            "reason": "scheduled_audit runs in scheduled_audit only",
             "issue": "wangzitian0/infra2#1823"
           },
           "staging.post": {
-            "reason": "scheduled_audit runs in scheduled_audit only (schema 2 slot scheduled_audit)",
+            "reason": "scheduled_audit runs in scheduled_audit only",
             "issue": "wangzitian0/infra2#1823"
           },
           "prod.post": {
-            "reason": "scheduled_audit runs in scheduled_audit only (schema 2 slot scheduled_audit)",
+            "reason": "scheduled_audit runs in scheduled_audit only",
             "issue": "wangzitian0/infra2#1823"
           }
         }

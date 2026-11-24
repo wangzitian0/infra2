@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from common.core import registry as service_registry
-
+from common.tests.compose_env import TEMPLATE_ENV_CALL, missing_template_envs
 from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -229,10 +229,10 @@ def test_vault_agent_forwards_every_template_env():
     with `cannot access bucket truealpha-raw` (staging, 2026-09-07).
     """
     template = (SERVICE_DIR / "secrets.ctmpl").read_text()
-    referenced = set(re.findall(r'env "([A-Z0-9_]+)"', template))
+    referenced = set(TEMPLATE_ENV_CALL.findall(template))
     assert referenced, "template no longer reads any env — update this test"
     forwarded = set(_vault_agent_environment())
-    missing = sorted(referenced - forwarded)
+    missing = missing_template_envs(template, forwarded)
     assert not missing, (
         f"secrets.ctmpl reads {missing} but vault-agent does not forward them"
     )

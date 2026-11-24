@@ -189,7 +189,7 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
         assert slot[field] == prod[field], field
     assert slot["healthcheck"]["test"] == prod["healthcheck"]["test"]
     shared = set(slot["environment"]) & set(prod["environment"])
-    assert len(shared) == 17
+    assert len(shared) == 24
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
     } == set()
@@ -238,6 +238,7 @@ def test_todo_template_composes_database_url_from_the_todo_password():
     slot_services = _services("platform/30.todo/preview.compose.yaml")
     postgres = slot_services["postgres"]
     (init,) = [part for part in postgres["command"] if "CREATE ROLE" in part]
+    assert "canary_todo_capability" in init
     role = init.split("CREATE ROLE ", 1)[1].split(" ", 1)[0]
     host = postgres["container_name"]
     assert (role, host) == ("todo_app", "platform-postgres${ENV_SUFFIX}")
