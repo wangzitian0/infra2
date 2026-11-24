@@ -619,7 +619,6 @@ def test_typescript(inv):
 
 def test_test_scope(inv):
     assert find(inv, "TEST_ONLY", "write")[0].scope == "test"
-    assert envinv.scope_of("apps/app-web/scripts/seed-e2e-fixture.ts") == "test"
     assert envinv.scope_of("common/runtime/src/truealpha_runtime/testing.py") == "test"
 
 

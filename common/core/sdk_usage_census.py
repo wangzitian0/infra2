@@ -1592,12 +1592,6 @@ def compute_m4(
                 if (
                     rel.startswith("common/")
                     and not rel.endswith("/__init__.py")
-                    and rel
-                    not in {
-                        "common/__init__.py",
-                        "common/runtime/src/truealpha_runtime/boot.py",
-                        "common/meta/package_contract.py",
-                    }
                     and _is_pure_reexport_shim(tree)
                 ):
                     _add_rec(repo, "common", "pure_reexport_shim", f"{repo}:{rel}:1")
