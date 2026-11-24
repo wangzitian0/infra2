@@ -202,15 +202,18 @@ def test_project_ssot_links_target_existing_files() -> None:
     docs = sorted(PROJECT_DIR.glob("*.md"))
     assert docs
     missing: list[str] = []
+    links = 0
     for path in docs:
         for target in _MD_LINK_RE.findall(path.read_text(encoding="utf-8")):
             if target.startswith(("http://", "https://", "mailto:")):
                 continue
             if "../ssot/" not in target:
                 continue
+            links += 1
             resolved = (path.parent / _strip_anchor(target)).resolve()
             if not resolved.is_relative_to(ROOT) or not resolved.exists():
                 missing.append(f"{path.relative_to(ROOT)} -> {target}")
+    assert links > 0, "no ../ssot/ link found in project docs"
     assert missing == []
 
 
@@ -331,8 +334,22 @@ def _module_names(py_file: Path) -> set[str]:
     return defined
 
 
+def _module_map_rows(readme: Path) -> int:
+    """Count the Module Map rows that name a `.py` module."""
+    count = 0
+    for line in readme.read_text(encoding="utf-8").splitlines():
+        cells = (
+            [c.strip() for c in line.split("|")[1:-1]] if line.startswith("|") else []
+        )
+        if len(cells) >= 3 and re.search(r"`[A-Za-z0-9_./]+\.py`", cells[0]):
+            count += 1
+    return count
+
+
 def _module_map_errors(readme: Path) -> list[str]:
-    label = str(readme.relative_to(ROOT))
+    label = (
+        str(readme.relative_to(ROOT)) if readme.is_relative_to(ROOT) else readme.name
+    )
     errors: list[str] = []
     for line in readme.read_text(encoding="utf-8").splitlines():
         if not line.startswith("|"):
@@ -362,10 +379,11 @@ def _read(path: Path) -> str:
 def test_code_doc_path_references_resolve() -> None:
     files = _code_py_files()
     assert files
+    refs = [(p, ref) for p in files for ref in set(_DOC_PATH_RE.findall(_read(p)))]
+    assert len(refs) >= 10, f"found only {len(refs)} doc path references in code"
     missing = [
         f"{p.relative_to(ROOT)} -> {ref}"
-        for p in files
-        for ref in set(_DOC_PATH_RE.findall(_read(p)))
+        for p, ref in refs
         if not (ROOT / ref).exists()
     ]
     assert not missing, "doc paths in code do not resolve:\n" + "\n".join(
@@ -379,12 +397,15 @@ def test_ac_ids_cited_in_tests_are_defined_in_an_epic() -> None:
         defined |= set(_AC_RE.findall(_read(path)))
     assert defined
     orphans: dict[str, list[str]] = {}
+    cited = 0
     for path in (ROOT / "common/tests").rglob("test_*.py"):
         if path.name == THIS:
             continue
         for ac in set(_AC_RE.findall(_read(path))):
+            cited += 1
             if ac not in defined:
                 orphans.setdefault(ac, []).append(path.name)
+    assert cited > 0, "no test cites an AC id"
     assert not orphans, f"tests cite AC ids no EPIC defines: {orphans}"
 
 
@@ -423,6 +444,8 @@ def test_active_docs_infra2_sdk_references_resolve() -> None:
 def test_common_domain_readme_module_maps_match_ast_exports() -> None:
     readmes = sorted((ROOT / "common").glob("*/README.md"))
     assert len(readmes) >= 5
+    rows = sum(_module_map_rows(r) for r in readmes)
+    assert rows >= 10, f"parsed only {rows} Module Map rows"
     errors = [e for r in readmes for e in _module_map_errors(r)]
     assert not errors, "Module Map drift:\n" + "\n".join(errors)
 
@@ -430,6 +453,7 @@ def test_common_domain_readme_module_maps_match_ast_exports() -> None:
 def test_active_docs_imports_dotted_refs_and_test_paths_resolve() -> None:
     errors: list[str] = []
     seen_md = 0
+    refs = 0
     for doc in _active_governed_docs():
         if doc.suffix != ".md":
             continue
@@ -437,7 +461,9 @@ def test_active_docs_imports_dotted_refs_and_test_paths_resolve() -> None:
         rel = str(doc.relative_to(ROOT))
         text = _read(doc)
         errors += _block_import_errors(text, rel)
+        refs += len(_TEST_FILE_REF_RE.findall(text))
         for m in _DOTTED_REPO_REF_RE.finditer(text):
+            refs += 1
             err = _resolve_dotted(m.group(1), sdk=False)
             if err:
                 errors.append(f"{rel}: {err}")
@@ -447,7 +473,78 @@ def test_active_docs_imports_dotted_refs_and_test_paths_resolve() -> None:
             if not (ROOT / m.group(1)).is_file()
         ]
     assert seen_md
+    assert refs >= 10, f"checked only {refs} dotted refs and test paths"
     assert not errors, "doc import/symbol/test-path drift:\n" + "\n".join(errors)
+
+
+def test_sdk_dotted_reference_resolver_rejects_hyphen_and_missing_attr() -> None:
+    assert _resolve_dotted("infra2_sdk.secrets", sdk=True) is None
+    assert (
+        _resolve_dotted(
+            "infra2_sdk.observability.evaluate_consecutive_hysteresis", sdk=True
+        )
+        is None
+    )
+    assert "hyphenated" in (_resolve_dotted("infra2-sdk.secrets", sdk=True) or "")
+    assert _resolve_dotted("infra2_sdk.ci.coverage_regression", sdk=True) is not None
+
+
+def test_domain_readme_module_map_guard_rejects_phantom_export(tmp_path: Path) -> None:
+    (tmp_path / "sample.py").write_text(
+        "def real_fn() -> int:\n    return 1\n", encoding="utf-8"
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "| Module | Role | Key Exports |\n|---|---|---|\n"
+        "| `sample.py` | role | `real_fn()`, `ghost_fn()` |\n",
+        encoding="utf-8",
+    )
+    errs = _module_map_errors(readme)
+    assert any("ghost_fn" in e for e in errs)
+    assert not any("real_fn" in e for e in errs)
+
+
+def test_python_import_and_dotted_repo_ref_guards_reject_invalid_symbols() -> None:
+    bad_md = "```python\nfrom infra2_sdk.observability import GhIssueApi\n```\n"
+    assert any("GhIssueApi" in e for e in _block_import_errors(bad_md, "README.md"))
+    ok = "common.deploy.deployer.Deployer._assert_approle_creds_present"
+    assert _resolve_dotted(ok, sdk=False) is None
+    assert (
+        _resolve_dotted("common.deploy.promote.assert_approle_creds_present", sdk=False)
+        is None
+    )
+    bad = "common.deploy.deployer._assert_approle_creds_present"
+    assert _resolve_dotted(bad, sdk=False) is not None
+
+
+def test_observability_ssot_matches_alert_rules_files_and_digest_entrypoints() -> None:
+    """ops.observability.md lists every ALERT_RULES_FILES path and the digest entrypoints."""
+    from common.observability_dashboards import ALERT_RULES_FILES
+
+    assert ALERT_RULES_FILES
+    obs_doc = (SSOT_DIR / "ops.observability.md").read_text(encoding="utf-8")
+    for rule_file in ALERT_RULES_FILES:
+        rel_path = str(rule_file.relative_to(ROOT))
+        assert rel_path in obs_doc, f"missing {rel_path} in ops.observability.md"
+    assert "tools/watchdog_weekly_digest.py" in obs_doc
+    assert "stability_report.py --daily" in obs_doc
+    standards_doc = (SSOT_DIR / "ops.standards.md").read_text(encoding="utf-8")
+    assert "当前尚未接入" not in standards_doc
+    assert "common.deploy.schema_gate" in standards_doc
+
+
+def test_canary_todo_docs_match_deep_probe_and_manifest_contracts() -> None:
+    for rel_path in ("docs/ssot/platform.canary_todo.md", "platform/30.todo/README.md"):
+        text = (ROOT / rel_path).read_text(encoding="utf-8")
+        assert "alias minio" not in text.lower(), f"stale minio alias in {rel_path}"
+        assert "alias `minio`" not in text.lower(), f"stale minio alias in {rel_path}"
+        assert "canary_todo_probe" in text, f"missing canary_todo_probe in {rel_path}"
+        assert "runtime-hooks.manifest.json" in text, (
+            f"missing runtime-hooks.manifest.json in {rel_path}"
+        )
+        assert "validate_startup_environment" in text or "assert_environment" in text, (
+            f"missing startup env validation reference in {rel_path}"
+        )
 
 
 def test_delivery_model_has_one_owner() -> None:
@@ -463,6 +560,7 @@ def test_delivery_model_has_one_owner() -> None:
         *sorted(SSOT_DIR.glob("*.md")),
         *sorted((ROOT / "docs/onboarding").glob("*.md")),
     ]
+    assert len(scanned) > 5, f"scanned only {len(scanned)} docs"
     copies = [
         str(p.relative_to(ROOT))
         for p in scanned
