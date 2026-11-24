@@ -13,7 +13,7 @@ objects. Definitions are JSON; provisioning is a post-merge `invoke` apply step
 |------|---------|
 | `alert_rules.json` | OTEL log-error rule, RED SLO and business-anomaly metric rules, and a telemetry-absence rule: `FinanceReportBackendErrorLogs`, `FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh` (reading FastAPI's canonical `http.server.request.duration`, seconds; #1465), `FinanceReportStatementParseFailureSpike`, `FinanceReportRateLimitSaturation`, `FinanceReportAsyncTaskFailures`, and `FinanceReportBackendTelemetryAbsent`. The threshold, window, severity and no-data decision for each rule are in SOP-004C of [ops.observability.md](../../../docs/ssot/ops.observability.md). |
 | `dashboard.json` | Baseline dashboard: backend error rate + latency, frontend web-vitals + exceptions. Stored in SigNoz's v5 query shape with a `layout`, and sent as the dashboard map itself (no `{"data": …}` wrapper). |
-| `shared_tasks.py` | Idempotent apply/print invoke tasks, plus the read-only `verify-alert-routing` / `verify-dashboard` and the explicit `test-alert-channel`. |
+| `shared_tasks.py` | Idempotent apply/print invoke tasks, plus the read-only `verify-alert-routing` / `verify-dashboard` and the explicit `test-alert-channel`. It only names the tasks; `common/observability/apply_tasks.py::make_observability_tasks` holds their bodies (#1825). |
 
 The catalog has one top-level `service_id` and environment. Every generated SigNoz
 rule receives the same low-cardinality `ServiceIdentity v1` labels, and log/metric
