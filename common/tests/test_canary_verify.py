@@ -1303,3 +1303,121 @@ def test_an_unknown_expected_sdk_fails_the_sdk_check() -> None:
         "production", stdout, expected_sdk="", check_sdk=False
     )
     assert skipped.sdk.ok is True
+
+
+def _with_app_peer_sections(
+    base_stdout: str,
+    *,
+    worker: str,
+    schema_check: str,
+) -> str:
+    return (
+        base_stdout
+        + "=== WORKER ===\n"
+        + f"{worker}\n"
+        + "=== SCHEMA_CHECK ===\n"
+        + f"{schema_check}\n"
+    )
+
+
+def test_app_peer_pillar_passes_on_460_and_enforces_fail_closed() -> None:
+    base = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        environment="staging",
+        sdk="4.6.0",
+    )
+    worker_ok = (
+        '{"timestamp":"2026-11-24T00:00:00Z","level":"INFO","logger":"platform-todo-worker",'
+        '"service.name":"platform-todo","message":"canary worker tick ok"}\n'
+        '{"ok":true,"status_code":200,"service":"platform/todo"}\n'
+        "__EXIT__=0"
+    )
+    schema_ok = "ROLLBACK_CLASS: A\n__EXIT__=0"
+    report_ok, _ = _verify_with_canned_ssh(
+        "staging",
+        _with_app_peer_sections(base, worker=worker_ok, schema_check=schema_ok),
+        expected_sdk="4.6.0",
+        require_app_peer=True,
+    )
+    assert report_ok.app_peer.ok is True
+    assert report_ok.all_ok is True
+
+    # Missing ROLLBACK_CLASS or non-zero schema_check exit fails closed.
+    bad_schema, _ = _verify_with_canned_ssh(
+        "staging",
+        _with_app_peer_sections(
+            base, worker=worker_ok, schema_check="DRIFT\n__EXIT__=1"
+        ),
+        expected_sdk="4.6.0",
+    )
+    assert bad_schema.app_peer.ok is False
+    assert bad_schema.all_ok is False
+    assert "schema_check exited 1" in bad_schema.app_peer.summary
+
+    # Missing init_worker log or non-zero worker exit fails closed.
+    bad_worker, _ = _verify_with_canned_ssh(
+        "staging",
+        _with_app_peer_sections(
+            base,
+            worker='{"ok":true,"status_code":200,"service":"platform/todo"}\n__EXIT__=1',
+            schema_check=schema_ok,
+        ),
+        expected_sdk="4.6.0",
+    )
+    assert bad_worker.app_peer.ok is False
+    assert "worker exited 1" in bad_worker.app_peer.summary
+    assert "log line missing" in bad_worker.app_peer.summary
+
+    # Unsupported fails on >= 4.6.0.
+    missing_460, _ = _verify_with_canned_ssh(
+        "staging",
+        _with_app_peer_sections(
+            base,
+            worker='{"status":"unsupported"}\n__EXIT__=0',
+            schema_check="UNSUPPORTED\n__EXIT__=0",
+        ),
+        expected_sdk="4.6.0",
+    )
+    assert missing_460.app_peer.ok is False
+    assert ">= 4.6.0" in missing_460.app_peer.summary
+
+
+def test_app_peer_pillar_allows_unsupported_on_pre_460_unless_required() -> None:
+    pre_base = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        environment="production",
+        sdk="4.5.0",
+    )
+    stdout = _with_app_peer_sections(
+        pre_base,
+        worker='{"status":"unsupported"}\n__EXIT__=0',
+        schema_check="UNSUPPORTED\n__EXIT__=0",
+    )
+    soft, _ = _verify_with_canned_ssh("production", stdout, expected_sdk="4.5.0")
+    assert soft.app_peer.ok is True
+    assert soft.all_ok is True
+
+    strict, _ = _verify_with_canned_ssh(
+        "production", stdout, expected_sdk="4.5.0", require_app_peer=True
+    )
+    assert strict.app_peer.ok is False
+    assert strict.all_ok is False
+
+
+def test_require_app_peer_cli_flag_forwards_to_verify_canary() -> None:
+    pass_report = CanaryRealityReport(
+        environment="staging",
+        all_ok=True,
+        tracking=PillarResult(ok=True, summary="t"),
+        logs=PillarResult(ok=True, summary="l"),
+        monitoring=PillarResult(ok=True, summary="m"),
+        alerts=PillarResult(ok=True, summary="a"),
+        installed_sdk="4.6.0",
+    )
+    with patch(
+        "common.observability.canary_verify.verify_canary", return_value=pass_report
+    ) as mock_verify:
+        assert main(["--env", "staging", "--require-app-peer"]) == 0
+    assert mock_verify.call_args.kwargs["require_app_peer"] is True

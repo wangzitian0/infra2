@@ -13,7 +13,7 @@ services:
     # Built and published by infra2-sdk release.yml from canary/todo at the same tag, so the
     # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
     # is the one reader of this line.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.5.0@sha256:7d84c0ed5185299253b35e7ab77025446d8aaeb0a692ec0d6f9b9cab4c39de9c
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.6.0@sha256:ab0676482720ee2eaf3dac8a95615cadcb888355d049f4d9e40cebc6f15f876b
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
     cpu_shares: 512
@@ -22,21 +22,25 @@ services:
     # so Dokploy never stores them.
     command: ["python", "/app/app.py"]
     x-vault: {}
-    # s3: S3_ENDPOINT. otel: OTEL_EXPORTER_OTLP_ENDPOINT, and OTEL_SERVICE_NAME and
-    # OTEL_RESOURCE_ATTRIBUTES verbatim from the deploy (TodoDeployer.telemetry_service_name,
-    # #991): the service refuses to export without that identity.
-    x-capabilities: [s3, otel]
+    # s3: S3_ENDPOINT. otel: OTEL_* from deploy identity. openpanel + browser_otel:
+    # analytics and browser OTLP configuration (#1823).
+    x-capabilities:
+      s3: {}
+      otel: {}
+      openpanel:
+        script: true
+      browser_otel: {}
     environment:
       PORT: "8000"
       ENVIRONMENT: ${ENV}
       # The Canary image has no default hosts: /api/canary/status turns red without each
-      # of REDIS_HOST, S3_ENDPOINT, SIGNOZ_OTEL_COLLECTOR, OPENPANEL_API_URL and
+      # of REDIS_HOST, S3_ENDPOINT, SIGNOZ_OTEL_COLLECTOR, OPENPANEL_HEALTH_URL and
       # AUTHENTIK_ENDPOINT (common/tests/test_todo_canary_depth.py pins the values).
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
       S3_BUCKET: platform-canary
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
-      OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck
+      OPENPANEL_HEALTH_URL: http://platform-openpanel-api:3000/healthcheck
       AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
       # The deploy issues the full infra2 SHA as INFRA_IAC_REF. The page shows its first 7 characters.
       GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}

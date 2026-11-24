@@ -136,6 +136,23 @@ def test_committed_copy_is_in_the_projection_text_form(service) -> None:
     assert sync.render(manifest) == text
 
 
+def _deployed_template(directory: Path) -> str:
+    """Return the Vault template that the deploy ships for ``directory``.
+
+    An ``x-infra2`` stack compiles ``VAULT_SECRETS_TEMPLATE`` inline into its
+    ``vault-agent`` sidecar (#1822, #1939); a plain stack mounts ``secrets.ctmpl``.
+    """
+    from common.deploy.compose_compile import has_x_infra2
+
+    compose_path = directory / "compose.yaml"
+    if has_x_infra2(compose_path.read_text(encoding="utf-8")):
+        vault_agent = compose_services(compose_path).get("vault-agent") or {}
+        inline = raw_environment(vault_agent).get("VAULT_SECRETS_TEMPLATE")
+        if inline is not None:
+            return inline.replace("$$", "$")
+    return (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("service", sync.projected_services(), ids=lambda s: s.id)
 def test_release_template_from_the_copy_equals_the_committed_template(service) -> None:
     """When the release manifests equal the copy, the release render is the committed file."""
@@ -144,7 +161,7 @@ def test_release_template_from_the_copy_equals_the_committed_template(service) -
         service.id, [("release", copy)], stack_manifest_body=copy
     )
     directory = ROOT / service.directory
-    assert template == (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+    assert template == _deployed_template(directory)
     assert policy == (directory / "vault-policy.hcl").read_text(encoding="utf-8")
 
 
@@ -222,7 +239,7 @@ def _supplied_names(directory: Path) -> set[str]:
     names: set[str] = set()
     for container in compose_services(directory / "compose.yaml").values():
         names |= set(raw_environment(container))
-    template = (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+    template = _deployed_template(directory)
     names |= set(re.findall(r"(?m)(?:^|\}\})([A-Z_][A-Z0-9_]*)=", template))
     return names
 

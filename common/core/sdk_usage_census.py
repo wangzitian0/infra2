@@ -457,6 +457,7 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
             elif isinstance(node, ast.ClassDef):
                 exports[mod].add(node.name)
                 cls_key = f"{mod}.{node.name}"
+                exports.setdefault(cls_key, set())
                 for stmt in ast.walk(node):
                     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         exports[cls_key].add(stmt.name)
@@ -640,8 +641,15 @@ def consumer_symbol_refs(
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.split(".")[0] == "infra2_sdk":
-                            bound = alias.asname or alias.name.split(".")[0]
-                            mod_alias[bound] = alias.name
+                            if alias.asname:
+                                mod_alias[alias.asname] = alias.name
+                            else:
+                                mod_alias["infra2_sdk"] = "infra2_sdk"
+                            if "." in alias.name:
+                                parent_mod, _, leaf_mod = alias.name.rpartition(".")
+                                seen_imports[(parent_mod, leaf_mod)].append(
+                                    f"{repo}:{rel}:{node.lineno}"
+                                )
 
             if not is_test and local_to_sdk:
                 to_test_locals, to_dead_locals = _enclosing_method_is_dead_or_test_only(
@@ -733,6 +741,11 @@ def check_consumer_imports(
             parent_mod = ".".join(parts[:-1])
             target_obj = parts[-1]
             if parent_mod in exports and target_obj in exports[parent_mod]:
+                is_class_or_mod = base in exports or any(
+                    mod_key.endswith(f".{target_obj}") for mod_key in exports
+                )
+                if not is_class_or_mod:
+                    return True
                 for mod_key, names in exports.items():
                     if mod_key.endswith(f".{target_obj}") and name in names:
                         return True

@@ -532,8 +532,50 @@ def test_todos_storage_sql_provisions_todo_app_role_and_table(deploy) -> None:
         "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO todo_app" in normalized
     )
     assert "GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO todo_app" in normalized
+    assert "CREATE TYPE canary_todo_capability AS ENUM" in normalized
+    for label in ("general", "postgres", "redis", "s3", "llm", "otel", "sso"):
+        assert f"'{label}'" in normalized
+        assert (
+            f"ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS '{label}'"
+            in normalized
+        )
     assert "SUPERUSER" not in normalized.replace("NOSUPERUSER", "")
     assert "default_transaction_read_only" not in normalized
+
+
+def test_todo_deployer_compose_env_base_issues_openpanel_and_browser_otel(
+    deploy,
+) -> None:
+    env = deploy.TodoDeployer.compose_env_base(
+        {"ENV": "staging", "ENV_SUFFIX": "-staging", "INTERNAL_DOMAIN": "zitian.party"}
+    )
+    assert env["OPENPANEL_CLIENT_ID"]
+    assert env["OPENPANEL_ENVIRONMENT"] == "staging"
+    assert (
+        env["NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT"]
+        == "https://otel.zitian.party/v1/traces"
+    )
+
+
+def test_todo_compose_enables_all_four_app_peer_capabilities() -> None:
+    import yaml
+    from common.deploy.compose_compile import load_stack
+
+    doc = yaml.safe_load(load_stack("platform/30.todo/compose.yaml").compiled)
+    env = doc["services"]["todo"]["environment"]
+    for key in (
+        "S3_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OPENPANEL_HEALTH_URL",
+        "OPENPANEL_CLIENT_ID",
+        "OPENPANEL_API_URL",
+        "OPENPANEL_ENVIRONMENT",
+        "OPENPANEL_SCRIPT_URL",
+        "NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT",
+        "NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT",
+        "NEXT_PUBLIC_GIT_SHA",
+    ):
+        assert key in env, key
 
 
 def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:

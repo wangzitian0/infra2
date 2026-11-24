@@ -13,6 +13,7 @@ fails loudly, so a new form cannot silently resolve to an empty string.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from pathlib import Path
 
 import yaml
@@ -20,6 +21,27 @@ import yaml
 _REFERENCE = re.compile(r"\$\{(?P<name>[A-Za-z_]\w*)(?P<default>:[-+][^${}]*)?\}")
 # A reference whose name is followed by anything but `:-` or the closing brace (`:?`, `-`, `+`...).
 _UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:[-+]|\}|[A-Za-z0-9_])")
+_OR_ENV_GROUP = re.compile(r'\bor((?:\s+\(env "[A-Za-z0-9_]+"\)){2,})')
+TEMPLATE_ENV_CALL = re.compile(r'env "([A-Za-z0-9_]+)"')
+
+
+def missing_template_envs(template: str, forwarded: Collection[str]) -> list[str]:
+    """Return env references in ``template`` not satisfied by ``forwarded``.
+
+    A Go template ``or (env "A") (env "B")`` fallback passes when at least one branch
+    is forwarded; every standalone ``env "X"`` must be forwarded directly.
+    """
+    forwarded_set = set(forwarded)
+    missing: list[str] = []
+    for match in _OR_ENV_GROUP.finditer(template):
+        branches = TEMPLATE_ENV_CALL.findall(match.group(1))
+        if not any(name in forwarded_set for name in branches):
+            missing.append("|".join(branches))
+    remainder = _OR_ENV_GROUP.sub("", template)
+    for name in sorted(set(TEMPLATE_ENV_CALL.findall(remainder))):
+        if name not in forwarded_set:
+            missing.append(name)
+    return missing
 
 
 def compose_services(compose_path: Path) -> dict[str, dict]:
