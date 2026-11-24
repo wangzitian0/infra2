@@ -88,6 +88,14 @@ def _stage_records_off_the_worktree(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_github_retry_wait(monkeypatch):
+    """A fake GitHub 5xx is sent again without the real backoff wait of ``github_api``."""
+    from common.deploy import github_api
+
+    monkeypatch.setattr(github_api, "_sleep", lambda _seconds: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_op_cli(monkeypatch):
     """Keep unit tests off the 1Password CLI of the developer shell.
 
