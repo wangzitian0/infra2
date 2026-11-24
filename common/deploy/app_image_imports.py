@@ -25,6 +25,8 @@ from pathlib import Path
 
 import yaml
 
+from common.deploy.yaml_text import safe_load_text
+
 ROOT = Path(__file__).resolve().parents[2]
 REPOS_YAML = ROOT / "harness/repos.yaml"
 
@@ -51,7 +53,7 @@ ENTRYPOINT_IMAGES = (
 
 def release_tag(repo_id: str, repos_yaml: Path = REPOS_YAML) -> str:
     """Return the `release_tag` that `harness/repos.yaml` pins for `repo_id`."""
-    data = yaml.safe_load(repos_yaml.read_text(encoding="utf-8"))
+    data = safe_load_text(yaml, repos_yaml.read_text(encoding="utf-8"))
     for repository in data["repositories"]:
         if repository["id"] == repo_id:
             return repository["release_tag"]
