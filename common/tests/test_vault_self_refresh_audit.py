@@ -880,12 +880,18 @@ def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> No
     assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
 
 
-def test_no_service_declares_an_optional_inert_field_after_llm_encryption_keys_went() -> None:
+def test_no_service_declares_an_optional_inert_field_after_llm_encryption_keys_went() -> (
+    None
+):
     """#526: LLM_ENCRYPTION_KEYS was the one optional-by-architecture field. #542: the watchlist lives as
     `optional_inert_fields` on the owning service's SecretsFacet. finance_report deleted the field (v0.2.96), so the
     watchlist is empty; the classifier below stays generic and is tested with a synthetic field."""
     by_id = {service.id: service for service in load_inventory()}
-    assert {sid: svc.optional_inert_fields for sid, svc in by_id.items() if svc.optional_inert_fields} == {}
+    assert {
+        sid: svc.optional_inert_fields
+        for sid, svc in by_id.items()
+        if svc.optional_inert_fields
+    } == {}
 
 
 def test_optional_field_inertness_classifier_reports_empty_value_as_inert() -> None:
@@ -941,7 +947,9 @@ def test_audit_from_observations_reports_inert_field_without_failing_audit() -> 
 
     #531: `_service()` is auth_method="approle" in the real inventory.
     """
-    service = dataclasses.replace(_service(), optional_inert_fields=("EXAMPLE_OPTIONAL_KEY",))
+    service = dataclasses.replace(
+        _service(), optional_inert_fields=("EXAMPLE_OPTIONAL_KEY",)
+    )
     report = audit_from_observations(
         [service],
         {

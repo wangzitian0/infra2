@@ -56,7 +56,11 @@ def test_absorbed_constants_equivalence() -> None:
     assert exempt_elsewhere == {}
 
     # finance_report deleted LLM_ENCRYPTION_KEYS (v0.2.96): no service declares an optional inert field now.
-    inert = {sid: svc.optional_inert_fields for sid, svc in by_id.items() if svc.optional_inert_fields}
+    inert = {
+        sid: svc.optional_inert_fields
+        for sid, svc in by_id.items()
+        if svc.optional_inert_fields
+    }
     assert inert == {}
 
 
