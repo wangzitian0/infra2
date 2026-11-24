@@ -6,6 +6,8 @@ import functools
 from pathlib import Path
 from types import SimpleNamespace
 
+import base64
+
 import pytest
 
 from common.deploy import promote as dp
@@ -38,6 +40,7 @@ class FakeDokploy:
         self.replace_flags: list[bool] = []
         self.deployed: list[str] = []
         self.branch_updates: list[tuple[str, str]] = []
+        self.source_updates: list[tuple[str, dict]] = []
         # list, or callable(self) -> list, used by wait_for_rollout's rollout poll.
         self._deployments = deployments
         # str/callable override for get_compose_env; if None, reflect the last push.
@@ -46,6 +49,7 @@ class FakeDokploy:
     def update_compose(self, compose_id, **kwargs):
         if "branch" in kwargs:
             self.branch_updates.append((compose_id, kwargs["branch"]))
+        self.source_updates.append((compose_id, dict(kwargs)))
         return {}
 
     def update_compose_env(
@@ -94,8 +98,8 @@ class FakeDokploy:
 def healthy_host() -> list[dict]:
     """docker.getContainers as a healthy host answers it, for every registered app
     compose in both fixed environments."""
-    from pathlib import Path
 
+    from common.deploy.compose_compile import load_stack
     from common.deploy.in_service import expected_running_containers
     from common.core.registry import service_attrs
 
@@ -103,7 +107,8 @@ def healthy_host() -> list[dict]:
     for meta in service_attrs().values():
         if not meta.compose_path or "/10.app/" not in meta.compose_path:
             continue
-        text = Path(meta.compose_path).read_text(encoding="utf-8")
+        # The compiled text holds the vault-agent sidecar of an x-infra2 stack (#1822).
+        text = load_stack(meta.compose_path).compiled
         for suffix in ("", "-staging"):
             for name in expected_running_containers(text, suffix).values():
                 rows.append(
@@ -114,6 +119,11 @@ def healthy_host() -> list[dict]:
                     }
                 )
     return rows
+
+
+# The fake infra2 ref that most tests below pass as iac_ref reads the working tree.
+FAKE_IAC_REF = "b" * 40
+pytestmark = pytest.mark.usefixtures("fake_iac_ref_reads_the_working_tree")
 
 
 @pytest.fixture(autouse=True)
@@ -197,11 +207,25 @@ def test_fixed_finance_report_backend_health_budget_covers_cold_start():
     )
 
 
-def test_branch_is_reasserted_on_every_deploy_when_given():
+def _plain_app_stack(monkeypatch, compose_path: str) -> None:
+    """Point finance_report/app at a plain (non x-infra2) compose file."""
+    import dataclasses
+
+    import common.core.registry as registry
+
+    fake = dict(registry.service_attrs())
+    fake["finance_report/app"] = dataclasses.replace(
+        fake["finance_report/app"], compose_path=compose_path
+    )
+    monkeypatch.setattr(registry, "service_attrs", lambda: fake)
+
+
+def test_branch_is_reasserted_on_every_deploy_when_given(monkeypatch):
     # truealpha#447 root cause: a fixed compose's Dokploy github-source ref is whatever
     # it was set to at creation and never advances on its own — deploy_v2's iac_ref was
     # validated/recorded but never reached the actual git source Dokploy clones. branch
-    # must be re-asserted on every call, mirroring common.deploy.preview.up.
+    # must be re-asserted on every call for a plain (github) stack.
+    _plain_app_stack(monkeypatch, "finance_report/finance_report/preview/compose.yaml")
     client = FakeDokploy()
     dp.deploy(
         "staging",
@@ -209,12 +233,23 @@ def test_branch_is_reasserted_on_every_deploy_when_given():
         options=PromoteOptions(iac_ref="b" * 40, branch="v1.1.38"),
         deps=PromoteDeps(client=client, domain="zitian.party"),
     )
-    assert client.branch_updates == [("A6V-hbJlgHMwgPDoTDnhH", "v1.1.38")]
+    assert client.source_updates == [
+        (
+            "A6V-hbJlgHMwgPDoTDnhH",
+            {
+                "source_type": "github",
+                "repository": "infra2",
+                "owner": "wangzitian0",
+                "composePath": "finance_report/finance_report/preview/compose.yaml",
+                "branch": "v1.1.38",
+            },
+        )
+    ]
 
 
-def test_branch_omitted_leaves_the_composes_source_untouched():
-    # Backward compatible: a caller (or test) that doesn't care about the source ref
-    # gets exactly today's behavior — no update_compose call at all.
+def test_branch_omitted_leaves_a_plain_composes_source_untouched(monkeypatch):
+    # A plain stack without a branch: no update_compose call at all.
+    _plain_app_stack(monkeypatch, "finance_report/finance_report/preview/compose.yaml")
     client = FakeDokploy()
     dp.deploy(
         "staging",
@@ -222,7 +257,198 @@ def test_branch_omitted_leaves_the_composes_source_untouched():
         options=PromoteOptions(iac_ref="b" * 40),
         deps=PromoteDeps(client=client, domain="zitian.party"),
     )
+    assert client.source_updates == []
+
+
+@pytest.mark.parametrize(
+    ("service", "compose_id", "compose_path"),
+    [
+        (
+            "finance_report/app",
+            "A6V-hbJlgHMwgPDoTDnhH",
+            "finance_report/finance_report/10.app/compose.yaml",
+        ),
+        (
+            "truealpha/app",
+            "w4zo_fm9d2PnUY8ULzNO7",
+            "truealpha/truealpha/10.app/compose.yaml",
+        ),
+    ],
+)
+@pytest.mark.parametrize("branch", [None, "v1.1.38"])
+def test_an_x_infra2_app_stack_uploads_its_compiled_text_as_raw(
+    service, compose_id, compose_path, branch
+):
+    """#1822 Slice 3: Dokploy has no checkout to compile, so the promote uploads the
+    compiled text as sourceType=raw before the deploy. The git branch does not apply."""
+    from common.deploy.compose_compile import load_stack
+
+    client = FakeDokploy()
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        options=PromoteOptions(service=service, iac_ref="b" * 40, branch=branch),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
+    )
+    compiled = load_stack(compose_path).compiled
+    assert "vault-agent:" in compiled and "x-infra2" not in compiled
+    assert client.source_updates == [
+        (
+            compose_id,
+            {
+                "compose_file": compiled,
+                "source_type": "raw",
+                "autoDeploy": False,
+                "composePath": "./docker-compose.yml",
+            },
+        )
+    ]
     assert client.branch_updates == []
+    assert client.deployed == [compose_id]
+
+
+TAG_SHA = "c" * 40
+
+
+def test_the_deployed_compose_is_the_stack_file_at_iac_ref_not_the_checkout(
+    monkeypatch,
+):
+    """Deploy provenance (#1822 Slice 3): a production promote runs from main with the
+    approved tag as iac_ref. The raw upload must compile the tag's file, not main's."""
+    import common.deploy.config_drift as config_drift
+
+    path = "finance_report/finance_report/10.app/compose.yaml"
+    root = Path(__file__).parents[2]
+    checkout = (root / path).read_text(encoding="utf-8")
+    marker = "      DEBUG: ${DEBUG:-false}\n"
+    assert marker in checkout
+    at_tag = checkout.replace(marker, "      DEBUG: at-the-tag\n", 1)
+    real = config_drift.contents_at_ref
+
+    def contents_at_ref(ref, paths):
+        if ref != TAG_SHA:
+            return real(ref, paths)
+        out = {p: (root / p).read_bytes() for p in paths if (root / p).is_file()}
+        if path in out:
+            out[path] = at_tag.encode()
+        return out
+
+    monkeypatch.setattr(config_drift, "contents_at_ref", contents_at_ref)
+    client = FakeDokploy()
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        options=PromoteOptions(iac_ref=TAG_SHA),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
+    )
+    uploaded = client.source_updates[0][1]["compose_file"]
+    assert "DEBUG: at-the-tag" in uploaded
+    assert "${DEBUG:-false}" not in uploaded
+
+
+def test_a_plain_stack_file_at_iac_ref_keeps_the_github_branch(monkeypatch):
+    """A promote of a tag from before the move (for example a rollback) runs that tag's
+    plain file: the record goes back to the GitHub source at the tag, with no raw text."""
+    import common.deploy.config_drift as config_drift
+
+    path = "finance_report/finance_report/10.app/compose.yaml"
+    plain = "services:\n  backend:\n    image: x\n"
+    real = config_drift.contents_at_ref
+    monkeypatch.setattr(
+        config_drift,
+        "contents_at_ref",
+        lambda ref, paths: (
+            {path: plain.encode()} if ref == "v0.0.1" else real(ref, paths)
+        ),
+    )
+    assert dp.rollout_source_fields(
+        "finance_report/app", branch="v0.0.1", iac_ref="v0.0.1"
+    ) == {
+        "source_type": "github",
+        "repository": "infra2",
+        "owner": "wangzitian0",
+        "composePath": path,
+        "branch": "v0.0.1",
+    }
+
+
+def test_a_release_template_without_a_compiled_sidecar_stops_the_deploy(monkeypatch):
+    import common.deploy.config_drift as config_drift
+
+    path = "finance_report/finance_report/10.app/compose.yaml"
+    no_vault = (
+        "x-infra2: {}\nservices:\n  frontend:\n    image: x\n"
+        "    container_name: finance_report-frontend${ENV_SUFFIX}\n"
+    )
+    real = config_drift.contents_at_ref
+
+    def contents_at_ref(ref, paths):
+        out = real("HEAD", paths) if ref == "v0.0.2" else real(ref, paths)
+        if ref == "v0.0.2" and path in paths:
+            out[path] = no_vault.encode()
+        return out
+
+    monkeypatch.setattr(config_drift, "contents_at_ref", contents_at_ref)
+    monkeypatch.setenv("VAULT_SECRETS_TEMPLATE", base64.b64encode(b"K=1\n").decode())
+    with pytest.raises(dp.ReleaseTemplateMismatch, match="no x-infra2.vault sidecar"):
+        dp.rollout_source_fields("finance_report/app", branch=None, iac_ref="v0.0.2")
+
+
+def _release_template(service: str) -> str:
+    from common.deploy.compose_compile import vault_template_for
+
+    project = service.split("/")[0]
+    path = f"{project}/{project}/10.app/compose.yaml"
+    text = (Path(__file__).parents[2] / path).read_text(encoding="utf-8")
+    template = vault_template_for(path, text)
+    assert template
+    return template
+
+
+def test_an_equal_release_template_deploys_the_compiled_stack(monkeypatch):
+    template = _release_template("finance_report/app")
+    monkeypatch.setenv(
+        "VAULT_SECRETS_TEMPLATE", base64.b64encode(template.encode()).decode()
+    )
+    client = FakeDokploy()
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        options=PromoteOptions(iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
+    )
+    assert client.source_updates[0][1]["source_type"] == "raw"
+    assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        # A release that adds a Vault field the infra2 manifest copy does not have.
+        lambda t: base64.b64encode((t + "EXTRA=1\n").encode()).decode(),
+        # Not base64.
+        lambda t: "%%% not base64 %%%",
+    ],
+    ids=["template-differs", "not-base64"],
+)
+@pytest.mark.parametrize("service", ["finance_report/app", "truealpha/app"])
+def test_a_release_template_mismatch_stops_before_any_dokploy_write(
+    monkeypatch, service, injected
+):
+    """The compiled sidecar embeds its template and ignores VAULT_SECRETS_TEMPLATE, so a
+    release template that differs must stop the deploy before Dokploy is touched."""
+    monkeypatch.setenv("VAULT_SECRETS_TEMPLATE", injected(_release_template(service)))
+    client = FakeDokploy()
+    with pytest.raises(dp.ReleaseTemplateMismatch):
+        dp.deploy(
+            "staging",
+            FULL_SHA,
+            options=PromoteOptions(service=service, iac_ref="b" * 40),
+            deps=PromoteDeps(client=client, domain="zitian.party"),
+        )
+    assert client.source_updates == []
+    assert client.updated == []
+    assert client.deployed == []
 
 
 def test_truealpha_staging_deploy_resolves_its_own_compose_and_identity():

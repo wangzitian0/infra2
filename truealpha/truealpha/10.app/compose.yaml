@@ -1,76 +1,24 @@
-# TrueAlpha app (web + llm): hand-written file in the compiled x-infra2 shape (#1822 Slice 3,
-# step A). Deploy: deploy_v2(service="truealpha/app") -> common.deploy.promote, with the
-# image tag ${IMAGE_TAG} that the truealpha repo CI pushes to GHCR.
-# llm and web equal their compiled x-vault services: the SDK wait entrypoint exports
-# /secrets/.env, then runs `command`. The llm command applies db/migrations before uvicorn
-# starts, and stops on a migration failure.
-# The vault-agent sidecar keeps its mounted config and template; the promote path can set
-# VAULT_SECRETS_TEMPLATE (base64 of the release template), which the entrypoint decodes.
-# The next step swaps only the sidecar to the compiled one.
+# TrueAlpha Application (web + llm)
+#
+# v2 deploy model: fixed-compose promotion via deploy_v2(service="truealpha/app", ...)
+# -> common.deploy.promote. Images are built and pushed to GHCR by the truealpha app
+# repo's CI; Dokploy compose pulls pinned ${IMAGE_TAG}. Fast-swap short promote enabled
+# on staging.
+#
+# The app repo owns the DB schema DDL (db/migrations, idempotent SQL) — see
+# ../01.postgres/README.md for the bootstrap command.
+#
+# The deploy compiles this file with infra2-sdk `compile_compose` (#1822 Slice 3) and
+# uploads the compiled text as Dokploy sourceType=raw. To read the compiled text:
+#   python -m tools.compose_compile print truealpha/truealpha/10.app/compose.yaml
+x-infra2:
+  # One vault-agent sidecar, container truealpha-app-vault-agent${ENV_SUFFIX}. Its
+  # template is rendered from env.manifest.json (common.security.secrets_render). The
+  # deploy stops when the release template differs (common.deploy.promote).
+  vault:
+    name: truealpha-app
+
 services:
-  vault-agent:
-    init: true
-    image: hashicorp/vault:1.15
-    container_name: truealpha-app-vault-agent${ENV_SUFFIX}
-    restart: always
-    mem_limit: 128m
-    cpu_shares: 256
-    entrypoint:
-    - sh
-    - -c
-    - |
-      rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
-      if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
-        echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
-        exit 1
-      fi
-      if [ -z "$$VAULT_ADDR" ]; then
-        echo "VAULT_ADDR is required"
-        exit 1
-      fi
-      echo "$$VAULT_ROLE_ID" > /vault/role_id
-      echo "$$VAULT_SECRET_ID" > /vault/secret_id
-      if [ -n "$$VAULT_SECRETS_TEMPLATE" ]; then
-        printf '%s' "$$VAULT_SECRETS_TEMPLATE" | base64 -d > /vault/secrets.ctmpl && [ -s /vault/secrets.ctmpl ] || { echo "CRITICAL: invalid VAULT_SECRETS_TEMPLATE"; exit 1; }
-        sed 's|/etc/vault/secrets.ctmpl|/vault/secrets.ctmpl|g' /etc/vault/vault-agent.hcl > /vault/vault-agent.hcl
-        exec vault agent -config=/vault/vault-agent.hcl
-      fi
-      # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
-      # natively. No token_file decay, no manual renew loop.
-      exec vault agent -config=/etc/vault/vault-agent.hcl
-    environment:
-      VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
-      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
-      ENV: ${ENV}
-      ENV_SUFFIX: ${ENV_SUFFIX:-}
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - |
-        test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
-        # vault token lookup THROTTLED to ~5min (token TTL is hours) — no 30s hammer (#292)
-        if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
-          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
-          touch /tmp/.vault_hc
-        fi
-      interval: 30s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-    volumes:
-    - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
-    - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
-    - secrets:/vault/secrets
-    logging:
-      driver: json-file
-      options:
-        max-size: 5m
-        max-file: '2'
-    networks:
-    - dokploy-network
   llm:
     image: ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:?IMAGE_TAG must be set}
     pull_policy: always
@@ -81,80 +29,87 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: 5m
-        max-file: '2'
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       vault-agent:
         condition: service_healthy
+    # x-vault waits for /secrets/.env, exports it, then runs this command.
+    x-vault: {}
     command:
-    - sh
-    - -c
-    - |
-      # Apply db/migrations/*.sql + db/roles.sql (baked into the image, #428) against
-      # this env's DATABASE_URL before serving. Idempotent SQL, safe on every boot.
-      # A separate line (no &&) would let a migration failure silently fall through
-      # to `exec uvicorn` anyway — explicit exit so a broken schema fails closed.
-      sh ./db/apply_migrations.sh || exit 1
-      exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
+      - sh
+      - -c
+      - |
+        # Apply db/migrations/*.sql + db/roles.sql (baked into the image, #428) against
+        # this env's DATABASE_URL before serving. Idempotent SQL, safe on every boot.
+        # A separate line (no &&) would let a migration failure silently fall through
+        # to `exec uvicorn` anyway — explicit exit so a broken schema fails closed.
+        sh ./db/apply_migrations.sh || exit 1
+        exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
     environment:
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
+      # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
+      # only human / runtime values, so the deployment states these here.
       ENVIRONMENT: ${ENV}
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
+      # Telemetry (infra2#906, docs/ssot/ops.observability.md 4.2). The endpoint is the ONE
+      # shared collector: no ${ENV_SUFFIX}, reachable only on dokploy-network. Identity is
+      # issued by the deployment (common.service_identity, every deploy path), never defaulted
+      # here: the service refuses to start when export is on without it, and the issued
+      # value is what separates production / staging / pr-<N> in SigNoz. llm is the only
+      # service that gets these -- web is Node with no OTel SDK, and one compose-level
+      # OTEL_SERVICE_NAME cannot name two services (finance_report's backend-only precedent).
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     healthcheck:
-      test:
-      - CMD
-      - python
-      - -c
-      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)
+      # python stdlib probe: the uv-based slim image ships no curl/wget.
+      # 127.0.0.1, not localhost: alpine/slim images often resolve localhost to
+      # ::1 first, and the server only listens on IPv4 -> spurious refused conns.
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
+      # The entrypoint applies the schema before it serves (db/apply_migrations.sh).
+      # The replay took 22 s to 27 s of the boot, and a busy host made one boot 69 s
+      # (truealpha#1513). Docker counts no failed check inside the start period.
+      # 120 s is the start period that infra2_sdk.scaffold gives an app with a Vault
+      # sidecar. common/tests/test_truealpha_app.py reads that value from the SDK.
       start_period: 120s
       start_interval: 2s
       interval: 10s
       retries: 3
       timeout: 5s
     volumes:
-    - secrets:/secrets:ro
+      - secrets:/secrets:ro
     networks:
-    - dokploy-network
+      - dokploy-network
     labels:
-    - traefik.enable=true
-    - traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`) && (PathPrefix(`/api/mcp`) || Path(`/api/health`))
-    - traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure
-    - traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt
-    - traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}
-    - traefik.http.services.truealpha-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000
-    - traefik.http.middlewares.truealpha-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api
-    - traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.middlewares=truealpha-api-strip${ENV_DOMAIN_SUFFIX}@docker
-    - traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`) && PathPrefix(`/api/v1`)
-    - traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.entrypoints=websecure
-    - traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt
-    - traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}
-    - traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.priority=20
-    entrypoint:
-    - sh
-    - -c
-    - |
-      set -e
-      waited=0
-      max_wait="300"
-      while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
-        echo "Waiting for secrets file..."
-        sleep 2
-        waited=$$((waited + 2))
-      done
-      if [ ! -s /secrets/.env ]; then
-        echo "ERROR: /secrets/.env is missing or empty"
-        exit 1
-      fi
-      set -a
-      . /secrets/.env
-      set +a
-      exec "$$@"
-    - --
+      - "traefik.enable=true"
+      # Scoped to exactly what this FastAPI app serves (main.py: GET /health, and
+      # the MCP app mounted at /mcp) -- NOT a bare PathPrefix(`/api`). The web
+      # service's own Next.js API routes (/api/auth/login, /api/auth/me, ...) live
+      # under the same /api prefix on the same Host, and a bare PathPrefix(`/api`)
+      # here claims those too, silently 404ing them at llm instead of ever reaching
+      # web (truealpha#463 -- login was broken on both envs for this exact reason).
+      # Host uses ${APP_HOST} (deploy.py-computed), not the literal
+      # truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} pattern -- that pattern
+      # collapsed to the malformed truealpha.truealpha.club in production, since
+      # INTERNAL_DOMAIN is already truealpha.club here (see truealpha#474).
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`) && (PathPrefix(`/api/mcp`) || Path(`/api/health`))"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.truealpha-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000"
+      # Strip /api prefix before forwarding to the llm-service
+      - "traefik.http.middlewares.truealpha-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.middlewares=truealpha-api-strip${ENV_DOMAIN_SUFFIX}@docker"
+      # Route /api/v1/* directly to FastAPI OpenAPI v1 handlers without stripping /api (truealpha#1716).
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`) && PathPrefix(`/api/v1`)"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.priority=20"
+
   web:
     image: ghcr.io/wangzitian0/truealpha-app-web:${IMAGE_TAG:?IMAGE_TAG must be set}
     pull_policy: always
@@ -165,18 +120,27 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: 5m
-        max-file: '2'
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       vault-agent:
         condition: service_healthy
+    # The web app reads the mart schema directly (truealpha init.md rule 5):
+    # DATABASE_URL comes from Vault like the llm-service's, no API hop.
+    x-vault: {}
     command:
-    - node
-    - server.js
+      - node
+      - server.js
     environment:
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      # Cache-bust (the deploy sets CONFIGURATION_SHA256): without this,
+      # web is never recreated on a same-tag promote deploy (GIT_COMMIT_SHA alone
+      # doesn't change between two deploys of the same release).
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
+      # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
+      # only human / runtime values, so the deployment states these here.
       ENVIRONMENT: ${ENV}
+      # The app-web origin resolver reads it (truealpha v0.2.132); no fixed host.
       LLM_SERVICE_URL: http://truealpha-llm${ENV_SUFFIX}:8000
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
@@ -185,61 +149,40 @@ services:
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-${ENV}}
       HOSTNAME: 0.0.0.0
-      PORT: '3000'
+      PORT: "3000"
     healthcheck:
-      test:
-      - CMD
-      - wget
-      - -q
-      - -T
-      - '3'
-      - -O
-      - /dev/null
-      - http://127.0.0.1:3000
+      # busybox wget ships with the alpine runtime image. 127.0.0.1, not
+      # localhost: busybox wget doesn't fall back across address families, and
+      # alpine resolves localhost to ::1 first while node only listens on IPv4.
+      test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:3000" ]
       start_period: 30s
       start_interval: 2s
       interval: 30s
       retries: 5
       timeout: 10s
     volumes:
-    - secrets:/secrets:ro
+      - secrets:/secrets:ro
     networks:
-    - dokploy-network
+      - dokploy-network
     labels:
-    - traefik.enable=true
-    - traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`)
-    - traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.entrypoints=websecure
-    - traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt
-    - traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.service=truealpha-web${ENV_DOMAIN_SUFFIX}
-    - traefik.http.services.truealpha-web${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000
-    - traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.priority=1
-    entrypoint:
-    - sh
-    - -c
-    - |
-      set -e
-      waited=0
-      max_wait="300"
-      while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
-        echo "Waiting for secrets file..."
-        sleep 2
-        waited=$$((waited + 2))
-      done
-      if [ ! -s /secrets/.env ]; then
-        echo "ERROR: /secrets/.env is missing or empty"
-        exit 1
-      fi
-      set -a
-      . /secrets/.env
-      set +a
-      exec "$$@"
-    - --
+      - "traefik.enable=true"
+      # See the llm router's comment above (truealpha#474) -- ${APP_HOST}, not the
+      # literal truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} pattern.
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`)"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.service=truealpha-web${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.truealpha-web${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000"
+      # Lower priority than the /api route
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.priority=1"
+
 volumes:
   secrets:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: size=10m,mode=0755
+      o: "size=10m,mode=0755"
+
 networks:
   dokploy-network:
     external: true

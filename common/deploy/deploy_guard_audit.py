@@ -53,9 +53,9 @@ _COMPOSE_GLOB = "*compose*.y*ml"
 _SERVICE_ROOT_FLOORS: dict[str, tuple[int, int]] = {
     "platform": (13, 350),
     # finance_report and truealpha read fewer inputs since #1822 Slice 3: an x-infra2
-    # stack has no mounted secrets.ctmpl or vault-agent.hcl.
-    "finance_report": (4, 4),
-    "truealpha": (4, 7),
+    # stack has no mounted secrets.ctmpl or vault-agent.hcl (data stores, then 10.app).
+    "finance_report": (4, 2),
+    "truealpha": (4, 5),
     "bootstrap": (4, 12),
 }
 

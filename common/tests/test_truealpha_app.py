@@ -322,6 +322,8 @@ def test_composing_preserves_last_promoted_image_tag_without_resetting_to_latest
         lambda *a, **kw: client,
     )
     monkeypatch.setattr(dokploy_adapter, "upsert_github_compose", fake_upsert)
+    # The x-infra2 stack uploads its compiled text as raw (#1822 Slice 3).
+    monkeypatch.setattr(dokploy_adapter, "upsert_raw_compose", fake_upsert)
     monkeypatch.setattr(
         deployer, "_assert_approle_creds_present", classmethod(lambda cls, e: None)
     )

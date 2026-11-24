@@ -20,6 +20,8 @@ effective-config verification.
 from __future__ import annotations
 
 from collections.abc import Callable, Collection
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -48,6 +50,7 @@ from common.deploy.dokploy_adapter import (
     await_effective_config_hash,
     deployment_ids as _deployment_ids,
     format_deployment_error_details,
+    raw_source_fields,
     read_deployment_log_tail,
     started_before_trigger,
 )
@@ -636,6 +639,108 @@ def _notify_rollback_event(
         warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
 
 
+class ReleaseTemplateMismatch(ValueError):
+    """The compiled Vault template of an x-infra2 app stack is not the release template."""
+
+
+def rollout_source_fields(
+    service: str, *, branch: str | None, iac_ref: str = ""
+) -> dict[str, Any]:
+    """The ``compose.update`` fields that set the source this promote runs (#1822).
+
+    The stack file is read at ``iac_ref`` (the checked-out ``HEAD`` when empty), never
+    from the working tree: a production promote runs from ``main`` with the approved
+    tag as ``iac_ref``, and the deploy must run that tag's compose (deploy provenance).
+
+    A plain stack at ``iac_ref`` uses the GitHub source: with ``branch``, the record is
+    set to ``sourceType=github``, its compose path and ``branch`` (a raw record goes back
+    to GitHub); without ``branch``, the record is not changed. An ``x-infra2`` stack at ``iac_ref`` runs its compiled text as
+    ``sourceType=raw``. ``config_drift.compiled_at_ref`` compiles it with the manifests
+    at ``iac_ref``, and stops when ``iac_ref`` pins another infra2-sdk than this process
+    runs. ``branch`` does not apply.
+
+    The compiled vault-agent sidecar embeds its template. The deploy path renders the
+    release template from the app release manifests and exports it as
+    ``VAULT_SECRETS_TEMPLATE`` (base64). A compiled sidecar ignores that variable, so
+    the deploy stops when the release template differs from the compiled one (the
+    ``infra2.vault.template.sha256`` label). Every other reader (config hash, config
+    drift, Vault audit label) reads the compiled template, so the release cannot run a
+    template that they do not see.
+    """
+    from common.core.registry import service_attrs
+    from common.deploy.compose_compile import (
+        ComposeSourceError,
+        StackCompose,
+        has_x_infra2,
+        vault_template_label,
+    )
+    from common.deploy.config_drift import compiled_at_ref, contents_at_ref
+
+    meta = service_attrs().get(service)
+    if not meta or not meta.compose_path:
+        return {"branch": branch} if branch else {}
+    ref = iac_ref.strip() or "HEAD"
+    found = contents_at_ref(ref, [meta.compose_path]).get(meta.compose_path)
+    if found is None:
+        raise ComposeSourceError(
+            f"{service}: {meta.compose_path} is absent at infra2 ref {ref!r}"
+        )
+    text = found.decode("utf-8")
+    if not has_x_infra2(text):
+        if not branch:
+            return {}
+        # The record can be raw from a later x-infra2 deploy (a promote of an older
+        # tag, for example a rollback). Set the GitHub source again, as
+        # Deployer.composing (upsert_github_compose) wrote it; Dokploy keeps githubId.
+        from common.core.constants import GITHUB_OWNER, GITHUB_REPO
+
+        return {
+            "source_type": "github",
+            "repository": GITHUB_REPO,
+            "owner": GITHUB_OWNER,
+            "composePath": meta.compose_path,
+            "branch": branch,
+        }
+    try:
+        compiled = compiled_at_ref(meta.compose_path, text, ref)
+    except ComposeSourceError as exc:
+        raise ComposeSourceError(
+            f"{service}: cannot compile {meta.compose_path} at infra2 ref {ref!r}: "
+            f"{exc}. Dispatch the deploy from that ref, or cut a new infra2 release "
+            "and deploy it"
+        ) from exc
+    stack = StackCompose(source=text, compiled=compiled, x_infra2=True)
+    # Raises ComposeSourceError when the compiled stack is not raw-eligible.
+    stack.source_type
+    compiled_label = vault_template_label(stack.compiled)
+    injected = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
+    if injected:
+        try:
+            release = base64.b64decode(injected, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ReleaseTemplateMismatch(
+                f"{service}: VAULT_SECRETS_TEMPLATE is not base64 UTF-8 text: {exc}"
+            ) from None
+        if not compiled_label:
+            raise ReleaseTemplateMismatch(
+                f"{service}: the release has a Vault template, but the compiled stack "
+                f"{meta.compose_path}@{ref} has no x-infra2.vault sidecar"
+            )
+        if _sha256(release) != compiled_label:
+            raise ReleaseTemplateMismatch(
+                f"{service}: the compiled Vault template of {meta.compose_path}@{ref} "
+                f"(sha256 {compiled_label[:12]}) differs from the release template "
+                f"(sha256 {_sha256(release)[:12]}). Regenerate the stack "
+                "env.manifest.json from the release tag (tools/app_manifest_sync.py "
+                "--write), merge, cut an infra2 release, then deploy again"
+            )
+    return raw_source_fields(stack.compiled)
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _build_deploy_env_vars(
     service: str,
     env: str,
@@ -825,6 +930,7 @@ def _execute_dokploy_rollout(
     rollback_class: str | None,
     opt: PromoteOptions,
     dep: PromoteDeps,
+    source_fields: dict[str, Any],
 ) -> None:
     """Execute Dokploy compose deployment under compose write lock."""
     with compose_write_lock(compose_id):
@@ -846,8 +952,8 @@ def _execute_dokploy_rollout(
             if opt.wait
             else set()
         )
-        if opt.branch:
-            client.update_compose(compose_id, branch=opt.branch)
+        if source_fields:
+            client.update_compose(compose_id, **source_fields)
         client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
         try:
             trigger_epoch = time.time()
@@ -973,6 +1079,12 @@ def deploy(
     else:
         config_hash = f"deploy-{image_tag}-{int(now_fn() * 1000)}"
 
+    # Before any Dokploy write: compile an x-infra2 stack at iac_ref and stop on a
+    # template mismatch.
+    source_fields = rollout_source_fields(
+        opt.service, branch=opt.branch, iac_ref=opt.iac_ref
+    )
+
     env_vars, identity = _build_deploy_env_vars(
         service=opt.service,
         env=env,
@@ -997,6 +1109,7 @@ def deploy(
         rollback_class=rollback_class,
         opt=opt,
         dep=dep,
+        source_fields=source_fields,
     )
 
     return DeployPlan(

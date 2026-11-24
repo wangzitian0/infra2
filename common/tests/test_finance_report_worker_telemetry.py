@@ -12,6 +12,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from common.deploy import promote as dp
 from common.deploy.promote import PromoteDeps, PromoteOptions
 from common.deploy.contract import SERVICES
@@ -25,6 +27,9 @@ from common.tests.test_deploy_primitive import (
     _stub_schema_gate,  # noqa: F401  fixture: no SSH in deploy()
     _stub_secret_provisioning,  # noqa: F401  fixture: no Vault in deploy()
 )
+
+# promote reads the stack file at iac_ref; the fake ref reads the working tree (#1822).
+pytestmark = pytest.mark.usefixtures("fake_iac_ref_reads_the_working_tree")
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = "finance-report-worker"

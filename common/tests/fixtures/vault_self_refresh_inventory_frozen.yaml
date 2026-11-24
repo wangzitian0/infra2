@@ -168,8 +168,9 @@ services:
     # VAULT_APP_TOKEN.
     auth_method: approle
     compose_path: finance_report/finance_report/10.app/compose.yaml
-    vault_agent_config_path: finance_report/finance_report/10.app/vault-agent.hcl
-    secret_template_path: finance_report/finance_report/10.app/secrets.ctmpl
+    # x-infra2 since infra2#1822 Slice 3: the compiled compose holds the agent config and template.
+    vault_agent_config_path: finance_report/finance_report/10.app/compose.yaml
+    secret_template_path: finance_report/finance_report/10.app/compose.yaml
     vault_path_template: secret/data/finance_report/{env}/app
     vault_agent_container: finance_report-app-vault-agent${ENV_SUFFIX}
     app_containers:
@@ -209,8 +210,9 @@ services:
     # AppRole auth from day one (same model as finance_report post-#257/#259).
     auth_method: approle
     compose_path: truealpha/truealpha/10.app/compose.yaml
-    vault_agent_config_path: truealpha/truealpha/10.app/vault-agent.hcl
-    secret_template_path: truealpha/truealpha/10.app/secrets.ctmpl
+    # x-infra2 since infra2#1822 Slice 3: the compiled compose holds the agent config and template.
+    vault_agent_config_path: truealpha/truealpha/10.app/compose.yaml
+    secret_template_path: truealpha/truealpha/10.app/compose.yaml
     vault_path_template: secret/data/truealpha/{env}/app
     vault_agent_container: truealpha-app-vault-agent${ENV_SUFFIX}
     app_containers:
