@@ -1,87 +1,55 @@
-"""The iac-runner imports only infra2-sdk names that its own SDK has (#1610).
+"""The iac-runner imports only infra2-sdk names that its own SDK has (#1610, #1863).
 
-The runner image installs infra2-sdk from uv.lock when it is built. A rebuild is
-a production change, so the SDK in the image can be older than the pin of main.
-Run 43012402667 (v3.1.50) failed: the image held 3.23.0 and `dokploy_client`
-imported `request_with_retry` from 3.27.0. `invoke <service>.sync` loads the
+The runner image installs infra2-sdk from uv.lock when it is built. Since #1863 a change
+of uv.lock or of tools/sdk_requirement*.py rebuilds the image, so the SDK of the runner is the
+SDK that uv.lock pins. Run 43012402667 (v3.1.50) failed when the image held 3.23.0 and
+`dokploy_client` imported `request_with_retry` from 3.27.0: `invoke <service>.sync` loads the
 whole task collection, so one bad import failed every service.
 
-This test loads that collection the way the runner does, follows each repo
-import of the loaded modules (function-level imports included, #1853), and lists
-the infra2_sdk names that those files import. Each name must be in
-RUNNER_SDK_NAMES. An entry needs a check against the runner wheel
-(`pip install infra2-sdk==<RUNNER_SDK>`); the production run that rebuilds the
-runner raises RUNNER_SDK and may add names.
+This test loads that collection the way the runner does, follows each repo import of the
+loaded modules (function-level imports included, #1853), and lists the infra2_sdk names that
+those files import. Each name must exist in the installed wheel, and the installed wheel must
+be the one uv.lock pins. No list of names is kept here: a list pinned old names (4.0.0) while
+uv.lock moved to 4.4.0.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib
+import importlib.metadata
 import json
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNNER_SDK = "4.0.0"
-RUNNER_SDK_NAMES = frozenset(
-    {
-        ("infra2_sdk.ci", "parse_github_time"),
-        # infra2#1822: secrets_render, reached by compose_compile.vault_template_for.
-        # Checked in the 4.0.0 wheel of uv.lock (also present in 3.23.0).
-        ("infra2_sdk.ci", "validate_manifest_offline"),
-        ("infra2_sdk.deploy", "canonical_json_bytes"),
-        ("infra2_sdk.observability", "CheckVerdict"),
-        ("infra2_sdk.observability", "ConsecutiveObservationState"),
-        ("infra2_sdk.observability", "GitHubIssues"),
-        ("infra2_sdk.observability", "IssueApi"),
-        ("infra2_sdk.observability", "Trail"),
-        ("infra2_sdk.observability", "evaluate_consecutive_hysteresis"),
-        ("infra2_sdk.observability", "is_recently_flapping"),
-        ("infra2_sdk.observability", "load_trail"),
-        ("infra2_sdk.observability", "reconcile_issue_trail"),
-        ("infra2_sdk.observability", "record_verdicts"),
-        ("infra2_sdk.refs", "ReleaseError"),
-        ("infra2_sdk.refs", "assert_after_on_main"),
-        ("infra2_sdk.refs", "classify_ref"),
-        ("infra2_sdk.refs", "resolve_image_digest"),
-        # infra2#1822: compose_compile. Checked in the 4.0.0 wheel of uv.lock; 3.23.0 does
-        # not have them.
-        ("infra2_sdk.rules", "ComposeCompileError"),
-        ("infra2_sdk.rules", "compile_compose"),
-        ("infra2_sdk.routing", "CANARY_SLOT"),
-        ("infra2_sdk.routing", "derive_preview_coordinates"),
-        ("infra2_sdk.routing", "resolve_app_hostname"),
-        ("infra2_sdk.routing", "resolve_service_url"),
-        ("infra2_sdk.runtime.config_schema", "EnvironmentField"),
-        ("infra2_sdk.runtime.config_schema", "EnvironmentManifest"),
-        ("infra2_sdk.runtime", "merge_manifests"),
-        ("infra2_sdk.runtime.environment", "is_preview_alias"),
-        ("infra2_sdk.runtime.environment", "resolve_environment_tier"),
-        ("infra2_sdk.runtime.health", "DependencyStatus"),
-        ("infra2_sdk.runtime.otel", "signal_endpoint"),
-        ("infra2_sdk.runtime.postgres", "PostgresSettings"),
-        ("infra2_sdk.runtime.postgres", "probe_postgres"),
-        ("infra2_sdk.runtime.s3", "S3Settings"),
-        ("infra2_sdk.runtime.s3", "ensure_bucket"),
-        ("infra2_sdk.runtime.s3", "probe_s3"),
-        ("infra2_sdk.secrets", "HttpTransport"),
-        ("infra2_sdk.secrets", "OnePasswordBackend"),
-        ("infra2_sdk.secrets", "SecretsError"),
-        ("infra2_sdk.secrets", "SecretsResolver"),
-        ("infra2_sdk.secrets", "VaultKvBackend"),
-        ("infra2_sdk.secrets", "VaultTokenTarget"),
-        ("infra2_sdk.secrets", "normalize_selector"),
-        ("infra2_sdk.secrets", "policy_name"),
-        # infra2#1822: secrets_render. Checked in the 4.0.0 wheel (also present in 3.23.0).
-        ("infra2_sdk.secrets", "render_agent_policy"),
-        ("infra2_sdk.secrets", "render_agent_template"),
-        ("infra2_sdk.secrets", "urllib_transport"),
-        ("infra2_sdk.secrets", "vault_path"),
-        ("infra2_sdk.secrets", "vault_token_status"),
-    }
-)
+
+
+def locked_sdk_version() -> str:
+    """The infra2-sdk version that uv.lock pins, and so the version of the rebuilt runner."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    versions = [p["version"] for p in lock["package"] if p["name"] == "infra2-sdk"]
+    assert len(versions) == 1, versions
+    return versions[0]
+
+
+def names_missing_from_installed_sdk(
+    names: set[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """The (module, name) pairs that the installed infra2_sdk wheel does not provide."""
+    missing = []
+    for module, name in sorted(names):
+        try:
+            loaded = importlib.import_module(module)
+            if name and not hasattr(loaded, name):
+                importlib.import_module(f"{module}.{name}")
+        except ImportError:
+            missing.append((module, name))
+    return missing
+
 
 # Same module list as the runner: `INVOKE_BOOTSTRAP` in sync_runner.py.
 LOAD_COLLECTION = (
@@ -189,7 +157,16 @@ def test_import_scanner_reports_the_name_that_broke_the_runner() -> None:
         ("infra2_sdk.runtime.http", "request_with_retry"),
         ("infra2_sdk.secrets", ""),
     }
-    assert ("infra2_sdk.runtime.http", "request_with_retry") not in RUNNER_SDK_NAMES
+    assert names_missing_from_installed_sdk(
+        {("infra2_sdk.runtime.http", "request_with_retry_gone")}
+    ) == [("infra2_sdk.runtime.http", "request_with_retry_gone")]
+    assert (
+        names_missing_from_installed_sdk({("infra2_sdk.secrets", "SecretsError")}) == []
+    )
+
+
+def test_the_installed_sdk_is_the_wheel_that_uv_lock_pins() -> None:
+    assert importlib.metadata.version("infra2-sdk") == locked_sdk_version()
 
 
 def test_runner_task_collection_imports_only_names_of_the_runner_sdk() -> None:
@@ -224,11 +201,9 @@ def test_runner_task_collection_imports_only_names_of_the_runner_sdk() -> None:
         "no infra2_sdk import found in the loaded modules; the scan is empty"
     )
 
-    unknown = {
-        pair: file for pair, file in imported.items() if pair not in RUNNER_SDK_NAMES
-    }
-    assert not unknown, (
-        f"These infra2_sdk names are not known to exist in the runner SDK {RUNNER_SDK}: "
-        + "; ".join(f"{m}.{n} ({f})" for (m, n), f in sorted(unknown.items()))
-        + ". A runner rebuild is a production change. Check the names against the runner wheel first."
+    missing = names_missing_from_installed_sdk(set(imported))
+    assert not missing, (
+        f"These infra2_sdk names are not in the SDK {locked_sdk_version()} that uv.lock pins: "
+        + "; ".join(f"{m}.{n} ({imported[(m, n)]})" for m, n in missing)
+        + ". The runner image installs that SDK, so every task collection load would fail."
     )
