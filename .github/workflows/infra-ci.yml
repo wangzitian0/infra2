@@ -344,6 +344,11 @@ jobs:
           # script fetches nothing; deploys read app manifests at the release commit.
           # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
           uv run --locked python tools/fetch_app_manifests.py
+          # Guard: each App stack manifest copy equals its projection at the pinned release
+          # tag (#1822). It reads the App manifests from GitHub, so only shard 1 runs it.
+          if [[ "${{ matrix.shard }}" == "1" ]]; then
+            uv run --locked python tools/app_manifest_sync.py --check
+          fi
           uv run --locked python tools/lint_anti_tautology.py common/tests
           # Print the runner facts that explain a slow run (#1494). The worker count comes
           # from pytest-xdist's own hook, so it equals what `-n auto` uses. Never fail the step.

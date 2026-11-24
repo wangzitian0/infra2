@@ -407,6 +407,18 @@ uv run python tools/fetch_app_manifests.py                           # offline g
 
 The deploy receiver checks non-Vault compose fields against the stack manifest and renders Vault-backed fields from the release manifest (`common/deploy/app_contract.py`). See [`bootstrap.vars_and_secrets`](../docs/ssot/bootstrap.vars_and_secrets.md).
 
+## app_manifest_sync.py
+
+Generates the App stack manifest copies from the App release that `harness/repos.yaml` pins (#1822).
+The logic is in `common/deploy/app_manifest_sync.py`. The command reads the App manifests from GitHub.
+
+```bash
+uv run python tools/app_manifest_sync.py --check   # compare each copy with the projection
+uv run python tools/app_manifest_sync.py --write   # rewrite each copy and its secrets_render files
+```
+
+The train sync (`sync_app_releases`) runs the writer when it advances an App tag.
+
 ## References
 
 - [文档索引](../docs/README.md)
