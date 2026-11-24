@@ -59,7 +59,6 @@ secret/data/finance_report/<env>/redis
 
 secret/data/finance_report/<env>/app
   - LLM_API_KEY
-  - LLM_ENCRYPTION_KEYS
   - S3_ACCESS_KEY
   - S3_SECRET_KEY
   - S3_PUBLIC_ACCESS_KEY

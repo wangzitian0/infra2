@@ -170,10 +170,9 @@ class AppDeployer(Deployer):
 
     # Vault self-refresh facts (#542): the audit inventory derives from these
     # (AppRole auth — the #257/#259 pilot). Two surfaces:
-    #   1. the app itself. optional_inert_fields (#526): LLM_ENCRYPTION_KEYS'
-    #      secrets.ctmpl render line landed in #482/PR#520; the Vault value is
-    #      intentionally unset until EPIC-023's DB-backed LLM-provider-secret
-    #      storage is turned on — reported informationally, never a failure.
+    #   1. the app itself. It declares no optional_inert_fields (#526): the one
+    #      field that it declared, LLM_ENCRYPTION_KEYS, went with the per-user
+    #      LLM provider layer that finance_report deleted (v0.2.96).
     #   2. the multi-alias ephemeral PREVIEW surface (declared here with an
     #      explicit service_id — an alias stack has no registry Deployer of its
     #      own). Same AppRole auth; its secrets template reads the SOURCE env's
@@ -184,7 +183,6 @@ class AppDeployer(Deployer):
             vault_agent_container="finance_report-app-vault-agent${ENV_SUFFIX}",
             app_containers=("finance_report-backend${ENV_SUFFIX}",),
             auth_method="approle",
-            optional_inert_fields=("LLM_ENCRYPTION_KEYS",),
         ),
         SecretsFacet(
             service_id="finance_report/preview",

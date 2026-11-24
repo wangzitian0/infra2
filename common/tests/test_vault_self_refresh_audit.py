@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import dataclasses
 import types
 
 import yaml
@@ -862,12 +863,12 @@ def test_remote_secret_file_text_returns_raw_cat_output(monkeypatch) -> None:
     just `cat`s the rendered file and returns stdout verbatim."""
     captured = _patch_fake_ssh(
         monkeypatch,
-        stdout='LLM_ENCRYPTION_KEYS=""\nOTHER_KEY="value"\n',
+        stdout='EXAMPLE_OPTIONAL_KEY=""\nOTHER_KEY="value"\n',
     )
 
     result = _remote_secret_file_text("vps.example", "finance_report-app-vault-agent")
 
-    assert result == 'LLM_ENCRYPTION_KEYS=""\nOTHER_KEY="value"\n'
+    assert result == 'EXAMPLE_OPTIONAL_KEY=""\nOTHER_KEY="value"\n'
     assert captured["host"] == "vps.example"
     assert "docker exec finance_report-app-vault-agent sh -lc" in captured["command"]
     assert "cat /vault/secrets/.env" in captured["command"]
@@ -879,30 +880,27 @@ def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> No
     assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
 
 
-def test_optional_inert_field_watchlist_covers_llm_encryption_keys() -> None:
-    """#526: LLM_ENCRYPTION_KEYS is the one field the issue identified as
-    optional-by-architecture and outside every other observability signal.
-    #542: the watchlist now lives as `optional_inert_fields` on the owning
-    service's SecretsFacet, derived into the inventory."""
+def test_no_service_declares_an_optional_inert_field_after_llm_encryption_keys_went() -> None:
+    """#526: LLM_ENCRYPTION_KEYS was the one optional-by-architecture field. #542: the watchlist lives as
+    `optional_inert_fields` on the owning service's SecretsFacet. finance_report deleted the field (v0.2.96), so the
+    watchlist is empty; the classifier below stays generic and is tested with a synthetic field."""
     by_id = {service.id: service for service in load_inventory()}
-    assert by_id["finance_report/app"].optional_inert_fields == ("LLM_ENCRYPTION_KEYS",)
-    # No watchlist entries for services never flagged as having this gap.
-    assert by_id["platform/postgres"].optional_inert_fields == ()
+    assert {sid: svc.optional_inert_fields for sid, svc in by_id.items() if svc.optional_inert_fields} == {}
 
 
 def test_optional_field_inertness_classifier_reports_empty_value_as_inert() -> None:
-    """#526: LLM_ENCRYPTION_KEYS="" (the secrets.ctmpl unset-render shape) is
+    """#526: EXAMPLE_OPTIONAL_KEY="" (the secrets.ctmpl unset-render shape) is
     reported informationally, never as a failure."""
     service = _service()
 
     result = classify_optional_field_inertness(
-        service, "LLM_ENCRYPTION_KEYS", 'LLM_ENCRYPTION_KEYS=""\n'
+        service, "EXAMPLE_OPTIONAL_KEY", 'EXAMPLE_OPTIONAL_KEY=""\n'
     )
 
     assert result.status == "info"
     assert result.severity == "P3"
     assert "inert" in result.summary
-    assert result.evidence == {"field": "LLM_ENCRYPTION_KEYS", "populated": False}
+    assert result.evidence == {"field": "EXAMPLE_OPTIONAL_KEY", "populated": False}
 
 
 def test_optional_field_inertness_classifier_reports_missing_field_as_inert() -> None:
@@ -910,7 +908,7 @@ def test_optional_field_inertness_classifier_reports_missing_field_as_inert() ->
     service = _service()
 
     result = classify_optional_field_inertness(
-        service, "LLM_ENCRYPTION_KEYS", "OTHER_KEY=value\n"
+        service, "EXAMPLE_OPTIONAL_KEY", "OTHER_KEY=value\n"
     )
 
     assert result.status == "info"
@@ -926,13 +924,13 @@ def test_optional_field_inertness_classifier_reports_populated_value_as_active()
 
     result = classify_optional_field_inertness(
         service,
-        "LLM_ENCRYPTION_KEYS",
-        'LLM_ENCRYPTION_KEYS="gAAAAA-fake-fernet-key-material"\n',
+        "EXAMPLE_OPTIONAL_KEY",
+        'EXAMPLE_OPTIONAL_KEY="gAAAAA-fake-fernet-key-material"\n',
     )
 
     assert result.status == "info"
     assert "active" in result.summary
-    assert result.evidence == {"field": "LLM_ENCRYPTION_KEYS", "populated": True}
+    assert result.evidence == {"field": "EXAMPLE_OPTIONAL_KEY", "populated": True}
     # The actual key material must never leak into the report evidence.
     assert "fake-fernet-key-material" not in str(result.evidence)
 
@@ -943,7 +941,7 @@ def test_audit_from_observations_reports_inert_field_without_failing_audit() -> 
 
     #531: `_service()` is auth_method="approle" in the real inventory.
     """
-    service = _service()
+    service = dataclasses.replace(_service(), optional_inert_fields=("EXAMPLE_OPTIONAL_KEY",))
     report = audit_from_observations(
         [service],
         {
@@ -960,7 +958,7 @@ def test_audit_from_observations_reports_inert_field_without_failing_audit() -> 
                         "size": 20,
                         "mtime": 950,
                     },
-                    "rendered_env_text": 'LLM_ENCRYPTION_KEYS=""\n',
+                    "rendered_env_text": 'EXAMPLE_OPTIONAL_KEY=""\n',
                     "vault_agent_logs": "template rendered successfully",
                     "vault_agent_container": {
                         "name": "finance_report-app-vault-agent",
@@ -990,13 +988,13 @@ def test_audit_from_observations_reports_inert_field_without_failing_audit() -> 
     inertness_results = [
         result
         for result in report["results"]
-        if result["check_id"] == "optional-field-inertness::LLM_ENCRYPTION_KEYS"
+        if result["check_id"] == "optional-field-inertness::EXAMPLE_OPTIONAL_KEY"
     ]
     assert len(inertness_results) == 1
     assert inertness_results[0]["status"] == "info"
     assert inertness_results[0]["evidence"]["populated"] is False
     assert (
-        "INFO P3 finance_report/app::optional-field-inertness::LLM_ENCRYPTION_KEYS"
+        "INFO P3 finance_report/app::optional-field-inertness::EXAMPLE_OPTIONAL_KEY"
         in write_report(report)
     )
 
