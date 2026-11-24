@@ -117,26 +117,82 @@ def test_an_unknown_commit_gives_an_empty_fingerprint_so_the_image_rebuilds(
     )
 
 
-def test_the_fingerprint_reads_the_paths_that_trigger_the_bootstrap_step() -> None:
-    """One list of runner inputs: the workflow trigger and the skip rule must agree."""
+def _trigger_pattern() -> str:
+    """The `case` pattern of reconcile-iac-inputs.yml that makes the bootstrap step run."""
     case = re.search(
         r"^\s*(bootstrap/06\.iac_runner/\*\|[^)]*)\)\s*$",
         WORKFLOW.read_text(encoding="utf-8"),
         re.M,
     )
     assert case, "the bootstrap trigger case is missing from reconcile-iac-inputs.yml"
-    trigger = set(case.group(1).split("|"))
-    assert trigger == {
-        "bootstrap/06.iac_runner/*",
-        "scripts/deploy_iac_runner_bootstrap.sh",
-        "uv.lock",
-        "tools/sdk_requirement*.py",
+    return case.group(1)
+
+
+def _tracked_files(repo: Path, sha: str) -> list[str]:
+    return _git(repo, "ls-tree", "-r", "--name-only", sha).splitlines()
+
+
+def _triggered(pattern: str, files: list[str]) -> set[str]:
+    """The files that the workflow's own bash `case` sends to the bootstrap step."""
+    script = f'while IFS= read -r f; do case "$f" in {pattern}) echo "$f";; esac; done'
+    out = subprocess.run(
+        ["bash", "-c", script],
+        input="\n".join(files) + "\n",
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    ).stdout
+    return set(out.splitlines())
+
+
+def _covered(function_text: str, repo: Path, sha: str, files: list[str]) -> set[str]:
+    """The files that the fingerprint reads: a listed path, or a file below a listed directory."""
+    script = function_text + f'\nrunner_inputs_fingerprint "{repo}" "{sha}"\n'
+    listing = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=True, timeout=30
+    ).stdout
+    entries = [line.split("\t", 1)[1] for line in listing.splitlines()]
+    return {f for f in files if any(f == e or f.startswith(e + "/") for e in entries)}
+
+
+def runner_input_mismatches(pattern: str, function_text: str, repo: Path, sha: str):
+    """Files that start the bootstrap step but not the fingerprint, or the reverse."""
+    files = _tracked_files(repo, sha)
+    triggered = _triggered(pattern, files)
+    covered = _covered(function_text, repo, sha, files)
+    assert triggered and covered, "the trigger or the fingerprint matches no file"
+    return {
+        "triggers_but_unread": sorted(triggered - covered),
+        "read_but_no_trigger": sorted(covered - triggered),
     }
-    body = _function_text()
-    for path in (
-        "bootstrap/06.iac_runner",
-        "scripts/deploy_iac_runner_bootstrap.sh",
-        "uv.lock",
-    ):
-        assert path in body, path
-    assert "tools/sdk_requirement[^/]*" in body
+
+
+# The skip rule of v3.1.130: it read bootstrap/06.iac_runner only.
+V3_1_130_FINGERPRINT = 'runner_inputs_fingerprint() {\n  git -C "$1" ls-tree "$2" -- bootstrap/06.iac_runner\n}\n'
+
+
+def test_the_fingerprint_reads_exactly_the_files_that_trigger_the_bootstrap_step() -> (
+    None
+):
+    """Real tree, no frozen list: every tracked file of HEAD that the workflow `case` sends to
+    the bootstrap step is read by the fingerprint, and the reverse (#1863)."""
+    sha = _git(ROOT, "rev-parse", "HEAD")
+    result = runner_input_mismatches(_trigger_pattern(), _function_text(), ROOT, sha)
+    assert result == {"triggers_but_unread": [], "read_but_no_trigger": []}
+
+
+def test_the_check_reports_the_v3_1_130_skip_rule() -> None:
+    sha = _git(ROOT, "rev-parse", "HEAD")
+    result = runner_input_mismatches(
+        _trigger_pattern(), V3_1_130_FINGERPRINT, ROOT, sha
+    )
+    assert "uv.lock" in result["triggers_but_unread"]
+    assert "scripts/deploy_iac_runner_bootstrap.sh" in result["triggers_but_unread"]
+
+
+def test_the_check_reports_a_trigger_that_the_fingerprint_does_not_read() -> None:
+    sha = _git(ROOT, "rev-parse", "HEAD")
+    widened = _trigger_pattern() + "|pyproject.toml"
+    result = runner_input_mismatches(widened, _function_text(), ROOT, sha)
+    assert result["triggers_but_unread"] == ["pyproject.toml"]
