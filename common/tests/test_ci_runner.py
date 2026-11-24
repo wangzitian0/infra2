@@ -141,7 +141,8 @@ def test_ci_runner_compose_gate_validates_compiled_x_infra2_text(monkeypatch) ->
         for rel in by_rel
         if not has_x_infra2((ROOT / rel).read_text(encoding="utf-8"))
     ]
-    assert len(plain) >= 20
+    # 19 plain files on 2026-11-24, after #1822 Slice 3 moved three stacks to x-infra2.
+    assert len(plain) >= 15
     for rel in plain:
         assert by_rel[rel][0] == ["docker", "compose", "-f", rel, "config"], rel
 

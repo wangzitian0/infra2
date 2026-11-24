@@ -42,7 +42,9 @@ def test_gate_selects_files_by_a_marker_the_fleet_still_carries():
     assert 'grep -q "VAULT_APP_TOKEN" "$file"' not in workflow, (
         "VAULT_APP_TOKEN left every compose with #369; a gate keyed on it checks nothing"
     )
-    assert len(VAULT_AGENT_COMPOSE_FILES) >= 16, VAULT_AGENT_COMPOSE_FILES
+    # 17 sidecars on 2026-11-24: 13 hand-written (the shell gate) and 4 compiled (#1822).
+    sidecars = VAULT_AGENT_COMPOSE_FILES + _x_infra2_vault_composes()
+    assert len(sidecars) >= 17, sidecars
     assert (
         "truealpha/truealpha/20.data_engine/compose.yaml" in VAULT_AGENT_COMPOSE_FILES
     )
