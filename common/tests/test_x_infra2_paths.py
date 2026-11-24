@@ -781,6 +781,39 @@ def test_the_audit_fails_a_container_that_matches_neither_main_nor_the_served_re
     assert "never reached" in result.summary
 
 
+def test_the_audit_compares_a_hand_written_container_with_the_served_template(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Both forms are hand-written; main changed the template after the served tag."""
+    import common.deploy.config_drift as drift
+    import common.security.vault_audit as va
+
+    _git(tmp_path, "init", "-q")
+    _repo_with(monkeypatch, tmp_path, TODO, _HAND_WRITTEN_COMPOSE)
+    template = tmp_path / TODO_DIR / "secrets.ctmpl"
+    template.write_text(_HAND_WRITTEN_TEMPLATE, encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "served")
+    _git(tmp_path, "tag", "production/v1.0.0")
+    template.write_text(_HAND_WRITTEN_TEMPLATE + "B=1\n", encoding="utf-8")
+    monkeypatch.setattr(drift, "ROOT", tmp_path)
+    monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
+    service = _vault_service(TODO)
+    served_sha = hashlib.sha256(_HAND_WRITTEN_TEMPLATE.encode()).hexdigest()
+    ref = "production/v1.0.0"
+
+    lagging = va.classify_deployed_template(service, served_sha, "hand-written", ref)
+    assert (lagging.status, lagging.severity) == ("pass", "P1"), lagging
+    assert ref in lagging.summary
+
+    neither = va.classify_deployed_template(service, "c" * 64, "hand-written", ref)
+    assert (neither.status, neither.severity) == ("fail", "P1"), neither
+
+    # Without a served release, main's template stays the only reference.
+    unknown = va.classify_deployed_template(service, served_sha, "hand-written", "")
+    assert (unknown.status, unknown.severity) == ("fail", "P1"), unknown
+
+
 def test_served_ref_is_the_production_marker_only_for_production(monkeypatch) -> None:
     import common.deploy.config_drift as drift
     import common.security.vault_audit as va

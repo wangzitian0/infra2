@@ -351,8 +351,8 @@ def classify_deployed_template(
     ``deployed_form`` is the form the container shows (``compiled`` or
     ``hand-written``; empty when unknown). ``served_ref`` is the release tag that
     the environment serves (empty when unknown). Main can be ahead of that tag. When
-    the container form differs from main, the check compares the container with
-    ``served_ref``. The check fails when the container matches neither (infra2#1822).
+    the container differs from main (form or hash), the check compares the
+    container with ``served_ref``. It fails when the container matches neither.
     """
     import sys
 
@@ -378,9 +378,10 @@ def classify_deployed_template(
         "deployed_sha256": deployed_sha256[:12],
         "release_sha256": release_sha256[:12],
     }
+    served = _served_template(service, served_ref) if served_ref else None
+    served_matches_form = served is not None and served[0] == deployed_form
     if deployed_form and deployed_form != release_form:
-        served = _served_template(service, served_ref) if served_ref else None
-        if served is not None and served[0] == deployed_form:
+        if served_matches_form:
             return _classify_served(
                 service, deployed_sha256, served_ref, served, evidence
             )
@@ -416,6 +417,11 @@ def classify_deployed_template(
             evidence,
         )
     if deployed_sha256 != release_sha256:
+        if served_matches_form:
+            # Main can change a template after the served release (#1937).
+            return _classify_served(
+                service, deployed_sha256, served_ref, served, evidence
+            )
         return _result(
             service,
             "deployed-template",
