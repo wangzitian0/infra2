@@ -240,7 +240,42 @@ def test_vault_agent_forwards_every_template_env():
     assert not missing, (
         f"secrets.ctmpl reads {missing} but vault-agent does not forward them"
     )
-    assert _vault_agent_environment()["TA_MINIO_S3_PORT"] == "${TA_MINIO_S3_PORT}"
+    # The generated template builds DATABASE_URL with the host Postgres port. Since #637
+    # it reads no MinIO port: the compose anchor derives S3_ENDPOINT (test below).
+    assert referenced == {"ENVIRONMENT", "ENV", "TA_POSTGRES_PORT"}
+    assert _vault_agent_environment()["TA_POSTGRES_PORT"] == "${TA_POSTGRES_PORT}"
+
+
+DAGSTER_SERVICES = ("dagster-code-server", "dagster-webserver", "dagster-daemon")
+IMAGE_ENTRYPOINT = "/app/dagster-entrypoint.sh"
+
+
+def test_each_dagster_service_runs_the_entrypoint_after_the_vault_wait():
+    """#1822 Slice 3 step A: each Dagster service has the compiled x-vault shape.
+
+    The SDK wait script exports /secrets/.env and runs `command`. The command runs
+    dagster-entrypoint.sh at its image path. The bind mount puts the infra2 copy at the
+    same path until the pinned truealpha release carries the script (truealpha#1866).
+    """
+    from infra2_sdk.rules import compile_compose
+
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
+    probe = compile_compose(
+        {
+            "x-infra2": {"vault": {"name": "probe"}},
+            "services": {"app": {"x-vault": {}, "command": ["true"]}},
+        },
+        vault_template="probe",
+    )
+    sdk_entrypoint = yaml.safe_load(probe)["services"]["app"]["entrypoint"]
+    for name in DAGSTER_SERVICES:
+        service = compose["services"][name]
+        assert service["entrypoint"] == sdk_entrypoint, name
+        assert service["command"][:2] == ["/bin/sh", IMAGE_ENTRYPOINT], name
+        assert service["command"][2].startswith("dagster"), name
+        assert f"./dagster-entrypoint.sh:{IMAGE_ENTRYPOINT}:ro" in service["volumes"], (
+            name
+        )
 
 
 def test_vault_agent_is_recreated_when_its_templates_change():
