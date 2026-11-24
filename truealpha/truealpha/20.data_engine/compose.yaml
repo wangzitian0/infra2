@@ -86,6 +86,7 @@ services:
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       TA_POSTGRES_PORT: ${TA_POSTGRES_PORT}
       # secrets.ctmpl dials MinIO with this (#604); `env "X"` inside the template
       # reads the agent's own environment, so every variable the template names

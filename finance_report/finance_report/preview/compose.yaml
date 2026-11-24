@@ -62,6 +62,7 @@ services:
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       # Consumed by this dir's secrets.ctmpl to render this alias's
       # OTEL_RESOURCE_ATTRIBUTES service.version=<sha> (Infra-014).
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
@@ -149,6 +150,7 @@ services:
       # it to override ENVIRONMENT AFTER sourcing Vault secrets (see CHECKPOINT-1c) —
       # mirrors the existing DATABASE_URL override for the same reason.
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       # BE->OpenPanel: preview shares the one preview project (injected by
       # preview_lifecycle from tools/openpanel_clients.py); empty => no-op.
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}

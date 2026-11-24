@@ -27,6 +27,7 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro

@@ -63,6 +63,7 @@ services:
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       # Cache-bust: without a var this container's own config reads, Compose can leave a stale
       # vault-agent (and stale rendered secrets.ctmpl) running across a redeploy.
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
