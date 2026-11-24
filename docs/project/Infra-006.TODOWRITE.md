@@ -20,7 +20,7 @@ Track top issues discovered during documentation engineering.
 
 最终方案：`detect-changes` 把 `docs/project/**.md` 与 `docs/ssot/README.md` 判为 non-doc，于是
 `test-deployer-logic`（GitHub ruleset 强制的七个必需检查之一）会跑，而**早就存在**的
-`test_project_index_generated` / `test_ssot_index_generated` 就是守卫。实测这两个测试对三种漂移
+`test_generated_index_equals_committed` 就是守卫。实测这两个测试对三种漂移
 （新增未登记文档、Status 就地漂移、手改生成块）全部报红——守卫一直有效，缺的只是调度。
 
 新测试 `test_generated_doc_indexes_are_guarded.py` 只证明三件事，共 8 个用例：

@@ -75,7 +75,7 @@ To-be:
 ## Verification
 - [x] L0 to L2 docs are reachable in <= 2 hops.
 - [x] Link check passes for local docs (`python -m tools.doc_link_check`).
-- [x] SSOT manifest governance test passes (`pytest common/tests/test_ssot_governance.py common/tests/test_ssot_reverse_governance.py`).
+- [x] SSOT manifest governance test passes (`pytest common/tests/test_docs_lint.py`).
 
 ## TODOWRITE
 - [Infra-006.TODOWRITE.md](./Infra-006.TODOWRITE.md)

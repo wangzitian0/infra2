@@ -2,7 +2,7 @@
 #
 # Machine-readable registry for topic ownership and proof anchors. This is the SINGLE source
 # for the human SSOT index too: docs/ssot/README.md's topic tables are GENERATED from the
-# `summary` fields below (tools/gen_ssot_index.py; test_ssot_index_generated_matches_committed
+# `summary` fields below (tools/gen_ssot_index.py; test_generated_index_equals_committed
 # locks generated == committed). Edit a topic's index text here, not in README.
 #
 # `summary` is the short human index line (the README "关键内容" column). `description` is the
@@ -48,7 +48,7 @@ entries:
     proofs:
       - common/tests/test_no_new_wheels_lint.py
       - common/tests/test_generated_doc_indexes_are_guarded.py
-      - common/tests/test_doc_consistency_guards.py
+      - common/tests/test_docs_lint.py
   core.environments:
     owner: docs/ssot/core.environments.md
     summary: 环境分类、隔离与命名

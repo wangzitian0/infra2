@@ -166,7 +166,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 ## Acceptance criteria that tests cite
 
-Tests in `common/tests/` cite these ids. `common/tests/test_doc_consistency_guards.py` reads this table. Each proof path must exist.
+Tests in `common/tests/` cite these ids. `common/tests/test_docs_lint.py` reads this table. Each proof path must exist.
 
 | AC | Criterion | Proof |
 |---|---|---|
