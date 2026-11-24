@@ -454,6 +454,7 @@ DIGEST_STEPS = (
     "Configure SSH key",
     "Build and send digest",
     "Remind the owner of a green staging tag",
+    "Probe the next production promotion",
     "Alert on failure",
     "Resolve the digest failure alert",
 )
@@ -462,14 +463,14 @@ DIGEST_STEPS = (
 @pytest.mark.parametrize(
     ("event", "schedule", "task", "expected"),
     [
-        ("schedule", "0 13 * * *", "", {"Remind the owner of a green staging tag"}),
-        ("workflow_dispatch", "", "promotion-reminder", {"Remind the owner of a green staging tag"}),
+        ("schedule", "0 13 * * *", "", {"Remind the owner of a green staging tag", "Probe the next production promotion"}),
+        ("workflow_dispatch", "", "promotion-reminder", {"Remind the owner of a green staging tag", "Probe the next production promotion"}),
         ("schedule", "0 1 * * 1", "", {"Configure SSH key", "Build and send digest", "Resolve the digest failure alert"}),
         ("workflow_dispatch", "", "watchdog-weekly-digest", {"Configure SSH key", "Build and send digest", "Resolve the digest failure alert"}),
     ],
     ids=["cron-reminder", "task-reminder", "cron-digest", "task-digest"],
 )  # fmt: skip
-def test_a_reminder_run_runs_only_the_reminder_step(
+def test_a_reminder_run_runs_only_the_reminder_and_probe_steps(
     event, schedule, task, expected
 ) -> None:
     """The reminder (cron or task=promotion-reminder) builds no digest, so it neither pages nor
