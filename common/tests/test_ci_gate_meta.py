@@ -14,6 +14,10 @@ import pytest
 import yaml
 from infra2_sdk import ci as ci_spec
 from infra2_sdk.ci import (
+    GATE_WALL_CLOCK_BUDGET_S,
+    MAX_SINGLE_TEST_S,
+    SHARD_MAX,
+    SHARD_MIN,
     load_delivery_stages,
     validate_gate,
     validate_inventory,
@@ -449,6 +453,13 @@ def test_merge_group_and_transitive_workflow_call_are_covered(tmp_path) -> None:
 
 
 # ========== workflow lint ==========
+
+
+def test_ci_spec_constants() -> None:
+    assert GATE_WALL_CLOCK_BUDGET_S == 90
+    assert MAX_SINGLE_TEST_S == 30
+    assert SHARD_MIN == 2
+    assert SHARD_MAX == 8
 
 
 def test_lint_clean_workflow(tmp_path: Path) -> None:
