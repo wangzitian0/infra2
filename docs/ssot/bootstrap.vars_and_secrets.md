@@ -126,6 +126,7 @@ At deploy time, the receiver fetches the upstream App release manifests (`APP_UP
 2. Every Vault path in the rendered policy must be granted by the stack's committed `vault-policy.hcl` at `iac_ref`; a release that requests an ungranted Vault path fails closed before deploy.
 3. Non-Vault fields that the image requires at start (`release`, `decision`, or `required`/`injected` `code` fields) must be supplied by the stack `compose.yaml` and `env.manifest.json` at `iac_ref`. Plain `code` defaults (`required=False`, `injected=False`), descriptions, `has_default`, `sensitive`, and `ci` are ignored.
 4. When a release needs a new non-Vault compose variable or a new Vault policy path, add it to the stack `compose.yaml` and `env.manifest.json` in `infra2`, run `uv run python tools/secrets_render.py --write`, cut an `infra2` release, and promote it to production when needed.
+5. The `env.manifest.json` of `finance_report/app`, `truealpha/app` and `truealpha/data_engine` is generated (#1822, #1823). It is the merge of the App manifests at the `release_tag` in `harness/repos.yaml`: `APP_UPSTREAM_MANIFESTS`, plus `COMPOSE_ONLY_MANIFESTS` in `common/deploy/app_manifest_sync.py` (the finance_report frontend manifest). Do not edit these copies. `uv run python tools/app_manifest_sync.py --check` compares each copy with the projection. `--write` rewrites each copy and its `secrets_render` files. When the train PR advances an App tag, `sync_app_releases` runs the writer, and the PR carries the regenerated files.
 
 ---
 

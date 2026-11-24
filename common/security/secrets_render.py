@@ -125,22 +125,22 @@ def render(service: Service, *, root: Path | None = None) -> dict[str, str]:
 COMPILED_FILES = ("secrets.ctmpl", "vault-agent.hcl")
 
 
-def _is_x_infra2(service: Service) -> bool:
+def _is_x_infra2(service: Service, *, root: Path | None = None) -> bool:
     """True when ``<directory>/compose.yaml`` of ``service`` is an ``x-infra2`` source."""
     from common.deploy.compose_compile import has_x_infra2
 
-    compose = ROOT / service.directory / "compose.yaml"
+    compose = (ROOT if root is None else root) / service.directory / "compose.yaml"
     return compose.is_file() and has_x_infra2(compose.read_text(encoding="utf-8"))
 
 
-def committed_files(service: Service) -> dict[str, str]:
-    """The rendered files of ``service`` that git must hold.
+def committed_files(service: Service, *, root: Path | None = None) -> dict[str, str]:
+    """The rendered files of ``service`` that git must hold, from manifests under ``root``.
 
     The render runs for every service, so a manifest error always fails. An ``x-infra2``
     stack commits only ``vault-policy.hcl``: the deploy compiles the other two files.
     """
-    outputs = render(service)
-    if _is_x_infra2(service):
+    outputs = render(service, root=root)
+    if _is_x_infra2(service, root=root):
         return {n: t for n, t in outputs.items() if n not in COMPILED_FILES}
     return outputs
 

@@ -37,6 +37,22 @@ SETUP_ACTION = ROOT / ".github" / "actions" / "train-setup" / "action.yml"
 SHA = "a" * 40
 
 
+#: The copy path that ``_record_manifest_writes`` reports as rewritten.
+_FAKE_COPY = "finance_report/finance_report/10.app/env.manifest.json"
+
+
+def _record_manifest_writes(monkeypatch) -> list[dict[str, object]]:
+    """Replace the App manifest copy writer; return the list of its calls (#1822)."""
+    calls: list[dict[str, object]] = []
+
+    def _fake_write(refs, *, root, fetcher=None):
+        calls.append({"refs": dict(refs), "root": root})
+        return [_FAKE_COPY]
+
+    monkeypatch.setattr(reconcile, "write_app_manifest_copies", _fake_write)
+    return calls
+
+
 @pytest.fixture(autouse=True)
 def _stub_app_version_ref_on_main(monkeypatch) -> None:
     """Stub the #1500 GitHub compare API guard in offline reconcile unit tests;
@@ -1681,6 +1697,7 @@ def test_sync_app_releases_updates_repos_yaml_when_remote_tag_advances(
 
     monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
     monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
+    writes = _record_manifest_writes(monkeypatch)
 
     rc = main(
         [
@@ -1695,6 +1712,9 @@ def test_sync_app_releases_updates_repos_yaml_when_remote_tag_advances(
     assert out["needs_update"] is True
     assert out["updates"] == {"finance_report/app": "v0.2.47"}
     assert out["repos_yaml_updated"] is True
+    # The copy of the advanced App is projected at the commit of the new tag (#1822).
+    assert writes == [{"refs": {"finance_report/app": SHA}, "root": tmp_path}]
+    assert out["manifests_updated"] == [_FAKE_COPY]
     assert out["next_infra_tag"] == "v3.1.23"
 
     updated_text = repos_yaml.read_text(encoding="utf-8")
@@ -1746,6 +1766,7 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
 
     monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
     monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
+    _record_manifest_writes(monkeypatch)
 
     calls: list[list[str]] = []
     open_prs_response = "[]"
@@ -1792,6 +1813,14 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
     ] in calls
     assert ["git", "reset", "--hard", "orig123456"] in calls
     assert any(c[:3] == ["gh", "pr", "create"] for c in calls)
+    # The train commit carries the regenerated App manifest copy (#1822).
+    assert [
+        "git",
+        "add",
+        "harness/repos.yaml",
+        _FAKE_COPY,
+        "repos/finance_report",
+    ] in calls
 
     # Second run when an open PR already exists -> updates via gh pr edit
     repos_yaml.write_text(
@@ -2557,6 +2586,7 @@ def test_sync_app_releases_create_pr_surfaces_gh_stderr_on_failure(
 
     monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
     monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
+    _record_manifest_writes(monkeypatch)
 
     open_prs_response = "[]"
 
@@ -3966,6 +3996,7 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
 
     monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
     monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.40")
+    _record_manifest_writes(monkeypatch)
 
     manifest = _hooks_v3("finance_report/app")
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
@@ -5250,6 +5281,7 @@ def test_sync_app_releases_holds_tag_with_unverified_sdk_version(
 
     monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_refs)
     monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.74")
+    _record_manifest_writes(monkeypatch)
 
     def _runner(cmd, **_kw):
         argv = [str(item) for item in cmd]

@@ -63,6 +63,7 @@ from common.deploy.app_contract import (
     query_serving_release,
     validate_app_release_evidence,
 )
+from common.deploy.app_manifest_sync import write_copies as write_app_manifest_copies
 from common.deploy.dependencies import explain_fanout
 from common.deploy.deploy_guard_audit import app_hook_pair
 from common.deploy.transient_failure import classify_failure
@@ -1298,6 +1299,7 @@ def sync_app_releases(
 
     repos_yaml_updated = False
     gitlinks_updated: list[str] = []
+    manifests_updated: list[str] = []
     next_infra_tag = ""
     pr_created = False
     pr_updated = False
@@ -1306,6 +1308,14 @@ def sync_app_releases(
 
     if updates and apply_repos_yaml and not dry_run:
         repos_yaml_updated = update_repos_yaml_release_tags(repo_root, updates)
+        if repos_yaml_updated:
+            # The App manifest copies are projections of the advanced release (#1822):
+            # the train PR carries each regenerated copy and its derived Vault files.
+            manifests_updated = write_app_manifest_copies(
+                {svc: target_shas.get(svc) or tag for svc, tag in updates.items()},
+                root=repo_root,
+                fetcher=manifest_fetcher,
+            )
         if sync_gitlinks:
             for service, sha in sorted(target_shas.items()):
                 sub_path = SERVICE_TO_SUBMODULE_PATH.get(service)
@@ -1336,7 +1346,7 @@ def sync_app_releases(
             + ", ".join(f"{svc}={tag}" for svc, tag in sorted(updates.items()))
             + ")"
         )
-        paths_to_add = [HARNESS_REPOS_PATH, *gitlinks_updated]
+        paths_to_add = [HARNESS_REPOS_PATH, *manifests_updated, *gitlinks_updated]
         if create_pr and repos_yaml_updated and not dry_run:
             body_lines = [
                 "Automated pull-based App release train sync (#1416).",
@@ -1374,6 +1384,7 @@ def sync_app_releases(
         "needs_update": bool(updates),
         "repos_yaml_updated": repos_yaml_updated,
         "gitlinks_updated": gitlinks_updated,
+        "manifests_updated": manifests_updated,
         "next_infra_tag": next_infra_tag,
         "pr_branch": pr_branch if create_pr else "",
         "pr_created": pr_created,
