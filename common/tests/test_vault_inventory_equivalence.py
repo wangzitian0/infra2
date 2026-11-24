@@ -1,16 +1,4 @@
-"""#542 SecretsFacet migration equivalence proof — PERMANENT regression anchor.
-
-``common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml`` is a byte-copy
-of the handwritten ``vault-self-refresh-inventory.yaml`` SSOT as it stood
-before the facet migration deleted it (16 entries, comments and all). The facet-derived
-inventory (each service's ``secrets = (SecretsFacet(...),)`` declarations ->
-``service_attrs()``/``bootstrap_facet_attrs()`` -> ``load_inventory()``) must
-stay FIELD-IDENTICAL to it. This is not a one-time diff: the frozen fixture
-anchors the audit's expectations forever, so a facet edit that accidentally
-mutates an inventory fact fails here with an exact field diff.
-
-Deliberate inventory changes must update the fixture in the same PR, making the
-change explicit and reviewable (the fixture is the inventory changelog).
+"""#542 SecretsFacet inventory tests.
 
 The counterfactual tests below are the issue's AC: editing a Deployer's secrets
 facet (or the deploy facts it derives from) must change BOTH the derived audit
@@ -26,7 +14,6 @@ import dataclasses
 from pathlib import Path
 
 import pytest
-import yaml
 
 from common.core import registry as reg
 from common.core.facets import SecretsFacet
@@ -39,54 +26,6 @@ from common.security.vault_self_refresh_audit import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-FROZEN = ROOT / "common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml"
-
-# The two fields ADDED by #542 (facts absorbed from the audit module's former
-# MOUNT_EXEMPT_CONTAINERS / OPTIONAL_INERT_FIELD_WATCHLIST constants) — they
-# have no column in the frozen pre-migration YAML, so they are equivalence-
-# checked against the retired constants' content separately below.
-_POST_MIGRATION_FIELDS = {"mount_exempt_containers", "optional_inert_fields"}
-
-
-def _frozen_inventory() -> list[VaultService]:
-    """Parse the frozen fixture with the retired YAML loader's exact merge
-    semantics (defaults overlaid per service, app_containers tupled)."""
-    data = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))
-    defaults = data.get("defaults", {})
-    services: list[VaultService] = []
-    for raw_service in data.get("services", []):
-        merged = {**defaults, **raw_service}
-        merged["app_containers"] = tuple(merged.get("app_containers", ()))
-        merged["legacy_dokploy_services"] = tuple(
-            merged.get("legacy_dokploy_services", ())
-        )
-        services.append(VaultService(**merged))
-    return services
-
-
-def test_derived_inventory_equals_frozen_yaml_field_by_field() -> None:
-    """THE equivalence proof: derived == frozen, per service, per field."""
-    derived = {service.id: service for service in load_inventory()}
-    frozen = {service.id: service for service in _frozen_inventory()}
-
-    assert sorted(derived) == sorted(frozen), (
-        "vault inventory ID set diverged from the frozen YAML.\n"
-        f"missing from derived: {sorted(set(frozen) - set(derived))}\n"
-        f"new in derived:       {sorted(set(derived) - set(frozen))}\n"
-        "If this change is deliberate, update common/tests/fixtures/"
-        "vault_self_refresh_inventory_frozen.yaml in the same PR."
-    )
-    for service_id, frozen_service in frozen.items():
-        for field in dataclasses.fields(VaultService):
-            if field.name in _POST_MIGRATION_FIELDS:
-                continue
-            assert getattr(derived[service_id], field.name) == getattr(
-                frozen_service, field.name
-            ), (
-                f"{service_id}.{field.name} diverged from the frozen YAML:\n"
-                f"  frozen:  {getattr(frozen_service, field.name)!r}\n"
-                f"  derived: {getattr(derived[service_id], field.name)!r}"
-            )
 
 
 def test_absorbed_constants_equivalence() -> None:
@@ -95,8 +34,8 @@ def test_absorbed_constants_equivalence() -> None:
       MOUNT_EXEMPT_CONTAINERS == {platform-prefect-worker, -staging} — one
         symbolic ${ENV_SUFFIX} entry on platform/prefect resolves to exactly
         those two names across the audit's production/staging runs;
-      OPTIONAL_INERT_FIELD_WATCHLIST == (finance_report/app,
-        LLM_ENCRYPTION_KEYS)."""
+      OPTIONAL_INERT_FIELD_WATCHLIST == () (its one entry, finance_report/app
+        LLM_ENCRYPTION_KEYS, went with the field)."""
     from common.security.vault_self_refresh_audit import _resolve_env_suffix
 
     by_id = {service.id: service for service in load_inventory()}
@@ -116,13 +55,13 @@ def test_absorbed_constants_equivalence() -> None:
     }
     assert exempt_elsewhere == {}
 
-    assert by_id["finance_report/app"].optional_inert_fields == ("LLM_ENCRYPTION_KEYS",)
-    inert_elsewhere = {
+    # finance_report deleted LLM_ENCRYPTION_KEYS (v0.2.96): no service declares an optional inert field now.
+    inert = {
         sid: svc.optional_inert_fields
         for sid, svc in by_id.items()
-        if svc.optional_inert_fields and sid != "finance_report/app"
+        if svc.optional_inert_fields
     }
-    assert inert_elsewhere == {}
+    assert inert == {}
 
 
 def test_not_in_production_derivation_matches_deploy_side_facts() -> None:
@@ -289,3 +228,22 @@ def test_counterfactual_compose_path_edit_moves_audit_expectation() -> None:
     assert derived.compose_path == "platform/98.moved/compose.yaml"
     assert derived.vault_agent_config_path == "platform/98.moved/vault-agent.hcl"
     assert derived.secret_template_path == "platform/98.moved/secrets.ctmpl"
+
+
+def test_a_declared_optional_inert_field_reaches_the_inventory_row() -> None:
+    """Review of #1954: no service declares an optional inert field now, so the derivation of the inventory row
+    (`_vault_service_from_facet`) is tested with a synthetic declaration. Without it, a derivation that drops the
+    field would pass every test."""
+    import dataclasses
+
+    from common.core.registry import service_attrs
+    from common.security.vault_audit import _vault_service_from_facet
+
+    meta = next(m for m in service_attrs().values() if m.secrets)
+    facet = dataclasses.replace(
+        meta.secrets[0], optional_inert_fields=("EXAMPLE_OPTIONAL_KEY",)
+    )
+    assert _vault_service_from_facet(meta, facet).optional_inert_fields == (
+        "EXAMPLE_OPTIONAL_KEY",
+    )
+    assert _vault_service_from_facet(meta, meta.secrets[0]).optional_inert_fields == ()

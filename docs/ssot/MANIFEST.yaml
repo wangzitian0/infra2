@@ -220,9 +220,8 @@ entries:
   # vault.self_refresh_inventory retired (#542): the audit inventory is DERIVED
   # from each service Deployer's SecretsFacet declarations (common/core/facets.py
   # -> common/security/vault_audit.load_inventory); the former handwritten
-  # docs/ssot/vault-self-refresh-inventory.yaml is deleted, its final content
-  # frozen as common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml
-  # (equivalence proof: common/tests/test_vault_inventory_equivalence.py).
+  # docs/ssot/vault-self-refresh-inventory.yaml is deleted
+  # (derivation tests: common/tests/test_vault_inventory_equivalence.py).
 
   ops.standards:
     owner: docs/ssot/ops.standards.md
@@ -305,9 +304,8 @@ entries:
       prefix so the app and infra inventories cannot overlap. The stage vocabulary comes
       from the installed infra2-sdk release (infra2_sdk.ci.load_delivery_stages); infra2 keeps no copy.
     proofs:
-      - common/tests/test_ci_gate_audit.py
+      - common/tests/test_ci_gate_meta.py
       - common/tests/test_delivery_stages.py
-      - common/tests/test_ci_gate_schema.py
   ops.merge_gate:
     owner: docs/ssot/ops.merge-gate.md
     summary: 可合流条件逐条、常设合流权及其 owner 保留项、PR 准则、发布晋升

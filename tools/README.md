@@ -98,8 +98,7 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 ## Division of labor (`common/` vs `tools/`)
 
 The layer definition is in [`docs/ssot/core.harness.md` §5.3](../docs/ssot/core.harness.md#53-code-layers).
-`common/tests/test_tools_thin.py` enforces it. Its `DEBT` ledger records the exact size of each old
-tool that still carries logic; review rejects a new entry or a raised size. Pattern: `tools/deploy_guard_audit.py` →
+`common/tests/test_tools_thin.py` enforces it. No tool is exempt. Pattern: `tools/deploy_guard_audit.py` →
 `common/deploy/dependencies.py`.
 
 ## Runner (invoke namespaces)
@@ -352,9 +351,9 @@ logs, and container state for every service in the facet-derived inventory
 It also reports (never fails on) whether any field in a service's
 `optional_inert_fields` SecretsFacet entry (`common/core/facets.py`) is
 actually populated in the rendered secrets file, not just wired -- e.g.
-`finance_report/app`'s `LLM_ENCRYPTION_KEYS`, which can have a valid
-`secrets.ctmpl` render line while Vault still holds no value, silently
-leaving the feature it unlocks inert (#526). These show up as `INFO P3
+a field that can have a valid `secrets.ctmpl` render line while Vault still
+holds no value, silently leaving the feature it unlocks inert (#526). No
+service declares such a field since finance_report deleted `LLM_ENCRYPTION_KEYS`. These show up as `INFO P3
 <service>::optional-field-inertness::<FIELD>` lines in the report.
 
 ```bash

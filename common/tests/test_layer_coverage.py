@@ -69,12 +69,6 @@ def test_every_registered_layer_is_in_the_ruff_lint_scope() -> None:
 
 
 def test_loader_does_not_reference_a_nonexistent_finance_project() -> None:
-    """Regression guard: tools/loader.py once loaded a stale `finance` project
-    directory that no longer exists on disk (silently no-op'd, but drifted from
-    the registry). Loader project names outside the app-layer prefix map must
-    resolve to real directories."""
+    """tools/loader.py once loaded a stale `finance` directory that no longer exists."""
     loader_src = (REPO_ROOT / "tools/loader.py").read_text(encoding="utf-8")
-    assert '"finance"' not in loader_src, (
-        "tools/loader.py references a 'finance' project directory that no "
-        "longer exists — remove it from the project list"
-    )
+    assert '"finance"' not in loader_src

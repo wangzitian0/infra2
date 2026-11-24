@@ -40,106 +40,42 @@ def _baseline(tmp_path: Path, *, covered: int, valid: int) -> Path:
     return baseline_path
 
 
-def test_missing_coverage_xml_exits_nonzero(
+def _argv(xml_path: Path, baseline_path: Path, *extra: str) -> list[str]:
+    return ["--coverage-xml", str(xml_path), "--baseline", str(baseline_path), *extra]
+
+
+def _lines_covered(path: Path) -> int:
+    return json.loads(path.read_text(encoding="utf-8"))["lines_covered"]
+
+
+def test_a_missing_input_or_a_regression_exits_nonzero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    exit_code = main(
-        [
-            "--coverage-xml",
-            str(tmp_path / "missing.xml"),
-            "--baseline",
-            str(tmp_path / "b.json"),
-        ]
-    )
-
-    assert exit_code == 1
+    assert main(_argv(tmp_path / "missing.xml", tmp_path / "b.json")) == 1
     assert "required coverage artifact is missing" in capsys.readouterr().err
-
-
-def test_missing_baseline_without_update_flag_exits_nonzero(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A missing baseline means it was deleted/not checked out, not a fresh repo —
-    docs/ssot/coverage-baseline.json is committed, so this must fail loud rather
-    than silently disable the gate."""
+    # A missing baseline means it was deleted or not checked out, not a fresh repo:
+    # docs/ssot/coverage-baseline.json is committed, so this must fail loud.
     xml_path = _cobertura(tmp_path, covered=50, valid=100)
-
-    exit_code = main(
-        ["--coverage-xml", str(xml_path), "--baseline", str(tmp_path / "b.json")]
-    )
-
-    assert exit_code == 1
+    assert main(_argv(xml_path, tmp_path / "b.json")) == 1
     assert "no baseline found" in capsys.readouterr().err
-
-
-def test_update_baseline_establishes_baseline_when_none_exists(
-    tmp_path: Path,
-) -> None:
-    xml_path = _cobertura(tmp_path, covered=50, valid=100)
-    baseline_path = tmp_path / "b.json"
-
-    exit_code = main(
-        [
-            "--coverage-xml",
-            str(xml_path),
-            "--baseline",
-            str(baseline_path),
-            "--update-baseline",
-        ]
-    )
-
-    assert exit_code == 0
-    assert json.loads(baseline_path.read_text(encoding="utf-8"))["lines_covered"] == 50
-
-
-def test_regression_against_baseline_exits_nonzero(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
     xml_path = _cobertura(tmp_path, covered=40, valid=100)
     baseline_path = _baseline(tmp_path, covered=70, valid=100)
-
-    exit_code = main(
-        ["--coverage-xml", str(xml_path), "--baseline", str(baseline_path)]
-    )
-
-    assert exit_code == 1
+    assert main(_argv(xml_path, baseline_path)) == 1
     assert "regressed" in capsys.readouterr().out
 
 
-def test_update_baseline_writes_new_floor(tmp_path: Path) -> None:
-    xml_path = _cobertura(tmp_path, covered=80, valid=100)
-    baseline_path = _baseline(tmp_path, covered=70, valid=100)
-
-    exit_code = main(
-        [
-            "--coverage-xml",
-            str(xml_path),
-            "--baseline",
-            str(baseline_path),
-            "--update-baseline",
-        ]
-    )
-
-    assert exit_code == 0
-    assert json.loads(baseline_path.read_text(encoding="utf-8"))["lines_covered"] == 80
-
-
-def test_update_baseline_refuses_on_regression(
+def test_update_baseline_sets_the_floor_and_refuses_a_regression(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    xml_path = _cobertura(tmp_path, covered=40, valid=100)
+    xml_path = _cobertura(tmp_path, covered=50, valid=100)
+    fresh = tmp_path / "fresh.json"
+    assert main(_argv(xml_path, fresh, "--update-baseline")) == 0
+    assert _lines_covered(fresh) == 50
     baseline_path = _baseline(tmp_path, covered=70, valid=100)
-
-    exit_code = main(
-        [
-            "--coverage-xml",
-            str(xml_path),
-            "--baseline",
-            str(baseline_path),
-            "--update-baseline",
-        ]
-    )
-
-    assert exit_code == 1
+    xml_path = _cobertura(tmp_path, covered=80, valid=100)
+    assert main(_argv(xml_path, baseline_path, "--update-baseline")) == 0
+    assert _lines_covered(baseline_path) == 80
+    xml_path = _cobertura(tmp_path, covered=40, valid=100)
+    assert main(_argv(xml_path, baseline_path, "--update-baseline")) == 1
     assert "refusing --update-baseline" in capsys.readouterr().err
-    assert json.loads(baseline_path.read_text(encoding="utf-8"))["lines_covered"] == 70
+    assert _lines_covered(baseline_path) == 80

@@ -26,7 +26,7 @@ reports", and shipped only the ``infra-ci`` half; the ``ops.scheduled_cleanup`` 
 other half and sat unused. Registering the PR-triggered remainder finishes Phase 1 as
 written; it does not reopen what was closed. The ``blocks_merge: true`` set is unchanged by
 that backfill, which is what makes the widening provably non-loosening
-(``common/tests/test_ci_gate_audit.py`` locks the set).
+(``common/tests/test_ci_gate_meta.py`` locks the set).
 """
 
 from __future__ import annotations

@@ -221,9 +221,8 @@ services:
       # common/core/registry.py::service_attrs(). AlertingDeployer.
       # compose_env_base() resolves ${ENV_SUFFIX} and injects the encoded
       # value into the Dokploy compose env — this reference is the ONLY probe
-      # source here. The pre-migration literal is frozen field-by-field in
-      # common/tests/fixtures/infra_probe_specs_frozen.txt (permanent
-      # equivalence regression, common/tests/test_probe_specs_equivalence.py).
+      # source here. Rendering rules are tested in
+      # common/tests/test_probe_specs_equivalence.py.
       INFRA_PROBE_SPECS: ${INFRA_PROBE_SPECS:-}
       # #543 (#209 reversed): registry-rendered public-route probes; empty only
       # when no service declares one
