@@ -73,8 +73,8 @@ class TodoDeployer(Deployer):
         ),
     )
 
-    # The one Postgres login of the Canary Todo. secrets.ctmpl composes DATABASE_URL with
-    # this role (common/tests/test_preview_platform_render.py keeps them equal).
+    # The one Postgres login of the Canary Todo. The Vault template composes DATABASE_URL
+    # with this role (common/tests/test_preview_platform_render.py keeps them equal).
     TODO_PG_ROLE = "todo_app"
     TODO_PG_CONNECTION_LIMIT = 20
     # token_urlsafe(32), the SDK's generator for runtime secrets, yields only these characters.

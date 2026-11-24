@@ -35,7 +35,9 @@ __all__ = [
     "SERVICES",
     "VAULT_AGENT_HCL_TEMPLATE",
     "Service",
+    "COMPILED_FILES",
     "check",
+    "committed_files",
     "load_manifest",
     "manifest_file",
     "merged_manifest",
@@ -119,11 +121,35 @@ def render(service: Service, *, root: Path | None = None) -> dict[str, str]:
     return outputs
 
 
+# The deploy compiles these two files into an x-infra2 stack (infra2#1822). Git keeps no copy.
+COMPILED_FILES = ("secrets.ctmpl", "vault-agent.hcl")
+
+
+def _is_x_infra2(service: Service) -> bool:
+    """True when ``<directory>/compose.yaml`` of ``service`` is an ``x-infra2`` source."""
+    from common.deploy.compose_compile import has_x_infra2
+
+    compose = ROOT / service.directory / "compose.yaml"
+    return compose.is_file() and has_x_infra2(compose.read_text(encoding="utf-8"))
+
+
+def committed_files(service: Service) -> dict[str, str]:
+    """The rendered files of ``service`` that git must hold.
+
+    The render runs for every service, so a manifest error always fails. An ``x-infra2``
+    stack commits only ``vault-policy.hcl``: the deploy compiles the other two files.
+    """
+    outputs = render(service)
+    if _is_x_infra2(service):
+        return {n: t for n, t in outputs.items() if n not in COMPILED_FILES}
+    return outputs
+
+
 def check(services: tuple[Service, ...] = SERVICES) -> list[str]:
     problems: list[str] = []
     for service in services:
         try:
-            outputs = render(service)
+            outputs = committed_files(service)
         except (ValueError, FileNotFoundError) as error:
             problems.append(str(error))
             continue
@@ -148,7 +174,7 @@ def write(services: tuple[Service, ...] = SERVICES) -> None:
     for service in services:
         if not service.generated:
             continue
-        for name, content in render(service).items():
+        for name, content in committed_files(service).items():
             (ROOT / service.directory / name).write_text(content, encoding="utf-8")
             print(f"wrote {service.directory}/{name}")
 

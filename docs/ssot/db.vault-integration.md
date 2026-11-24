@@ -152,7 +152,8 @@ template_config {
 }
 ```
 
-CI enforces these settings on all `vault-agent.hcl` files.
+CI enforces these settings on all `vault-agent.hcl` files. An `x-infra2` stack has no committed
+`vault-agent.hcl`: CI checks the config that the compiler writes into `VAULT_AGENT_HCL`.
 
 ### Required compose health behavior
 
@@ -198,7 +199,10 @@ The audit must check:
 - vault-agent and application containers are running with acceptable health; app
   containers must mount `/secrets/.env`.
 - The template the agent has mounted (`sha256` of `/etc/vault/secrets.ctmpl` inside
-  the container) is the one the checked-out release ships (#628, #692).
+  the container) is the one the checked-out release ships (#628, #692). For an
+  `x-infra2` stack the audit reads `/vault/secrets.ctmpl` and compares it with the
+  `infra2.vault.template.sha256` label of the compiled compose; the inventory names the
+  compose file as the source of both the template and the agent config.
 
 A preview alias stack (`finance_report/preview`, `truealpha/preview`) is in the
 inventory but not measured by the live audit: its containers carry a per-alias

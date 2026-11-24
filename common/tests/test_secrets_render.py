@@ -25,13 +25,36 @@ def test_every_registered_manifest_exists_and_passes_the_offline_gate() -> None:
             assert validate_manifest_offline(manifest) == [], path
 
 
+def _deployed(service) -> dict[str, str]:
+    """The template and agent config that the deploy ships for ``service``.
+
+    A plain stack mounts the committed files. An ``x-infra2`` stack ships them inline in
+    its compiled compose (``VAULT_SECRETS_TEMPLATE``, ``VAULT_AGENT_HCL``, infra2#1822).
+    """
+    import yaml
+
+    from common.deploy.compose_compile import has_x_infra2, load_stack
+
+    compose = f"{service.directory}/compose.yaml"
+    path = ROOT / compose
+    if path.is_file() and has_x_infra2(path.read_text(encoding="utf-8")):
+        doc = yaml.safe_load(load_stack(compose).compiled)
+        env = doc["services"]["vault-agent"]["environment"]
+        return {
+            "secrets.ctmpl": env["VAULT_SECRETS_TEMPLATE"].replace("$$", "$"),
+            "vault-agent.hcl": env["VAULT_AGENT_HCL"].replace("$$", "$"),
+        }
+    return {
+        name: (ROOT / service.directory / name).read_text(encoding="utf-8")
+        for name in secrets_render.COMPILED_FILES
+    }
+
+
 def test_generated_files_carry_the_marker_and_no_silent_empty_fallback() -> None:
     for service in secrets_render.SERVICES:
         if not service.generated:
             continue
-        template = (ROOT / service.directory / "secrets.ctmpl").read_text(
-            encoding="utf-8"
-        )
+        template = _deployed(service)["secrets.ctmpl"]
         assert template.startswith("{{- /* Generated from"), service.directory
         assert '{{ else }}""' not in template, service.directory
         if service.policy:
@@ -95,13 +118,71 @@ def test_check_reports_a_stale_file(
     assert secrets_render.check((service,)) == []
 
 
+def _one_key_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, compose: str):
+    (tmp_path / "svc").mkdir()
+    (tmp_path / "svc/compose.yaml").write_text(compose, encoding="utf-8")
+    manifest = EnvironmentManifest(
+        source="x",
+        fields=(
+            EnvironmentField(
+                "p", "PASSWORD", source="runtime", required=True, has_default=False
+            ),
+        ),
+    )
+    (tmp_path / "m.json").write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
+    monkeypatch.setattr(secrets_render, "ROOT", tmp_path)
+    return secrets_render.Service("svc", "proj", "svc", ("m.json",))
+
+
+_X_INFRA2 = "x-infra2:\n  vault:\n    name: svc\nservices:\n  app:\n    image: a:1\n"
+_PLAIN = "services:\n  app:\n    image: a:1\n"
+
+
+def test_an_x_infra2_stack_commits_only_its_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """infra2#1822 Cleanup: the deploy compiles secrets.ctmpl and vault-agent.hcl of an
+    x-infra2 stack, so check() requires and write() creates only vault-policy.hcl."""
+    service = _one_key_service(tmp_path, monkeypatch, _X_INFRA2)
+    problems = secrets_render.check((service,))
+    assert len(problems) == 1 and "svc/vault-policy.hcl" in problems[0], problems
+    secrets_render.write((service,))
+    assert sorted(p.name for p in (tmp_path / "svc").iterdir()) == [
+        "compose.yaml",
+        "vault-policy.hcl",
+    ]
+    assert secrets_render.check((service,)) == []
+    # A stale policy still fails.
+    policy = tmp_path / "svc/vault-policy.hcl"
+    policy.write_text(policy.read_text(encoding="utf-8") + "# edit\n", "utf-8")
+    problems = secrets_render.check((service,))
+    assert len(problems) == 1 and "svc/vault-policy.hcl" in problems[0], problems
+    # A manifest error still fails: the render runs for an x-infra2 stack too.
+    (tmp_path / "m.json").unlink()
+    problems = secrets_render.check((service,))
+    assert len(problems) == 1 and "m.json" in problems[0], problems
+
+
+def test_a_plain_stack_without_its_template_and_config_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _one_key_service(tmp_path, monkeypatch, _PLAIN)
+    secrets_render.write((service,))
+    assert secrets_render.check((service,)) == []
+    for name in secrets_render.COMPILED_FILES:
+        (tmp_path / "svc" / name).unlink()
+    problems = secrets_render.check((service,))
+    assert [p.splitlines()[0] for p in problems] == [
+        "--- svc/secrets.ctmpl",
+        "--- svc/vault-agent.hcl",
+    ]
+
+
 def test_every_generated_service_fails_the_render_on_a_missing_required_key() -> None:
     for service in secrets_render.SERVICES:
         if not service.generated:
             continue
-        agent = (ROOT / service.directory / "vault-agent.hcl").read_text(
-            encoding="utf-8"
-        )
+        agent = _deployed(service)["vault-agent.hcl"]
         assert "error_on_missing_key = true" in agent, service.directory
 
 
@@ -112,8 +193,6 @@ def test_optional_keys_never_use_a_direct_map_access() -> None:
     for service in secrets_render.SERVICES:
         if not service.generated:
             continue
-        template = (ROOT / service.directory / "secrets.ctmpl").read_text(
-            encoding="utf-8"
-        )
+        template = _deployed(service)["secrets.ctmpl"]
         assert "{{ with .Data.data." not in template, service.directory
         assert "{{- with .Data.data." not in template, service.directory

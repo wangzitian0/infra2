@@ -4,8 +4,7 @@
 #   python -m tools.compose_compile print platform/30.todo/compose.yaml
 x-infra2:
   # One vault-agent sidecar, container platform-todo-vault-agent${ENV_SUFFIX}. Its template
-  # is rendered from env.manifest.json (common.security.secrets_render), the same text as
-  # secrets.ctmpl.
+  # is rendered from env.manifest.json (common.security.secrets_render) at deploy time.
   vault:
     name: platform-todo
 
