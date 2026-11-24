@@ -108,5 +108,7 @@ def compiled_vault_template(directory: Path) -> str:
         return (directory / "secrets.ctmpl").read_text(encoding="utf-8")
     vault_agent = compose_services(compose).get("vault-agent") or {}
     inline = raw_environment(vault_agent).get("VAULT_SECRETS_TEMPLATE")
-    assert inline is not None, f"{compose}: compiled x-infra2 stack lacks VAULT_SECRETS_TEMPLATE"
+    assert inline is not None, (
+        f"{compose}: compiled x-infra2 stack lacks VAULT_SECRETS_TEMPLATE"
+    )
     return inline.replace("$$", "$")

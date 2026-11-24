@@ -142,7 +142,6 @@ def test_committed_copy_is_in_the_projection_text_form(service) -> None:
     assert sync.render(manifest) == text
 
 
-
 @pytest.mark.parametrize("service", sync.projected_services(), ids=lambda s: s.id)
 def test_release_template_from_the_copy_equals_the_committed_template(service) -> None:
     """When the release manifests equal the copy, the release render matches deployed."""
