@@ -233,7 +233,18 @@ def test_branch_is_reasserted_on_every_deploy_when_given(monkeypatch):
         options=PromoteOptions(iac_ref="b" * 40, branch="v1.1.38"),
         deps=PromoteDeps(client=client, domain="zitian.party"),
     )
-    assert client.source_updates == [("A6V-hbJlgHMwgPDoTDnhH", {"branch": "v1.1.38"})]
+    assert client.source_updates == [
+        (
+            "A6V-hbJlgHMwgPDoTDnhH",
+            {
+                "source_type": "github",
+                "repository": "infra2",
+                "owner": "wangzitian0",
+                "composePath": "finance_report/finance_report/preview/compose.yaml",
+                "branch": "v1.1.38",
+            },
+        )
+    ]
 
 
 def test_branch_omitted_leaves_a_plain_composes_source_untouched(monkeypatch):
@@ -336,8 +347,8 @@ def test_the_deployed_compose_is_the_stack_file_at_iac_ref_not_the_checkout(
 
 
 def test_a_plain_stack_file_at_iac_ref_keeps_the_github_branch(monkeypatch):
-    """A promote of a tag from before the move runs that tag's plain file: the git
-    branch is set, and no raw text is uploaded."""
+    """A promote of a tag from before the move (for example a rollback) runs that tag's
+    plain file: the record goes back to the GitHub source at the tag, with no raw text."""
     import common.deploy.config_drift as config_drift
 
     path = "finance_report/finance_report/10.app/compose.yaml"
@@ -352,7 +363,13 @@ def test_a_plain_stack_file_at_iac_ref_keeps_the_github_branch(monkeypatch):
     )
     assert dp.rollout_source_fields(
         "finance_report/app", branch="v0.0.1", iac_ref="v0.0.1"
-    ) == {"branch": "v0.0.1"}
+    ) == {
+        "source_type": "github",
+        "repository": "infra2",
+        "owner": "wangzitian0",
+        "composePath": path,
+        "branch": "v0.0.1",
+    }
 
 
 def test_a_release_template_without_a_compiled_sidecar_stops_the_deploy(monkeypatch):

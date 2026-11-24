@@ -652,8 +652,9 @@ def rollout_source_fields(
     from the working tree: a production promote runs from ``main`` with the approved
     tag as ``iac_ref``, and the deploy must run that tag's compose (deploy provenance).
 
-    A plain stack at ``iac_ref`` keeps the GitHub source: only ``branch`` is set, when
-    given. An ``x-infra2`` stack at ``iac_ref`` runs its compiled text as
+    A plain stack at ``iac_ref`` uses the GitHub source: with ``branch``, the record is
+    set to ``sourceType=github``, its compose path and ``branch`` (a raw record goes back
+    to GitHub); without ``branch``, the record is not changed. An ``x-infra2`` stack at ``iac_ref`` runs its compiled text as
     ``sourceType=raw``. ``config_drift.compiled_at_ref`` compiles it with the manifests
     at ``iac_ref``, and stops when ``iac_ref`` pins another infra2-sdk than this process
     runs. ``branch`` does not apply.
@@ -686,12 +687,29 @@ def rollout_source_fields(
         )
     text = found.decode("utf-8")
     if not has_x_infra2(text):
-        return {"branch": branch} if branch else {}
-    stack = StackCompose(
-        source=text,
-        compiled=compiled_at_ref(meta.compose_path, text, ref),
-        x_infra2=True,
-    )
+        if not branch:
+            return {}
+        # The record can be raw from a later x-infra2 deploy (a promote of an older
+        # tag, for example a rollback). Set the GitHub source again, as
+        # Deployer.composing (upsert_github_compose) wrote it; Dokploy keeps githubId.
+        from common.core.constants import GITHUB_OWNER, GITHUB_REPO
+
+        return {
+            "source_type": "github",
+            "repository": GITHUB_REPO,
+            "owner": GITHUB_OWNER,
+            "composePath": meta.compose_path,
+            "branch": branch,
+        }
+    try:
+        compiled = compiled_at_ref(meta.compose_path, text, ref)
+    except ComposeSourceError as exc:
+        raise ComposeSourceError(
+            f"{service}: cannot compile {meta.compose_path} at infra2 ref {ref!r}: "
+            f"{exc}. Dispatch the deploy from that ref, or cut a new infra2 release "
+            "and deploy it"
+        ) from exc
+    stack = StackCompose(source=text, compiled=compiled, x_infra2=True)
     # Raises ComposeSourceError when the compiled stack is not raw-eligible.
     stack.source_type
     compiled_label = vault_template_label(stack.compiled)
