@@ -137,6 +137,23 @@ gates:
     # (#1645); it gates nothing, and it holds no secret.
     blocks_merge: false
     failure_semantics: The CI post record of a commit on main is not written or not uploaded.
+  - id: infra_ci.app_image_imports
+    stage: github_ci.merge_authority
+    task_category: image_import
+    workflow: .github/workflows/infra-ci.yml
+    job: app-image-imports
+    # Runs only when a truealpha/, finance_report/ or harness/repos.yaml file changes
+    # (`app_images_changed` of detect-changes). Not a required context: promoting it to
+    # blocks_merge needs a ruleset context in the same change (#1823).
+    blocks_merge: false
+    failure_semantics: An import statement of an infra2-owned App entrypoint fails in the App image that harness/repos.yaml pins.
+  - id: infra_ci.hook_duration_report
+    stage: ops.scheduled_cleanup
+    task_category: duration_report
+    workflow: .github/workflows/ops-checks.yml
+    job: hook-duration-report
+    blocks_merge: false
+    failure_semantics: The stage records cannot be read, or the p95 duration of a hook is above 70% of its budget (a warning annotation only; the run stays green on a slow hook).
   - id: infra_ci.promotion_probe
     stage: github_ci.merge_authority
     task_category: change_detection

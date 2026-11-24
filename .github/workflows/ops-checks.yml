@@ -24,6 +24,7 @@ name: Ops Checks
     - cron: "27 8 * * *" # daily secrets reconcile + capacity (secrets supply chain, PR-E)
     - cron: "13 5 * * *" # daily e2e_regressions smoke pyramid against live production
     - cron: "0 13 * * *" # 21:00 UTC+8 daily reminder: a release tag is green in staging and not in production (#1645)
+    - cron: "7 6 * * *" # daily report-only check: a hook p95 duration above 70% of its budget (#1823)
   workflow_dispatch:
     inputs:
       task:
@@ -43,6 +44,7 @@ name: Ops Checks
           - staging-db-hygiene
           - e2e-regressions-smoke
           - promotion-reminder
+          - hook-duration-report
           - all
       dry_run:
         description: "Run checks without sending Feishu notifications"
@@ -72,7 +74,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'iac-input-reconcile-main' || github.event_name == 'schedule' && github.event.schedule == '47 3 * * *' && 'infra2-staging-db-hygiene' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '0 13 * * *' && 'infra2-promotion-reminder' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'iac-input-reconcile-main' || github.event_name == 'schedule' && github.event.schedule == '47 3 * * *' && 'infra2-staging-db-hygiene' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '0 13 * * *' && 'infra2-promotion-reminder' || github.event_name == 'schedule' && github.event.schedule == '7 6 * * *' && 'infra2-hook-duration-report' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
   cancel-in-progress: false
 
 env:
@@ -1191,6 +1193,37 @@ jobs:
           )
           raise SystemExit(outcome.exit_code)
           PY
+
+  hook-duration-report:
+    # schedule-signal-exempt: report-only; it pages nobody and writes annotations and the step summary (#1823)
+    name: Hook duration against budget
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '7 6 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'hook-duration-report' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install Python dependencies
+        run: |
+          sdk_requirement="$(python tools/sdk_requirement.py)"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
+
+      # Reads the stage records (`checks[].seconds`) and warns when the p95 of a hook is
+      # above 70% of its budget. It never fails on a slow hook; it fails when it cannot read.
+      - name: Report hook durations
+        run: python tools/hook_duration_report.py
 
   staging-db-hygiene:
     # signal: staging-db-hygiene
