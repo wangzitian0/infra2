@@ -92,3 +92,23 @@ def container_env(
         key: resolve(value, issued_env)
         for key, value in raw_environment(services[service]).items()
     }
+
+
+def compiled_vault_template(directory: Path) -> str:
+    """The Vault Agent template that the deploy ships for the stack ``directory``.
+
+    An x-infra2 stack commits no ``secrets.ctmpl``: the compile writes the template inline
+    into ``VAULT_SECRETS_TEMPLATE`` of its ``vault-agent`` sidecar (#1822, #1939). A
+    plain stack still mounts the committed ``secrets.ctmpl``, which this function reads.
+    """
+    from common.deploy.compose_compile import has_x_infra2
+
+    compose = directory / "compose.yaml"
+    if not has_x_infra2(compose.read_text(encoding="utf-8")):
+        return (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+    vault_agent = compose_services(compose).get("vault-agent") or {}
+    inline = raw_environment(vault_agent).get("VAULT_SECRETS_TEMPLATE")
+    assert inline is not None, (
+        f"{compose}: compiled x-infra2 stack lacks VAULT_SECRETS_TEMPLATE"
+    )
+    return inline.replace("$$", "$")

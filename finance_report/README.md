@@ -66,7 +66,7 @@ secret/data/finance_report/<env>/app
   - SECRET_KEY
 ```
 
-The template composes `DATABASE_URL` and `REDIS_URL` from the `postgres` and `redis` paths. The other app variables are not in Vault: `compose.yaml` or the application default sets each one, and `env.manifest.json` names its source. `10.app/secrets.ctmpl` is the one source for this list.
+The template composes `DATABASE_URL` and `REDIS_URL` from the `postgres` and `redis` paths. The other app variables are not in Vault: `compose.yaml` or the application default sets each one, and `env.manifest.json` names its source. The Vault template that the deploy compiles from `env.manifest.json` is the one source for this list; Git keeps no `10.app/secrets.ctmpl`.
 
 Model keys are not part of this list. The deploy does not render them (tests in `common/tests` assert it). The infra2 SDK defaults apply.
 

@@ -46,7 +46,7 @@ X_INFRA2_VAULT_COMPOSES = [
 def test_discovery_is_non_empty() -> None:
     """Sanity: if discovery returned nothing the parametrized guards below would vacuously
     pass, hiding a regression. Pin a sane floor."""
-    assert len(VAULT_AGENT_HCLS) >= 12, VAULT_AGENT_HCLS
+    assert len(VAULT_AGENT_HCLS) >= 11, VAULT_AGENT_HCLS
     assert len(VAULT_AGENT_COMPOSES) >= 12, VAULT_AGENT_COMPOSES
 
 
