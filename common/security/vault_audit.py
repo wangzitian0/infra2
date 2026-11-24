@@ -330,8 +330,15 @@ def _preview_stack_skipped(service: VaultService) -> CheckResult:
 def classify_deployed_template(
     service: VaultService,
     deployed_sha256: str,
+    deployed_form: str = "",
 ) -> CheckResult:
-    """Is the template the agent has mounted the one this release ships?"""
+    """Is the template the agent has mounted the one this release ships?
+
+    ``deployed_form`` is the form the container shows (``compiled`` or
+    ``hand-written``; empty when unknown). A container in the other form than the
+    release runs another release, so the check fails; it does not compare a hash
+    read from the wrong path (infra2#1822).
+    """
     import sys
 
     mod = sys.modules.get("common.security.vault_self_refresh_audit")
@@ -342,16 +349,42 @@ def classify_deployed_template(
     )
     release_sha256 = release_sha_fn(service)
     # An x-infra2 stack ships the template inside its compiled compose (infra2#1822).
+    release_compiled = _compose_is_x_infra2(service)
+    release_form = "compiled" if release_compiled else "hand-written"
     release_source = (
         f"the compiled {service.compose_path} template"
-        if _compose_is_x_infra2(service)
+        if release_compiled
         else service.secret_template_path
     )
     evidence = {
         "template_path": release_source,
+        "deployed_form": deployed_form,
+        "release_form": release_form,
         "deployed_sha256": deployed_sha256[:12],
         "release_sha256": release_sha256[:12],
     }
+    if deployed_form and deployed_form != release_form:
+        return _result(
+            service,
+            "deployed-template",
+            "fail",
+            "P1",
+            f"the vault-agent container runs a {deployed_form} template, but this "
+            f"release ships {release_source}; the release never reached the container",
+            evidence,
+        )
+    if release_compiled and not release_sha256:
+        from common.deploy.compose_compile import VAULT_TEMPLATE_LABEL
+
+        return _result(
+            service,
+            "deployed-template",
+            "fail",
+            "P1",
+            f"{release_source} has no {VAULT_TEMPLATE_LABEL} label; the compiler "
+            "output cannot prove the template it ships",
+            evidence,
+        )
     if not deployed_sha256 or not release_sha256:
         return _result(
             service,
@@ -611,7 +644,9 @@ def audit_from_observations(
         results.append(classify_rendered_env(service, obs.get("rendered_env", {}), now))
         results.append(
             classify_deployed_template(
-                service, str(obs.get("deployed_template_sha256", ""))
+                service,
+                str(obs.get("deployed_template_sha256", "")),
+                str(obs.get("deployed_template_form", "")),
             )
         )
         for field_name in service.optional_inert_fields:

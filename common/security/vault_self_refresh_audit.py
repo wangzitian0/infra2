@@ -24,7 +24,6 @@ from common.security.vault_audit import (
     RESTART_RECENCY_WINDOW_SECONDS,
     SECRET_KEYS,
     VaultService,
-    _compose_is_x_infra2,
     audit_from_observations,
     classify_container,
     classify_deployed_template,
@@ -127,9 +126,6 @@ def collect_live_observations(
         if service.ephemeral:
             observations["services"][service.id] = {"skipped": PREVIEW_STACK_SKIPPED}
             continue
-        # A compiled sidecar reads its template from /vault/secrets.ctmpl; a hand-written
-        # one mounts /etc/vault/secrets.ctmpl (infra2#1822).
-        compiled_sidecar = _compose_is_x_infra2(service)
         compose = client.find_compose_by_name(
             service.dokploy_service,
             project_name=service.project,
@@ -191,13 +187,15 @@ def collect_live_observations(
             app_states.append(st)
 
         inert_fields = service.optional_inert_fields
+        template_form, template_sha256 = _remote_template_identity(
+            vps_host, vault_agent_name
+        )
         observations["services"][service.id] = {
             "dokploy_env": env_text,
             "token_lookup": token_lookup,
             "rendered_env": _remote_secret_file_state(vps_host, vault_agent_name),
-            "deployed_template_sha256": _remote_template_sha256(
-                vps_host, vault_agent_name, compiled_sidecar=compiled_sidecar
-            ),
+            "deployed_template_form": template_form,
+            "deployed_template_sha256": template_sha256,
             "rendered_env_text": (
                 _remote_secret_file_text(vps_host, vault_agent_name)
                 if inert_fields
@@ -307,31 +305,44 @@ def _remote_secret_file_state(host: str, vault_agent_container: str) -> dict[str
     return _remote_json(host, command)
 
 
-def _remote_template_sha256(
-    host: str, vault_agent_container: str, *, compiled_sidecar: bool = False
-) -> str:
-    """The SHA-256 of the template that the vault-agent container reads.
+HAND_WRITTEN_TEMPLATE_PATH = "/etc/vault/secrets.ctmpl"
+FORM_COMPILED = "compiled"
+FORM_HAND_WRITTEN = "hand-written"
 
-    A hand-written sidecar mounts ``/etc/vault/secrets.ctmpl``. A compiled sidecar
-    writes ``/vault/secrets.ctmpl`` with ``printf '%s\\n' "$VAULT_SECRETS_TEMPLATE"``,
-    which adds one newline after the template text. The release label hashes the
-    template text, so this function removes that one newline before it hashes.
+
+def _remote_template_identity(host: str, vault_agent_container: str) -> tuple[str, str]:
+    """``(form, sha256)`` of the template that the vault-agent container reads.
+
+    The container tells its form, not the checkout: a release can lag main, and a
+    rollback can run a hand-written stack that main has moved to ``x-infra2``.
+    A compiled sidecar writes ``/vault/secrets.ctmpl`` with
+    ``printf '%s\\n' "$VAULT_SECRETS_TEMPLATE"``, which adds one newline after the
+    template text. The release label hashes the template text, so this function
+    removes that one newline before it hashes. A hand-written sidecar mounts
+    ``/etc/vault/secrets.ctmpl``; its hash is the hash of the file bytes.
+    The result is ``("", "")`` when the container shows neither file.
     """
-    if not compiled_sidecar:
-        command = (
-            f"docker exec {shlex.quote(vault_agent_container)} "
-            "sh -lc 'sha256sum /etc/vault/secrets.ctmpl 2>/dev/null | cut -d\" \" -f1'"
-        )
-        result = _ssh(host, command)
-        return result.stdout.strip() if result.returncode == 0 else ""
+    compiled = shlex.quote(COMPILED_TEMPLATE_PATH)
+    mounted = shlex.quote(HAND_WRITTEN_TEMPLATE_PATH)
+    script = (
+        f"if [ -f {compiled} ]; then printf '{FORM_COMPILED}\\n'; cat {compiled}; "
+        f"elif [ -f {mounted} ]; then printf '{FORM_HAND_WRITTEN}\\n'; "
+        f"sha256sum {mounted} | cut -d' ' -f1; fi"
+    )
     command = (
-        f"docker exec {shlex.quote(vault_agent_container)} "
-        f"cat {shlex.quote(COMPILED_TEMPLATE_PATH)}"
+        f"docker exec {shlex.quote(vault_agent_container)} sh -c {shlex.quote(script)}"
     )
     result = _ssh(host, command)
-    if result.returncode != 0 or not result.stdout.endswith("\n"):
-        return ""
-    return hashlib.sha256(result.stdout[:-1].encode("utf-8")).hexdigest()
+    if result.returncode != 0:
+        return "", ""
+    form, _, body = result.stdout.partition("\n")
+    if form == FORM_COMPILED:
+        if not body.endswith("\n"):
+            return form, ""
+        return form, hashlib.sha256(body[:-1].encode("utf-8")).hexdigest()
+    if form == FORM_HAND_WRITTEN:
+        return form, body.strip()
+    return "", ""
 
 
 def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:

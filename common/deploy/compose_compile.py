@@ -227,6 +227,21 @@ def raw_ineligibility(compiled_text: str) -> list[str]:
                 reasons.append(
                     f"services.{name} mounts {source!r} from the checkout; raw has no checkout"
                 )
+        env_files = spec.get("env_file")
+        for entry in env_files if isinstance(env_files, list) else [env_files]:
+            path = entry.get("path") if isinstance(entry, dict) else entry
+            if isinstance(path, str) and _is_host_relative(path):
+                reasons.append(
+                    f"services.{name} reads env_file {path!r}; raw has no checkout"
+                )
+        extends = spec.get("extends")
+        extends_file = extends.get("file") if isinstance(extends, dict) else None
+        if isinstance(extends_file, str) and _is_host_relative(extends_file):
+            reasons.append(
+                f"services.{name} extends {extends_file!r}; raw has no checkout"
+            )
+    if doc.get("include"):
+        reasons.append("top-level `include:` reads files; raw has no checkout")
     for block in ("configs", "secrets"):
         entries = doc.get(block)
         if not isinstance(entries, dict):
@@ -236,10 +251,6 @@ def raw_ineligibility(compiled_text: str) -> list[str]:
             if isinstance(file, str) and _is_host_relative(file):
                 reasons.append(f"{block}.{name} reads {file!r} from the checkout")
     return reasons
-
-
-def is_raw_eligible(compiled_text: str) -> bool:
-    return not raw_ineligibility(compiled_text)
 
 
 @dataclass(frozen=True)
@@ -293,7 +304,6 @@ __all__ = [
     "compile_stack",
     "compiles_a_vault_sidecar",
     "has_x_infra2",
-    "is_raw_eligible",
     "load_stack",
     "raw_ineligibility",
     "stack_from_text",
