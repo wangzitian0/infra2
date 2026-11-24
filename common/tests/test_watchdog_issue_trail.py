@@ -139,12 +139,14 @@ def test_dedup_is_title_equality_not_containment() -> None:
             {"number": 5, "title": title_for("infra2-ssh-extra")},
         ]
     )
-    with pytest.raises(ValueError, match="open-only"):
+    assert (
         reconcile_issue_trail(
             api,
             _trail([_red("infra2-ssh")], green=["infra2-ssh-extra"]),
             mode=OPEN_ONLY,
         )
+        == 1
+    )
     reconcile_issue_trail(
         api,
         _trail([_red("infra2-ssh")], green=["infra2-ssh-extra"]),

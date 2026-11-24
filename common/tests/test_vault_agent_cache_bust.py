@@ -18,13 +18,13 @@ without SECRET_KEY across two full redeploys until the variable was added).
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 from common.deploy.compose_compile import load_stack
+from common.tests.compose_env import missing_template_envs
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_ROOTS = ("bootstrap", "platform", "finance_report", "truealpha")
@@ -114,13 +114,29 @@ def test_vault_agent_forwards_every_env_its_template_reads(relative_path):
     S3_ENDPOINT=http://127.0.0.1: (no port) and every raw capture failed (2026-09-07)."""
     compose = ROOT / relative_path
     template = _template(compose)
-    referenced = set(re.findall(r'env "([A-Za-z0-9_]+)"', template))
     forwarded = set(_services(compose)["vault-agent"].get("environment") or {})
-    missing = sorted(referenced - forwarded)
+    missing = missing_template_envs(template, forwarded)
     assert not missing, (
         f"{relative_path}: secrets.ctmpl reads {missing} but vault-agent does not forward "
         "them — the agent would render them empty"
     )
+
+
+def test_missing_template_envs_enforces_or_fallback_and_standalone_refs():
+    """Falsifiability test: an `or` fallback fails when all branches are absent, and a
+    standalone `env "X"` still fails even when the `or` fallback is satisfied."""
+    template = (
+        '{{- $env := or (env "ENVIRONMENT") (env "ENV") -}}\n'
+        'PORT={{ env "TA_MINIO_S3_PORT" }}\n'
+    )
+    assert missing_template_envs(template, {"ENV", "TA_MINIO_S3_PORT"}) == []
+    assert missing_template_envs(template, {"ENVIRONMENT", "TA_MINIO_S3_PORT"}) == []
+    assert missing_template_envs(template, {"TA_MINIO_S3_PORT"}) == ["ENVIRONMENT|ENV"]
+    assert missing_template_envs(template, {"ENV"}) == ["TA_MINIO_S3_PORT"]
+    assert missing_template_envs(template, set()) == [
+        "ENVIRONMENT|ENV",
+        "TA_MINIO_S3_PORT",
+    ]
 
 
 @pytest.mark.parametrize("relative_path", PROMOTE_TIER_COMPOSE_FILES)

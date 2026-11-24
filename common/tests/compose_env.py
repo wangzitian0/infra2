@@ -13,6 +13,7 @@ fails loudly, so a new form cannot silently resolve to an empty string.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from pathlib import Path
 
 import yaml
@@ -20,6 +21,27 @@ import yaml
 _REFERENCE = re.compile(r"\$\{(?P<name>[A-Za-z_]\w*)(?P<default>:[-+][^${}]*)?\}")
 # A reference whose name is followed by anything but `:-` or the closing brace (`:?`, `-`, `+`...).
 _UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:[-+]|\}|[A-Za-z0-9_])")
+_OR_ENV_GROUP = re.compile(r'\bor((?:\s+\(env "[A-Za-z0-9_]+"\)){2,})')
+TEMPLATE_ENV_CALL = re.compile(r'env "([A-Za-z0-9_]+)"')
+
+
+def missing_template_envs(template: str, forwarded: Collection[str]) -> list[str]:
+    """Return env references in ``template`` not satisfied by ``forwarded``.
+
+    A Go template ``or (env "A") (env "B")`` fallback passes when at least one branch
+    is forwarded; every standalone ``env "X"`` must be forwarded directly.
+    """
+    forwarded_set = set(forwarded)
+    missing: list[str] = []
+    for match in _OR_ENV_GROUP.finditer(template):
+        branches = TEMPLATE_ENV_CALL.findall(match.group(1))
+        if not any(name in forwarded_set for name in branches):
+            missing.append("|".join(branches))
+    remainder = _OR_ENV_GROUP.sub("", template)
+    for name in sorted(set(TEMPLATE_ENV_CALL.findall(remainder))):
+        if name not in forwarded_set:
+            missing.append(name)
+    return missing
 
 
 def compose_services(compose_path: Path) -> dict[str, dict]:
@@ -73,18 +95,18 @@ def container_env(
 
 
 def compiled_vault_template(directory: Path) -> str:
-    """The Vault Agent template that the deploy mounts for the stack ``directory``.
+    """The Vault Agent template that the deploy ships for the stack ``directory``.
 
-    An x-infra2 stack commits no ``secrets.ctmpl``; the compile renders it from the stack
-    manifests (``compose_compile.vault_template_for``). A hand-written stack still commits
-    the file, which this function reads. Fails when neither source gives a template.
+    An x-infra2 stack commits no ``secrets.ctmpl``: the compile writes the template inline
+    into ``VAULT_SECRETS_TEMPLATE`` of its ``vault-agent`` sidecar (#1822, #1939). A
+    plain stack still mounts the committed ``secrets.ctmpl``, which this function reads.
     """
-    from common.deploy.compose_compile import has_x_infra2, vault_template_for
+    from common.deploy.compose_compile import has_x_infra2
 
     compose = directory / "compose.yaml"
-    text = compose.read_text(encoding="utf-8")
-    if not has_x_infra2(text):
+    if not has_x_infra2(compose.read_text(encoding="utf-8")):
         return (directory / "secrets.ctmpl").read_text(encoding="utf-8")
-    template = vault_template_for(compose, text)
-    assert template, f"{directory}: the compile renders no Vault template"
-    return template
+    vault_agent = compose_services(compose).get("vault-agent") or {}
+    inline = raw_environment(vault_agent).get("VAULT_SECRETS_TEMPLATE")
+    assert inline is not None, f"{compose}: compiled x-infra2 stack lacks VAULT_SECRETS_TEMPLATE"
+    return inline.replace("$$", "$")

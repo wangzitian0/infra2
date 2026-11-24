@@ -434,10 +434,69 @@ def sdk_internal_refs(pkg_root: Path) -> dict[str, list[tuple[str, int]]]:
     return refs
 
 
+def _public_attrs(cls: type) -> frozenset[str]:
+    return frozenset(name for name in dir(cls) if not name.startswith("_"))
+
+
+_BUILTIN_TYPE_ATTRS: dict[str, frozenset[str]] = {
+    "dict": _public_attrs(dict),
+    "Mapping": _public_attrs(dict),
+    "MutableMapping": _public_attrs(dict),
+    "MappingProxyType": _public_attrs(dict),
+    "list": _public_attrs(list),
+    "Sequence": _public_attrs(tuple),
+    "tuple": _public_attrs(tuple),
+    "set": _public_attrs(set),
+    "frozenset": _public_attrs(frozenset),
+    "AbstractSet": _public_attrs(frozenset),
+    "str": _public_attrs(str),
+}
+
+
+def _annotation_type_name(ann: ast.expr | None) -> str | None:
+    if isinstance(ann, ast.Subscript):
+        ann = ann.value
+    if isinstance(ann, ast.Name):
+        return ann.id
+    if isinstance(ann, ast.Attribute):
+        return ann.attr
+    return None
+
+
+def _infer_value_attrs(
+    value: ast.expr | None,
+    fn_returns: dict[str, ast.expr | None],
+) -> frozenset[str] | None:
+    if isinstance(value, (ast.Dict, ast.DictComp)):
+        return _BUILTIN_TYPE_ATTRS["dict"]
+    if isinstance(value, (ast.List, ast.ListComp)):
+        return _BUILTIN_TYPE_ATTRS["list"]
+    if isinstance(value, ast.Tuple):
+        return _BUILTIN_TYPE_ATTRS["tuple"]
+    if isinstance(value, (ast.Set, ast.SetComp)):
+        return _BUILTIN_TYPE_ATTRS["set"]
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return _BUILTIN_TYPE_ATTRS["str"]
+    if isinstance(value, ast.Call):
+        callee = (
+            value.func.id
+            if isinstance(value.func, ast.Name)
+            else (value.func.attr if isinstance(value.func, ast.Attribute) else None)
+        )
+        if callee in _BUILTIN_TYPE_ATTRS:
+            return _BUILTIN_TYPE_ATTRS[callee]
+        if callee in fn_returns:
+            ret_name = _annotation_type_name(fn_returns[callee])
+            if ret_name in _BUILTIN_TYPE_ATTRS:
+                return _BUILTIN_TYPE_ATTRS[ret_name]
+    return None
+
+
 def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
     """Build a map of dotted module or class path to defined/exported attribute names from AST."""
     exports: dict[str, set[str]] = defaultdict(set)
     star_reexports: list[tuple[str, str]] = []
+    named_reexports: list[tuple[str, str, str, str]] = []
     for path in sorted(pkg_root.rglob("*.py")):
         rel_parts = path.relative_to(pkg_root).with_suffix("").parts
         if any(p in SKIP_DIR_PARTS for p in rel_parts):
@@ -451,12 +510,57 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
         _, tree = _parse_py_file(path)
         if tree is None:
             continue
+        if isinstance(tree, ast.Module):
+            fn_returns = {
+                s.name: s.returns
+                for s in tree.body
+                if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            for stmt in tree.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(
+                    stmt.target, ast.Name
+                ):
+                    attrs = _BUILTIN_TYPE_ATTRS.get(
+                        _annotation_type_name(stmt.annotation) or ""
+                    ) or _infer_value_attrs(stmt.value, fn_returns)
+                    if attrs is not None:
+                        exports[f"{mod}.{stmt.target.id}"].update(attrs)
+                elif isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            attrs = _infer_value_attrs(stmt.value, fn_returns)
+                            if attrs is not None:
+                                exports[f"{mod}.{target.id}"].update(attrs)
+                        elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(
+                            stmt.value, ast.Call
+                        ):
+                            callee = (
+                                stmt.value.func.id
+                                if isinstance(stmt.value.func, ast.Name)
+                                else None
+                            )
+                            ret = fn_returns.get(callee or "")
+                            if (
+                                isinstance(ret, ast.Subscript)
+                                and (_annotation_type_name(ret.value) or "").lower()
+                                == "tuple"
+                                and isinstance(ret.slice, ast.Tuple)
+                                and len(ret.slice.elts) == len(target.elts)
+                            ):
+                                for t_elt, r_elt in zip(target.elts, ret.slice.elts):
+                                    if isinstance(t_elt, ast.Name):
+                                        attrs = _BUILTIN_TYPE_ATTRS.get(
+                                            _annotation_type_name(r_elt) or ""
+                                        )
+                                        if attrs is not None:
+                                            exports[f"{mod}.{t_elt.id}"].update(attrs)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 exports[mod].add(node.name)
             elif isinstance(node, ast.ClassDef):
                 exports[mod].add(node.name)
                 cls_key = f"{mod}.{node.name}"
+                exports.setdefault(cls_key, set())
                 for stmt in ast.walk(node):
                     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         exports[cls_key].add(stmt.name)
@@ -495,7 +599,12 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
                         if resolved_src:
                             star_reexports.append((mod, resolved_src))
                     else:
-                        exports[mod].add(alias.asname or alias.name)
+                        bound = alias.asname or alias.name
+                        exports[mod].add(bound)
+                        if resolved_src:
+                            named_reexports.append(
+                                (mod, bound, resolved_src, alias.name)
+                            )
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     exports[mod].add(alias.asname or alias.name.split(".")[0])
@@ -507,6 +616,28 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
                 before = len(exports[dst_mod])
                 exports[dst_mod] |= exports[src_mod]
                 if len(exports[dst_mod]) != before:
+                    changed = True
+                prefix = f"{src_mod}."
+                for src_child in [
+                    k
+                    for k in exports
+                    if k.startswith(prefix) and "." not in k[len(prefix) :]
+                ]:
+                    child_name = src_child[len(prefix) :]
+                    dst_child = f"{dst_mod}.{child_name}"
+                    existed = dst_child in exports
+                    before_child = len(exports[dst_child]) if existed else 0
+                    exports[dst_child].update(exports[src_child])
+                    if not existed or len(exports[dst_child]) != before_child:
+                        changed = True
+        for dst_mod, dst_name, src_mod, src_name in named_reexports:
+            src_key = f"{src_mod}.{src_name}"
+            if src_key in exports:
+                dst_key = f"{dst_mod}.{dst_name}"
+                existed = dst_key in exports
+                before = len(exports[dst_key]) if existed else 0
+                exports[dst_key].update(exports[src_key])
+                if not existed or len(exports[dst_key]) != before:
                     changed = True
     return exports
 
@@ -640,8 +771,15 @@ def consumer_symbol_refs(
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.split(".")[0] == "infra2_sdk":
-                            bound = alias.asname or alias.name.split(".")[0]
-                            mod_alias[bound] = alias.name
+                            if alias.asname:
+                                mod_alias[alias.asname] = alias.name
+                            else:
+                                mod_alias["infra2_sdk"] = "infra2_sdk"
+                            if "." in alias.name:
+                                parent_mod, _, leaf_mod = alias.name.rpartition(".")
+                                seen_imports[(parent_mod, leaf_mod)].append(
+                                    f"{repo}:{rel}:{node.lineno}"
+                                )
 
             if not is_test and local_to_sdk:
                 to_test_locals, to_dead_locals = _enclosing_method_is_dead_or_test_only(
@@ -728,14 +866,6 @@ def check_consumer_imports(
             return True
         if f"{base}.{name}" in exports:
             return True
-        parts = base.split(".")
-        if len(parts) >= 2:
-            parent_mod = ".".join(parts[:-1])
-            target_obj = parts[-1]
-            if parent_mod in exports and target_obj in exports[parent_mod]:
-                for mod_key, names in exports.items():
-                    if mod_key.endswith(f".{target_obj}") and name in names:
-                        return True
         return False
 
     def exists_in_runtime(base: str, name: str) -> tuple[bool, str]:

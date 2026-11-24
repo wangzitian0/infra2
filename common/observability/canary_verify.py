@@ -81,6 +81,11 @@ class CanaryRealityReport:
     expected_sdk: str = ""
     sdk: PillarResult = field(default_factory=lambda: PillarResult(ok=True, summary=""))
     llm: PillarResult = field(default_factory=lambda: PillarResult(ok=True, summary=""))
+    app_peer: PillarResult = field(
+        default_factory=lambda: PillarResult(
+            ok=True, summary="App-peer checks not sampled"
+        )
+    )
 
 
 def _probe_public_summary_sso(
@@ -553,6 +558,113 @@ def _parse_telemetry_pillar(
     return PillarResult(ok=ok, summary=summary, details=details)
 
 
+def _version_at_least(raw_version: str, minimum: tuple[int, ...]) -> bool:
+    """Return True when raw_version parses cleanly and is >= minimum."""
+    parts = [
+        part.strip() for part in str(raw_version or "").strip().lstrip("v").split(".")
+    ]
+    if not parts or any(not part.isdigit() for part in parts):
+        return False
+    return tuple(int(part) for part in parts) >= minimum
+
+
+def _split_exit_section(raw: str) -> tuple[int | None, str]:
+    """Extract trailing `__EXIT__=<code>` marker and return `(code, body)`."""
+    lines = (raw or "").splitlines()
+    if lines and lines[-1].startswith("__EXIT__="):
+        code_raw = lines[-1].split("=", 1)[1].strip()
+        body = "\n".join(lines[:-1]).strip()
+        return (int(code_raw) if code_raw.isdigit() else None), body
+    return None, (raw or "").strip()
+
+
+def _evaluate_app_peer_pillar(
+    *,
+    sections: dict[str, str],
+    installed_sdk: str,
+    require_app_peer: bool,
+) -> PillarResult:
+    if "WORKER" not in sections and "SCHEMA_CHECK" not in sections:
+        if require_app_peer:
+            return PillarResult(
+                ok=False,
+                summary="App-peer verification sections missing from output",
+            )
+        return PillarResult(ok=True, summary="App-peer checks not sampled")
+
+    worker_rc, worker_body = _split_exit_section(sections.get("WORKER", ""))
+    schema_rc, schema_body = _split_exit_section(sections.get("SCHEMA_CHECK", ""))
+    details: dict[str, Any] = {
+        "worker_exit": worker_rc,
+        "worker_output": worker_body,
+        "schema_exit": schema_rc,
+        "schema_output": schema_body,
+    }
+    expect_app_peer = require_app_peer or _version_at_least(installed_sdk, (4, 6, 0))
+    worker_objs: list[dict[str, Any]] = []
+    for line in worker_body.splitlines():
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            worker_objs.append(parsed)
+    worker_unsupported = worker_rc == 0 and any(
+        obj.get("status") == "unsupported" for obj in worker_objs
+    )
+    schema_unsupported = schema_rc == 0 and schema_body.strip() == "UNSUPPORTED"
+    if expect_app_peer and (worker_unsupported or schema_unsupported):
+        return PillarResult(
+            ok=False,
+            summary="App-peer checks missing on SDK >= 4.6.0",
+            details=details,
+        )
+    if worker_unsupported and schema_unsupported:
+        return PillarResult(
+            ok=True,
+            summary="App-peer checks unsupported on pre-4.6.0 image",
+            details=details,
+        )
+
+    problems: list[str] = []
+    if worker_rc != 0:
+        problems.append(f"worker exited {worker_rc}")
+    has_worker_log = any(
+        obj.get("logger") == "platform-todo-worker"
+        or obj.get("service.name") == "platform-todo-worker"
+        for obj in worker_objs
+    )
+    worker_result = next(
+        (obj for obj in reversed(worker_objs) if "ok" in obj and "status_code" in obj),
+        None,
+    )
+    if not has_worker_log:
+        problems.append("worker init_worker log line missing")
+    if (
+        worker_result is None
+        or worker_result.get("ok") is not True
+        or worker_result.get("status_code") != 200
+        or worker_result.get("service") != "platform/todo"
+    ):
+        problems.append("worker health result missing or failed")
+
+    if schema_rc != 0:
+        problems.append(f"schema_check exited {schema_rc}")
+    if "ROLLBACK_CLASS:" not in schema_body:
+        problems.append("schema_check output missing ROLLBACK_CLASS")
+
+    if problems:
+        return PillarResult(ok=False, summary="; ".join(problems), details=details)
+    return PillarResult(
+        ok=True,
+        summary="App-peer worker tick and schema_check passed",
+        details=details,
+    )
+
+
 def verify_canary(
     environment: str = "production",
     expected_sdk: str | None = None,
@@ -561,6 +673,7 @@ def verify_canary(
     now: datetime | None = None,
     repo_root: Path | None = None,
     require_llm: bool = False,
+    require_app_peer: bool = False,
 ) -> CanaryRealityReport:
     if expected_sdk is None:
         expected_sdk = _resolve_locked_sdk_version(
@@ -654,7 +767,11 @@ def verify_canary(
         f"gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}) && "
         f'case "$llm_out" in *\'"status":"pass"\'*|*\'"status": "pass"\'*) '
         f'for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do set -- $gen_ai_metrics_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 5; gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}); done ;; esac && '
-        f'printf "%s\\n" "$gen_ai_metrics_out"'
+        f'printf "%s\\n" "$gen_ai_metrics_out" && '
+        f'echo "=== WORKER ===" && '
+        f'{{ worker_out=$(docker exec {container} sh -c \'if [ -f /app/worker.py ]; then python3 /app/worker.py --once --health-url http://127.0.0.1:8000/api/health --service-name platform-todo-worker; else printf "{{\\"status\\":\\"unsupported\\"}}\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$worker_out" $?; }} && '
+        f'echo "=== SCHEMA_CHECK ===" && '
+        f'{{ schema_out=$(docker exec {container} sh -c \'if [ -f /app/canary_schema.py ]; then [ -f /secrets/.env ] && {{ set -a; . /secrets/.env; set +a; }}; python3 -m infra2_sdk.runtime.schema_check --app-path /app --metadata canary_schema:METADATA --db-url "$DATABASE_URL" --label platform/todo; else printf "UNSUPPORTED\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$schema_out" $?; }}'
     )
 
     code, stdout, stderr = _ssh_cmd(remote_script, host, user, key_path, port)
@@ -671,6 +788,7 @@ def verify_canary(
             expected_sdk=expected_sdk or "",
             sdk=fail,
             llm=fail,
+            app_peer=fail,
         )
 
     sections: dict[str, str] = {}
@@ -799,6 +917,11 @@ def verify_canary(
         domain=domain,
         require_llm=require_llm,
     )
+    app_peer_pillar = _evaluate_app_peer_pillar(
+        sections=sections,
+        installed_sdk=installed_sdk,
+        require_app_peer=require_app_peer,
+    )
 
     all_ok = (
         tracking_pillar.ok
@@ -807,6 +930,7 @@ def verify_canary(
         and alerts_pillar.ok
         and sdk_pillar.ok
         and llm_pillar.ok
+        and app_peer_pillar.ok
     )
 
     return CanaryRealityReport(
@@ -820,6 +944,7 @@ def verify_canary(
         expected_sdk=expected_sdk or "",
         sdk=sdk_pillar,
         llm=llm_pillar,
+        app_peer=app_peer_pillar,
     )
 
 
@@ -862,6 +987,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Fail verification if LLM summary is unconfigured or unverified",
     )
+    parser.add_argument(
+        "--require-app-peer",
+        action="store_true",
+        help="Fail verification if worker tick or schema_check is missing or fails",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -871,6 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
         check_sdk=not args.skip_sdk_check,
         max_age_seconds=args.max_age_seconds,
         require_llm=args.require_llm,
+        require_app_peer=args.require_app_peer,
     )
 
     if args.json:
@@ -898,6 +1029,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"6. LLM:         {'[OK]' if report.llm.ok else '[FAIL]'} {report.llm.summary}"
+        )
+        print(
+            f"7. App-Peer:    {'[OK]' if report.app_peer.ok else '[FAIL]'} {report.app_peer.summary}"
         )
 
     return 0 if report.all_ok else 1

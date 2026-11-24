@@ -82,8 +82,22 @@ class TodoDeployer(Deployer):
     _TODO_PG_PASSWORD = re.compile(r"[A-Za-z0-9_-]{16,128}")
 
     @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        """Include OpenPanel client settings and browser OTLP endpoint alongside base env."""
+        from common.core.environ import infra_domain
+        from common.deploy.env_config import otel_env
+        from common.observability.openpanel import openpanel_env
+
+        e = env or cls.env()
+        base = super().compose_env_base(e)
+        domain = str(e.get("INTERNAL_DOMAIN") or infra_domain())
+        base.update(openpanel_env(base["ENV"]))
+        base.update(otel_env(domain=domain))
+        return base
+
+    @classmethod
     def todos_storage_sql(cls, password: str) -> str:
-        """Idempotent SQL for the todos persistence role, table, and minimal DML grants."""
+        """Idempotent SQL for the todos persistence role, table, enum, and minimal DML grants."""
         if not cls._TODO_PG_PASSWORD.fullmatch(password or ""):
             raise ValueError(
                 "todo Postgres password must be 16-128 characters from [A-Za-z0-9_-]"
@@ -113,6 +127,19 @@ class TodoDeployer(Deployer):
             "ALTER TABLE todos ADD COLUMN IF NOT EXISTS capability TEXT NOT NULL DEFAULT 'general';\n"
             f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO {role};\n"
             f"GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO {role};\n"
+            "DO $enum$\nBEGIN\n"
+            "  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'canary_todo_capability') THEN\n"
+            "    CREATE TYPE canary_todo_capability AS ENUM "
+            "('general', 'postgres', 'redis', 's3', 'llm', 'otel', 'sso');\n"
+            "  END IF;\n"
+            "END\n$enum$;\n"
+            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'general';\n"
+            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'postgres';\n"
+            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'redis';\n"
+            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 's3';\n"
+            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'llm';\n"
+            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'otel';\n"
+            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'sso';\n"
         )
 
     @staticmethod
