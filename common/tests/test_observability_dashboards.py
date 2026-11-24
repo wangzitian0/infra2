@@ -1379,6 +1379,11 @@ def test_alert_on_absent_key_is_rejected(tmp_path) -> None:
         load_alert_definitions(_write_catalog(tmp_path, rule))
 
 
+# The task bodies (common/observability/apply_tasks.py) read the catalog module when
+# they run, so a test patches the catalog, not the app's shared_tasks module (#1825).
+from common import observability_dashboards as _obs_catalog  # noqa: E402
+
+
 def _load_fr_observability_tasks(monkeypatch, all_dashboards=False):
     fake_invoke = types.ModuleType("invoke")
     fake_invoke.task = lambda func=None, **_kwargs: func if func else (lambda f: f)
@@ -1400,7 +1405,7 @@ def _load_fr_observability_tasks(monkeypatch, all_dashboards=False):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     if not all_dashboards:  # the apply tests below drive the one finance_report file
-        module.DASHBOARD_FILES = (DASHBOARD_FILE,)
+        monkeypatch.setattr(_obs_catalog, "DASHBOARD_FILES", (DASHBOARD_FILE,))
     return module, Exit
 
 
@@ -1454,7 +1459,7 @@ def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) ->
     fake_console.info = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
     monkeypatch.setitem(sys.modules, "common.console", fake_console)
-    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+    monkeypatch.setattr(_obs_catalog, "load_alert_definitions", lambda: [_Def()])
 
     with pytest.raises(Exit) as exc:
         module.apply_alerts(object())
@@ -1527,7 +1532,7 @@ def test_apply_alerts_updates_existing_rule(monkeypatch) -> None:
     )
     _patch_console(monkeypatch)
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
-    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+    monkeypatch.setattr(_obs_catalog, "load_alert_definitions", lambda: [_Def()])
 
     assert module.apply_alerts(object()) is True
     pairs = [(m, p) for (m, p, _) in calls]
@@ -1554,7 +1559,7 @@ def test_apply_alerts_prune_is_log_only_by_default(monkeypatch) -> None:
         monkeypatch, info=lambda *a, **k: infos.append(" ".join(str(x) for x in a))
     )
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
-    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+    monkeypatch.setattr(_obs_catalog, "load_alert_definitions", lambda: [_Def()])
 
     module.apply_alerts(object())  # prune defaults False
     assert not any(m == "DELETE" and "canary-1" in p for (m, p, _) in calls)
@@ -1578,7 +1583,7 @@ def test_apply_alerts_prune_flag_deletes_only_managed_rules(monkeypatch) -> None
     )
     _patch_console(monkeypatch)
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
-    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+    monkeypatch.setattr(_obs_catalog, "load_alert_definitions", lambda: [_Def()])
 
     module.apply_alerts(object(), prune=True)
     deletes = [p for (m, p, _) in calls if m == "DELETE"]
@@ -1603,7 +1608,7 @@ def test_apply_alerts_prune_fails_loudly_on_missing_rule_id(monkeypatch) -> None
     )
     _patch_console(monkeypatch)
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
-    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+    monkeypatch.setattr(_obs_catalog, "load_alert_definitions", lambda: [_Def()])
 
     with pytest.raises(Exit):
         module.apply_alerts(object(), prune=True)
@@ -3165,7 +3170,7 @@ def test_apply_alerts_validates_every_rule_before_deleting_any(
     fake = _FakeSigNoz(rules=live)
     module, _, Exit, errors = _install_real_alerting(monkeypatch, fake)
     monkeypatch.setattr(
-        module, "load_alert_definitions", lambda: [_Def(), _BrokenDef(how)]
+        _obs_catalog, "load_alert_definitions", lambda: [_Def(), _BrokenDef(how)]
     )
 
     with pytest.raises(Exit) as exc:
@@ -3246,6 +3251,7 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
         "platform/30.todo/dashboard.json",
         "common/alerting/*",
         "common/observability_dashboards.py",
+        "common/observability/apply_tasks.py",
         "common/signoz_alert_rule_probe.py",
         "tools/signoz_alert_rule_probe.py",
     ]
@@ -3826,7 +3832,7 @@ def _three_rule_apply(monkeypatch, seconds_per_post):
     fake = _SlowPostSigNoz(clock, seconds_per_post, rules=_prod_before_this_fix())
     run = _apply_alerts_over(monkeypatch, fake, clock=clock)
     definitions = load_alert_definitions()[:3]
-    monkeypatch.setattr(run.module, "load_alert_definitions", lambda: definitions)
+    monkeypatch.setattr(_obs_catalog, "load_alert_definitions", lambda: definitions)
     return order, fake, run
 
 

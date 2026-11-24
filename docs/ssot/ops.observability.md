@@ -290,7 +290,7 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 
 ### 4.6 告警/仪表盘 config-as-code(#373 / #1389)
 
-定义签入 `finance_report/finance_report/observability/alert_rules.json`(含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`)、`truealpha/truealpha/observability/alert_rules.json`、`common/alerting/standard_rules.py`(标准错误日志规则表,#1649;`common/observability_dashboards.py::load_alert_definitions` 合并,#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
+定义签入 `finance_report/finance_report/observability/alert_rules.json`(含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`;任务体在 `common/observability/apply_tasks.py::make_observability_tasks`,#1825)、`truealpha/truealpha/observability/alert_rules.json`、`common/alerting/standard_rules.py`(标准错误日志规则表,#1649;`common/observability_dashboards.py::load_alert_definitions` 合并,#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
 
 **Staging(#1649)**:标准规则表与各服务目录里的规则都为 `production` 和 `staging` 各生成一份(PromQL 中的 `{env}` 由加载器填入);staging 规则名加 `Staging` 后缀,桥按 `environment=staging` 标签只发 report 到报告群,从不呼出。`PlatformTodoProbeFailures` 由 `apply-alerts --prune` 删除(#1648)。staging 心跳过期(>90 分钟)在每日 watchdog 报告里是一条 note,不呼出。每日生产 e2e 冒烟(`e2e-regressions-smoke`)红灯时开一个 `prod.e2e-smoke` 状态 issue,每日 watchdog 报告把它列在最前,绿灯关闭。
 
