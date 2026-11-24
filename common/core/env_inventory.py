@@ -2918,7 +2918,11 @@ SDK_READ_VAULT = {"VAULT_ADDR", "VAULT_TOKEN", "VAULT_ROLE_ID", "VAULT_SECRET_ID
 
 
 def sdk_vocabulary() -> dict[str, dict]:
-    """Read the SDK vocabulary via ``infra2_sdk.runtime.environment.runtime_env_contract()``."""
+    """Read the SDK vocabulary via ``infra2_sdk.runtime.environment.runtime_env_contract()``.
+
+    Raise ``ValueError`` when the contract names no variable: an analysis on an empty
+    vocabulary reports no SDK finding and looks green (infra2#1857).
+    """
     from infra2_sdk.runtime.environment import runtime_env_contract
 
     data = runtime_env_contract()
@@ -2931,27 +2935,29 @@ def sdk_vocabulary() -> dict[str, dict]:
         vocab[canon] = {"kind": "canonical", "canonical": canon}
         for alias in item.get("aliases") or ():
             vocab[alias] = {"kind": "alias", "canonical": canon}
+    if not vocab:
+        raise ValueError("runtime_env_contract() names no variable")
     for name, (kind, _file) in SDK_EXTRA_KEYS.items():
         vocab.setdefault(name, {"kind": kind, "canonical": name})
     return vocab
 
 
+def _require_vocab(vocab: dict[str, dict] | None) -> dict[str, dict]:
+    """Return ``vocab``, or the SDK vocabulary when it is ``None``. Raise on an empty one."""
+    resolved = sdk_vocabulary() if vocab is None else vocab
+    if not resolved:
+        raise ValueError("the SDK vocabulary is empty")
+    return resolved
+
+
 def _sdk_read_otel(vocab: dict[str, dict] | None = None) -> set[str]:
     """Return the SDK vocabulary names that ``OtelSettings.from_env`` looks up."""
-    if vocab is None:
-        try:
-            vocab = sdk_vocabulary()
-        except (ImportError, AttributeError):
-            vocab = {}
     return {
         name
-        for name, meta in vocab.items()
+        for name, meta in _require_vocab(vocab).items()
         if meta.get("kind") in ("canonical", "alias")
         and meta.get("canonical") not in SDK_IDENTITY_ONLY
     } | {"GITHUB_ACTIONS"}
-
-
-SDK_READ_OTEL = _sdk_read_otel()
 
 
 def base_layer(layer: str) -> str:
@@ -3006,12 +3012,8 @@ class UF:
 
 def analyze(inv, groups=None, vocab=None):
     groups = groups or {}
-    if vocab is None:
-        try:
-            vocab = sdk_vocabulary()
-        except Exception:  # noqa: BLE001
-            vocab = {}
-    sdk_read_otel = _sdk_read_otel(vocab) if vocab else SDK_READ_OTEL
+    vocab = _require_vocab(vocab)
+    sdk_read_otel = _sdk_read_otel(vocab)
     keys: dict[str, K] = {}
     for o in inv.occ:
         if o.ns != "env" or o.key == "<env_file>":
@@ -3032,7 +3034,7 @@ def analyze(inv, groups=None, vocab=None):
     for a, b, kind, _repo, _path, _line in edges:
         if kind in link_kinds:
             uf.union(a, b)
-    for a, meta in (vocab or {}).items():
+    for a, meta in vocab.items():
         if meta.get("kind") == "alias" and meta.get("canonical"):
             b = meta["canonical"]
             if keyname.match(a) and keyname.match(b):
@@ -3042,7 +3044,7 @@ def analyze(inv, groups=None, vocab=None):
         if kind in link_kinds:
             comps[uf.find(a)].add(a)
             comps[uf.find(a)].add(b)
-    for a, meta in (vocab or {}).items():
+    for a, meta in vocab.items():
         if meta.get("kind") == "alias" and meta.get("canonical"):
             b = meta["canonical"]
             if keyname.match(a) and keyname.match(b):
@@ -3547,11 +3549,7 @@ MEANING = {
 
 def doc_only(inv, repos, vocab=None):
     """UPPER_SNAKE names in docs/ssot that appear in no code or config file of the repositories."""
-    if vocab is None:
-        try:
-            vocab = sdk_vocabulary()
-        except (ImportError, AttributeError):
-            vocab = {}
+    vocab = _require_vocab(vocab)
     tok = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
     code_tokens = set(vocab)
     for _, root in repos.items():
