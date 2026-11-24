@@ -26,10 +26,13 @@ def _entrypoint_text(compose_path: Path, service_name: str) -> str:
     doc = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
     services = doc.get("services") or {}
     service = services.get(service_name) or {}
-    entrypoint = service.get("entrypoint") or []
-    if isinstance(entrypoint, str):
-        return entrypoint
-    return "\n".join(str(part) for part in entrypoint)
+    # An x-vault service runs `exec uvicorn` from `command`; the SDK wait entrypoint
+    # ends in `exec "$@"` (#1822 Slice 3). Read both parts.
+    parts: list[str] = []
+    for key in ("entrypoint", "command"):
+        value = service.get(key) or []
+        parts.extend([value] if isinstance(value, str) else [str(p) for p in value])
+    return "\n".join(parts)
 
 
 def extract_uvicorn_keepalive_seconds(command_text: str) -> int | None:
