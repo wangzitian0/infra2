@@ -147,7 +147,16 @@ def main(argv: list[str] | None = None, *, root: Path = REPO_ROOT) -> int:
     if not after:
         print("promotion probe: no release tag is newer than the production marker")
         return 0
-    verdict = probe(after, root)
+    try:
+        verdict = probe(after, root)
+    except (SystemExit, subprocess.CalledProcessError, OSError, ValueError) as exc:
+        # An unreadable marker or a git failure is a failed probe, not a crash.
+        prefix = "::warning::" if args.report_only else "::error::"
+        detail = str(getattr(exc, "code", exc)).removeprefix("::error::")
+        print(
+            f"{prefix}promotion probe: could not build the promotion of {after}: {detail}"
+        )
+        return 0 if args.report_only else 1
     required = ", ".join(f"{s}@{t}" for s, t in sorted(verdict.required.items()))
     print(
         f"promotion probe: {after} (production before: {verdict.before or 'none'}; "

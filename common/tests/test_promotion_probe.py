@@ -184,3 +184,23 @@ def test_workflows_run_the_probe_on_guard_prs_and_on_a_report_only_schedule() ->
         if "promotion_probe" in s.get("run", "")
     )
     assert "--report-only" in step["run"]
+
+
+def test_the_watched_paths_are_exactly_the_three_guard_files() -> None:
+    assert probe.WATCHED_PATHS == (
+        "common/deploy/promotion_guard.py",
+        "common/deploy/stage_record_reader.py",
+        "common/deploy/reconcile_iac_inputs.py",
+    )
+
+
+def test_a_crash_while_building_the_inputs_still_exits_0_when_report_only(
+    repo, monkeypatch, capsys
+) -> None:
+    def boom(*_a, **_k):
+        raise SystemExit("::error::invalid production marker(s): production/vx")
+
+    monkeypatch.setattr(probe, "probe", boom)
+    assert probe.main(["--after", "v3.1.23", "--report-only"], root=repo) == 0
+    assert "could not build the promotion" in capsys.readouterr().out
+    assert probe.main(["--after", "v3.1.23"], root=repo) == 1

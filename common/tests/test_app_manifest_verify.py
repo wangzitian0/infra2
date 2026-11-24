@@ -167,3 +167,20 @@ def test_infra_ci_runs_the_check_in_shard_one_after_fetching_the_markers() -> No
         < script.index("tools/app_manifest_verify.py")
         < script.index("fi\n", script.index("tools/app_manifest_verify.py"))
     )
+
+
+def test_a_system_exit_of_the_fetch_is_a_problem_not_a_crash() -> None:
+    def dead(_url: str) -> bytes:
+        raise SystemExit("fetching failed: HTTP Error 503")
+
+    problems = verify.verify_all({"pinned": TAGS}, root=ROOT, fetcher=dead)
+    assert len(problems) == 6 and all("503" in p for p in problems)
+
+
+def test_the_check_covers_exactly_the_three_stacks_and_two_deploy_types() -> None:
+    assert verify.VERIFIED_SERVICES == (
+        "finance_report/app",
+        "truealpha/app",
+        "truealpha/data_engine",
+    )
+    assert verify.VERIFIED_DEPLOY_TYPES == ("staging", "prod")
