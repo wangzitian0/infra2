@@ -1057,3 +1057,107 @@ def test_m1_ast_still_fails_for_missing_constant_or_missing_class_method(
         "M1: missing production SDK imports" in f and "missing_method" in f
         for f in failures2
     )
+
+
+def test_m1_ast_rejects_bogus_constant_attr_and_cross_module_name_collision(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    """Falsifiability test:
+    1) Existing dict constant fails M1 on nonexistent attribute;
+    2) Unrelated module defining a homonymous class method does not satisfy M1;
+    3) Explicit re-export resolves target class methods accurately;
+    4) Tuple-unpacked Mapping constant allows `.values()` and rejects bogus attrs.
+    """
+    pkg_root, consumers = synthetic_workspace
+    _write_files(
+        pkg_root,
+        {
+            "alpha.py": (
+                "from collections.abc import Mapping\n\n"
+                'MAP_CONST = {"k": "v"}\n\n'
+                "def _pair() -> tuple[int, Mapping[str, str]]:\n"
+                '    return 1, {"a": "b"}\n\n'
+                "VERSION_NUM, TUPLE_MAP = _pair()\n\n"
+                'def used_in_prod() -> str:\n    return "ok"\n\n'
+                "class ProdService:\n"
+                '    def used_in_prod(self) -> str:\n        return "ok"\n'
+            ),
+            "other.py": (
+                "class ProdService:\n"
+                '    def other_only(self) -> str:\n        return "other"\n'
+            ),
+            "__init__.py": (
+                f"from {PKG_UNDER}.alpha import MAP_CONST, ProdService, TUPLE_MAP, used_in_prod\n\n"
+                '__all__ = ["MAP_CONST", "ProdService", "TUPLE_MAP", "used_in_prod"]\n'
+            ),
+        },
+    )
+
+    # 1. Existing constant accessing bogus attribute fails M1.
+    _write_files(
+        consumers["consumer_a"],
+        {
+            "app/bogus_attr.py": (
+                f"from {PKG_UNDER}.alpha import MAP_CONST\n"
+                'def run() -> None:\n    MAP_CONST.totally_bogus_attr()\n\nif __name__ == "__main__":\n    run()\n'
+            ),
+        },
+    )
+    _, failures_bogus = _run_and_eval(synthetic_workspace)
+    assert any(
+        "M1: missing production SDK imports" in f and "totally_bogus_attr" in f
+        for f in failures_bogus
+    )
+
+    # 2. Cross-module class name collision (`other.ProdService.other_only`) fails on `alpha.ProdService`.
+    _write_files(
+        consumers["consumer_a"],
+        {
+            "app/bogus_attr.py": "def run() -> None:\n    pass\n",
+            "app/collision.py": (
+                f"from {PKG_UNDER}.alpha import ProdService\n"
+                'def run() -> None:\n    ProdService.other_only()\n\nif __name__ == "__main__":\n    run()\n'
+            ),
+        },
+    )
+    _, failures_collision = _run_and_eval(synthetic_workspace)
+    assert any(
+        "M1: missing production SDK imports" in f and "other_only" in f
+        for f in failures_collision
+    )
+
+    # 3 & 4. Explicit re-export method + tuple-unpacked Mapping `.values()` pass, bogus attr on TUPLE_MAP fails.
+    _write_files(
+        consumers["consumer_a"],
+        {
+            "app/collision.py": "def run() -> None:\n    pass\n",
+            "app/reexport_and_tuple.py": (
+                f"from {PKG_UNDER} import MAP_CONST, ProdService, used_in_prod\n"
+                f"from {PKG_UNDER}.alpha import TUPLE_MAP\n"
+                "def run() -> list[str]:\n"
+                "    _ = used_in_prod()\n"
+                '    _ = MAP_CONST["k"]\n'
+                "    _ = ProdService.used_in_prod\n"
+                "    return list(TUPLE_MAP.values())\n\n"
+                'if __name__ == "__main__":\n'
+                "    run()\n"
+            ),
+        },
+    )
+    _, failures_ok = _run_and_eval(synthetic_workspace)
+    assert failures_ok == []
+
+    _write_files(
+        consumers["consumer_a"],
+        {
+            "app/reexport_and_tuple.py": (
+                f"from {PKG_UNDER}.alpha import TUPLE_MAP\n"
+                'def run() -> None:\n    TUPLE_MAP.totally_bogus_attr()\n\nif __name__ == "__main__":\n    run()\n'
+            ),
+        },
+    )
+    _, failures_tuple_bogus = _run_and_eval(synthetic_workspace)
+    assert any(
+        "M1: missing production SDK imports" in f and "totally_bogus_attr" in f
+        for f in failures_tuple_bogus
+    )

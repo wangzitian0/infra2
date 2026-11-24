@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from common.deploy.app_contract import (
     render_release_template,
     service_for_id,
 )
+from common.deploy.compose_compile import VAULT_TEMPLATE_LABEL, has_x_infra2
 from common.security import secrets_render
 from common.security.registry import ROOT, SERVICES
 from common.tests.compose_env import compose_services, raw_environment
@@ -142,27 +144,48 @@ def _deployed_template(directory: Path) -> str:
     An ``x-infra2`` stack compiles ``VAULT_SECRETS_TEMPLATE`` inline into its
     ``vault-agent`` sidecar (#1822, #1939); a plain stack mounts ``secrets.ctmpl``.
     """
-    from common.deploy.compose_compile import has_x_infra2
-
     compose_path = directory / "compose.yaml"
     if has_x_infra2(compose_path.read_text(encoding="utf-8")):
         vault_agent = compose_services(compose_path).get("vault-agent") or {}
         inline = raw_environment(vault_agent).get("VAULT_SECRETS_TEMPLATE")
-        if inline is not None:
-            return inline.replace("$$", "$")
+        assert inline is not None, (
+            f"{compose_path}: compiled x-infra2 stack lacks VAULT_SECRETS_TEMPLATE"
+        )
+        return inline.replace("$$", "$")
     return (directory / "secrets.ctmpl").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("service", sync.projected_services(), ids=lambda s: s.id)
 def test_release_template_from_the_copy_equals_the_committed_template(service) -> None:
-    """When the release manifests equal the copy, the release render is the committed file."""
+    """When the release manifests equal the copy, the release render matches deployed."""
     copy = (ROOT / service.manifests[0]).read_text(encoding="utf-8")
     template, policy = render_release_template(
         service.id, [("release", copy)], stack_manifest_body=copy
     )
     directory = ROOT / service.directory
     assert template == _deployed_template(directory)
+    if has_x_infra2((directory / "compose.yaml").read_text(encoding="utf-8")):
+        vault_agent = compose_services(directory / "compose.yaml")["vault-agent"]
+        labels = vault_agent.get("labels") or []
+        want = f"{VAULT_TEMPLATE_LABEL}={hashlib.sha256(template.encode('utf-8')).hexdigest()}"
+        assert want in labels
     assert policy == (directory / "vault-policy.hcl").read_text(encoding="utf-8")
+
+
+def test_deployed_template_fails_closed_when_x_infra2_sidecar_lacks_inline_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "compose.yaml").write_text(
+        "x-infra2:\n  vault:\n    name: svc\nservices:\n  app:\n    image: a:1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "secrets.ctmpl").write_text("stale\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "common.tests.test_app_manifest_sync.compose_services",
+        lambda _path: {"vault-agent": {"environment": {}}},
+    )
+    with pytest.raises(AssertionError, match="lacks VAULT_SECRETS_TEMPLATE"):
+        _deployed_template(tmp_path)
 
 
 def _seed(root: Path, text: str) -> None:

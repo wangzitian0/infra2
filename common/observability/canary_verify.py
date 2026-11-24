@@ -601,24 +601,6 @@ def _evaluate_app_peer_pillar(
         "schema_output": schema_body,
     }
     expect_app_peer = require_app_peer or _version_at_least(installed_sdk, (4, 6, 0))
-    worker_unsupported = '"unsupported"' in worker_body.replace(" ", "")
-    schema_unsupported = schema_body.strip() == "UNSUPPORTED"
-    if worker_unsupported or schema_unsupported:
-        if expect_app_peer:
-            return PillarResult(
-                ok=False,
-                summary="App-peer checks missing on SDK >= 4.6.0",
-                details=details,
-            )
-        return PillarResult(
-            ok=True,
-            summary="App-peer checks unsupported on pre-4.6.0 image",
-            details=details,
-        )
-
-    problems: list[str] = []
-    if worker_rc != 0:
-        problems.append(f"worker exited {worker_rc}")
     worker_objs: list[dict[str, Any]] = []
     for line in worker_body.splitlines():
         text = line.strip()
@@ -630,6 +612,26 @@ def _evaluate_app_peer_pillar(
             continue
         if isinstance(parsed, dict):
             worker_objs.append(parsed)
+    worker_unsupported = worker_rc == 0 and any(
+        obj.get("status") == "unsupported" for obj in worker_objs
+    )
+    schema_unsupported = schema_rc == 0 and schema_body.strip() == "UNSUPPORTED"
+    if expect_app_peer and (worker_unsupported or schema_unsupported):
+        return PillarResult(
+            ok=False,
+            summary="App-peer checks missing on SDK >= 4.6.0",
+            details=details,
+        )
+    if worker_unsupported and schema_unsupported:
+        return PillarResult(
+            ok=True,
+            summary="App-peer checks unsupported on pre-4.6.0 image",
+            details=details,
+        )
+
+    problems: list[str] = []
+    if worker_rc != 0:
+        problems.append(f"worker exited {worker_rc}")
     has_worker_log = any(
         obj.get("logger") == "platform-todo-worker"
         or obj.get("service.name") == "platform-todo-worker"
@@ -769,7 +771,7 @@ def verify_canary(
         f'echo "=== WORKER ===" && '
         f'{{ worker_out=$(docker exec {container} sh -c \'if [ -f /app/worker.py ]; then python3 /app/worker.py --once --health-url http://127.0.0.1:8000/api/health --service-name platform-todo-worker; else printf "{{\\"status\\":\\"unsupported\\"}}\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$worker_out" $?; }} && '
         f'echo "=== SCHEMA_CHECK ===" && '
-        f'{{ schema_out=$(docker exec {container} sh -c \'if [ -f /app/canary_schema.py ]; then [ -f /secrets/.env ] && {{ set -a; . /secrets/.env; set +a; }}; python3 -m infra2_sdk.runtime.schema_check --metadata canary_schema:METADATA --label platform/todo; else printf "UNSUPPORTED\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$schema_out" $?; }}'
+        f'{{ schema_out=$(docker exec {container} sh -c \'if [ -f /app/canary_schema.py ]; then [ -f /secrets/.env ] && {{ set -a; . /secrets/.env; set +a; }}; python3 -m infra2_sdk.runtime.schema_check --app-path /app --metadata canary_schema:METADATA --db-url "$DATABASE_URL" --label platform/todo; else printf "UNSUPPORTED\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$schema_out" $?; }}'
     )
 
     code, stdout, stderr = _ssh_cmd(remote_script, host, user, key_path, port)

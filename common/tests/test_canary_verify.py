@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -1404,6 +1405,78 @@ def test_app_peer_pillar_allows_unsupported_on_pre_460_unless_required() -> None
     )
     assert strict.app_peer.ok is False
     assert strict.all_ok is False
+
+    # Error prose containing "unsupported" must not trigger pre-4.6.0 tolerance.
+    false_unsupported, _ = _verify_with_canned_ssh(
+        "production",
+        _with_app_peer_sections(
+            pre_base,
+            worker='{"level":"ERROR","message":"unsupported protocol"}\n__EXIT__=1',
+            schema_check=stdout.split("=== SCHEMA_CHECK ===\n", 1)[1],
+        ),
+        expected_sdk="4.5.0",
+    )
+    assert false_unsupported.app_peer.ok is False
+    assert "worker exited 1" in false_unsupported.app_peer.summary
+
+
+def test_app_peer_remote_script_passes_db_url_and_valid_shell_syntax() -> None:
+    captured: list[str] = []
+
+    def fake_ssh(script, host, user, key_path, port):
+        captured.append(script)
+        return (
+            0,
+            _with_app_peer_sections(
+                _canned_stdout(
+                    traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+                    logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+                    environment="staging",
+                    sdk="4.6.0",
+                ),
+                worker=(
+                    '{"logger":"platform-todo-worker","service.name":"platform-todo"}\n'
+                    '{"ok":true,"status_code":200,"service":"platform/todo"}\n'
+                    "__EXIT__=0"
+                ),
+                schema_check="ROLLBACK_CLASS: A\n__EXIT__=0",
+            ),
+            "",
+        )
+
+    with (
+        patch(
+            "common.observability.canary_verify._resolve_ssh_credentials",
+            return_value=("h", "u", "/tmp/k", 22),
+        ),
+        patch("common.observability.canary_verify._ssh_cmd", side_effect=fake_ssh),
+        patch("common.observability.canary_verify.urllib.request.urlopen") as mock_open,
+    ):
+        resp = MagicMock()
+        resp.status = 200
+        resp.read.return_value = json.dumps({"ok": True}).encode()
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        mock_open.return_value = resp
+        report = verify_canary(
+            "staging",
+            expected_sdk="4.6.0",
+            now=FIXED_NOW,
+            require_app_peer=True,
+        )
+
+    assert report.all_ok is True
+    assert len(captured) == 1
+    script = captured[0]
+    assert "--app-path /app" in script
+    assert "--metadata canary_schema:METADATA" in script
+    assert '--db-url "$DATABASE_URL"' in script
+    assert "--label platform/todo" in script
+    for shell in ("sh", "bash"):
+        res = subprocess.run(
+            [shell, "-n", "-c", script], capture_output=True, text=True
+        )
+        assert res.returncode == 0, f"{shell} syntax error: {res.stderr}"
 
 
 def test_require_app_peer_cli_flag_forwards_to_verify_canary() -> None:
