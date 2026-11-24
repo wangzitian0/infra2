@@ -1,0 +1,271 @@
+"""One daily reality-vs-declaration reconcile run (#542 task 4).
+
+Absorbs three formerly separate drift checkers — each was its own scheduled
+job with its own hand-copied alert step:
+
+- **compose_id drift** (`tools/app_compose_id_drift.py`, was ops-checks cron
+  ``17 7 * * *``): hardcoded bespoke-app Dokploy compose_ids vs live Dokploy.
+- **config drift** (`tools/dokploy_config_drift.py`, was
+  ``config-drift-report.yml``): declared IaC source-config hash at the latest
+  explicit production marker vs the deployed hash.
+- **dns drift** (`common/deploy/dns_drift.py`, was ``dns-drift-report.yml``):
+  declared DNS records vs live Cloudflare.
+
+Each absorbed check stays testable as a library (its own tests keep passing;
+the standalone drift scripts keep their CLIs, while `common/deploy/dns_drift.py`
+is a library module without `main()`) — what died is the three separate workflow
+jobs/crons/alert-step copies.
+
+Deliberately NOT absorbed: `tools/preview_leak_check.py`. It is an HOURLY
+lifecycle-contract check (live previews vs live PR state — reality vs reality,
+no declaration involved), not facet reconciliation; folding it in here would
+silently stretch leak-detection latency 24x.
+
+Report discipline (#425): the combined report is delivered EVERY run, drift or
+not — its own arrival self-proves the reconcile path. Paging is separate and
+confirmed-only: a transient lookup error fails this job (visible in CI, retried
+next schedule) but never pages; only confirmed findings page (#524's
+confirmed_drift discipline, preserved per section).
+"""
+# alerts-as: facet-reconcile  (#542 no-new-wheels: registered day-tier report signal)
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+@dataclass
+class Section:
+    name: str
+    report: str = ""
+    blockers: list[str] = field(default_factory=list)  # fail the job (incl. transient)
+    confirmed: list[str] = field(default_factory=list)  # page-worthy findings only
+    skipped: str = ""  # non-empty = section not runnable here (with reason)
+    # Stable identity of each `confirmed` line, same order (#962): names and
+    # verdicts only -- never a hash, id or note, which would make every day new.
+    confirmed_keys: list[str] = field(default_factory=list)
+
+
+def run_compose_id_section() -> Section:
+    section = Section("compose-id")
+    try:
+        # imports inside the try (live lesson from the first run: a missing
+        # dependency in one section must degrade to THAT section's blocker,
+        # not crash the whole runner before the report is even delivered)
+        from common.deploy.compose_id_drift import confirmed_drift, format_report, scan
+        from common.deploy.dokploy_client import get_dokploy
+
+        rows = scan(get_dokploy())
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — blocker, not a crash
+        section.blockers.append(f"compose_id scan failed: {exc}")
+        section.report = f"compose-id scan failed: {exc}"
+        return section
+    section.report = format_report(rows)
+    section.blockers = [r.verdict for r in rows if r.verdict != "ok"]
+    drift = confirmed_drift(rows)
+    section.confirmed = [
+        f"{r.target.service} ({r.target.env}): {r.note}" for r in drift
+    ]
+    section.confirmed_keys = [
+        f"compose-id:{r.target.service}:{r.target.env}:{r.verdict}" for r in drift
+    ]
+    return section
+
+
+def run_config_drift_section() -> Section:
+    section = Section("config-hash")
+    try:
+        from common.deploy.config_drift import (
+            _production_target_tag,
+            format_report,
+            scan,
+            strict_blockers,
+        )
+
+        tag = _production_target_tag()
+        rows = scan(tag)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — dokploy_config_drift
+        # raises SystemExit("no v* release tag found") on a tagless checkout;
+        # BaseException-shaped errors must still degrade to a section blocker
+        # (second live-run lesson), never crash the whole runner.
+        section.blockers.append(f"config drift scan failed: {exc}")
+        section.report = f"config-hash scan failed: {exc}"
+        return section
+    section.report = format_report(tag, rows)
+    confirmed = strict_blockers(rows)
+    section.blockers = [str(r) for r in confirmed]
+    section.confirmed = [str(r) for r in confirmed]  # hash drift is never transient
+    section.confirmed_keys = [f"config-hash:{r.service}:{r.verdict}" for r in confirmed]
+    return section
+
+
+def _is_dns_observation_blocked(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(
+        pattern in msg
+        for pattern in (
+            "cloudflare api",
+            "cloudflare dns record observation",
+            "could not resolve cloudflare zone",
+            "unauthorized",
+            "forbidden",
+            "401",
+            "403",
+        )
+    )
+
+
+def run_dns_section() -> Section:
+    section = Section("dns")
+    have_zone = bool(os.environ.get("CF_ZONE_ID") or os.environ.get("CF_ZONE_NAME"))
+    if not (
+        os.environ.get("CF_API_TOKEN")
+        and os.environ.get("INTERNAL_DOMAIN")
+        and have_zone
+    ):
+        # preserved semantics: not-yet-configured is a visible skip, never a red
+        section.skipped = "Cloudflare credentials not configured"
+        section.report = "dns: skipped (Cloudflare credentials not configured)"
+        return section
+    try:
+        from common.deploy.dns_drift import (
+            _actual_records,
+            _dns_tasks,
+            _expected_records,
+            compute_drift,
+            format_report,
+        )
+
+        dns = _dns_tasks()
+        expected = set(_expected_records(dns))
+        actual = set(_actual_records(dns))
+        drift = compute_drift(expected, actual)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        err = str(exc)
+        # Issue #658 recommendation 2: a credential or API observation failure
+        # (e.g. Cloudflare API 401/403, zone resolution failure) means this external
+        # check could not run. That is an observation block, NOT a confirmed DNS drift.
+        # Treating an auth failure as a job-failing blocker blinds the daily reconcile
+        # by permanently turning the job red and drowning out real Dokploy compose-id
+        # and config-hash drift (#658).
+        if _is_dns_observation_blocked(exc):
+            section.skipped = f"Cloudflare API observation blocked: {err}"
+            section.report = f"dns: blocked ({err})"
+            return section
+        section.blockers.append(f"dns scan failed: {err}")
+        section.report = f"dns scan failed: {err}"
+        return section
+    section.report = format_report(
+        drift, os.environ.get("INTERNAL_DOMAIN", "?"), len(expected), len(actual)
+    )
+    # `missing` (declared intent not realized in Cloudflare) is the real signal;
+    # `unmanaged` is informational by the tool's own contract — report-only.
+    section.blockers = [str(f) for f in drift.missing]
+    section.confirmed = [str(f) for f in drift.missing]
+    section.confirmed_keys = [f"dns:{f}" for f in drift.missing]
+    return section
+
+
+def run_all() -> list[Section]:
+    return [run_compose_id_section(), run_config_drift_section(), run_dns_section()]
+
+
+#: Where `main()` leaves what the run actually observed, for the step that resolves
+#: a paged finding after a green run (#962). Job-level env; absent = not recorded.
+OBSERVATION_ENV = "FACET_RECONCILE_OBSERVATION"
+
+
+def unevaluated_prefixes(sections: list[Section]) -> list[str]:
+    """Key prefixes of the sections that did not really run (#962).
+
+    A section that was skipped (Cloudflare credentials missing, 401/403) or hit a
+    blocker (a lookup that failed) makes no claim about its findings: a paged
+    finding of that section has not recovered, it is unknown. Every finding key
+    starts with its section's name and a colon (`dns:`, `config-hash:`, `compose-id:`).
+    """
+    return [f"{s.name}:" for s in sections if s.skipped or s.blockers]
+
+
+def write_observation(
+    sections: list[Section], env: Mapping[str, str] | None = None
+) -> None:
+    """Record which sections did not run, if the job asked for it."""
+    path = (os.environ if env is None else env).get(OBSERVATION_ENV, "").strip()
+    if not path:
+        return
+    try:
+        Path(path).write_text(
+            json.dumps({"unevaluated": unevaluated_prefixes(sections)}),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        # No observation reads as "nothing observed": a paged finding stays paged.
+        print(f"could not record the observation: {exc}", file=sys.stderr)
+
+
+def read_unevaluated(env: Mapping[str, str]) -> list[str]:
+    """The prefixes the last `main()` run did not evaluate. A missing or unreadable
+    observation is everything (``[""]``): without proof of a section, nothing resolves."""
+    path = env.get(OBSERVATION_ENV, "").strip()
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        prefixes = data["unevaluated"]
+        if isinstance(prefixes, list) and all(isinstance(p, str) for p in prefixes):
+            return prefixes
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return [""]
+
+
+def combined_report(sections: list[Section]) -> str:
+    n_blockers = sum(len(s.blockers) for s in sections)
+    n_confirmed = sum(len(s.confirmed) for s in sections)
+    lines = [
+        f"📋 [Infra2] daily facet reconcile · {len(sections)} section(s) · "
+        f"blockers {n_blockers} · confirmed {n_confirmed}",
+    ]
+    for s in sections:
+        lines.append(f"\n── {s.name} ──")
+        lines.append(s.report.strip())
+    return "\n".join(lines)
+
+
+def confirmed_findings(sections: list[Section]) -> list[str]:
+    return [line for _key, line in confirmed_finding_pairs(sections)]
+
+
+def confirmed_finding_pairs(sections: list[Section]) -> list[tuple[str, str]]:
+    """``(identity key, display line)`` per confirmed finding (#962).
+
+    The key is what the cross-run page dedup compares; the line is what a page
+    shows. A section that gives no key for a line (a builder that predates
+    ``confirmed_keys``) falls back to the line itself: that can only page more,
+    never less.
+    """
+    pairs: list[tuple[str, str]] = []
+    for section in sections:
+        keyed = len(section.confirmed_keys) == len(section.confirmed)
+        for index, line in enumerate(section.confirmed):
+            key = section.confirmed_keys[index] if keyed else f"{section.name}:{line}"
+            pairs.append((key, f"[{section.name}] {line}"))
+    return pairs
+
+
+def main() -> int:
+    sections = run_all()
+    write_observation(sections)
+    report = combined_report(sections)
+    print(report)
+
+    from common.alerting import deliver_infra2_report
+
+    # Delivered EVERY run (#425): the report's own arrival self-proves the path.
+    delivered = deliver_infra2_report(report)
+    print(f"\n[report delivered: {delivered}]", file=sys.stderr)
+
+    return 1 if any(s.blockers for s in sections) else 0

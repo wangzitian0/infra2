@@ -305,7 +305,7 @@ def test_facet_keys_ignore_ids_hashes_and_notes(monkeypatch) -> None:
     import common.deploy.config_drift as config
     import common.deploy.dns_drift as dns
     import common.deploy.dokploy_client
-    from tools import facet_reconcile as fr
+    from common.deploy import facet_reconcile as fr
 
     def keys(live_id: str, deployed: str, note: str) -> list[str]:
         target = SimpleNamespace(service="finance_report/app", env="production")
@@ -346,7 +346,7 @@ def test_facet_keys_ignore_ids_hashes_and_notes(monkeypatch) -> None:
 
 def test_facet_pairs_without_section_keys_fall_back_to_the_line() -> None:
     """A section that gives no keys can only page more (the line moves), never less."""
-    from tools import facet_reconcile as fr
+    from common.deploy import facet_reconcile as fr
 
     section = fr.Section("dns", confirmed=["rec a missing", "rec b missing"])
 
@@ -481,7 +481,7 @@ def test_a_secrets_report_proves_only_what_it_observed() -> None:
 
 def test_facet_and_vault_name_what_they_did_not_evaluate(tmp_path) -> None:
     from common.security.vault_self_refresh_audit import classify_deployed_template
-    from tools import facet_reconcile as fr
+    from common.deploy import facet_reconcile as fr
     from tools import vault_self_refresh_audit_check as vault
 
     sections = [
@@ -1259,7 +1259,11 @@ def _assert_step_lifecycle(
 
 
 def test_facet_steps_page_report_and_resolve(step_env, tmp_path) -> None:
-    import tools.facet_reconcile as fr
+    import common.deploy.facet_reconcile as fr
+
+    # The workflow steps import `run_all` from the entry point, so the test patches
+    # it there; the other names come from the module that holds the logic.
+    import tools.facet_reconcile as entry
 
     api, ch, monkeypatch = step_env
     alert, resolve = DEDUPED_JOBS["facet-reconcile"]
@@ -1283,16 +1287,16 @@ def test_facet_steps_page_report_and_resolve(step_env, tmp_path) -> None:
         ]
 
     def unproven():
-        monkeypatch.setattr(fr, "run_all", lambda: sections(dns="skipped"))
+        monkeypatch.setattr(entry, "run_all", lambda: sections(dns="skipped"))
         fr.write_observation(sections(dns="skipped"))
         assert _execute("facet-reconcile", resolve) == 0
-        monkeypatch.setattr(fr, "run_all", lambda: sections(dns="skipped"))
+        monkeypatch.setattr(entry, "run_all", lambda: sections(dns="skipped"))
         assert _execute("facet-reconcile", alert) == 0
 
     _assert_step_lifecycle(
         "facet-reconcile",
         step_env,
-        set_state=lambda s: monkeypatch.setattr(fr, "run_all", lambda: sections(s)),
+        set_state=lambda s: monkeypatch.setattr(entry, "run_all", lambda: sections(s)),
         day1_str="missing since 09-20",
         day1_match="[dns] a.example.test missing since 09-20",
         age=1,
@@ -1300,25 +1304,25 @@ def test_facet_steps_page_report_and_resolve(step_env, tmp_path) -> None:
         day2_day=2,
         unproven_fn=unproven,
         clean_fn=lambda: (
-            monkeypatch.setattr(fr, "run_all", lambda: sections()),
+            monkeypatch.setattr(entry, "run_all", lambda: sections()),
             fr.write_observation(sections()),
         ),
         clean_step="resolve",
         resolved_header="✅ [已恢复] 每日 facet 对账",
     )
 
-    monkeypatch.setattr(fr, "run_all", lambda: sections(compose_blocked=True))
+    monkeypatch.setattr(entry, "run_all", lambda: sections(compose_blocked=True))
     assert _execute("facet-reconcile", alert) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] 每日 facet 对账")
     assert api.open_titles() == []
 
-    monkeypatch.setattr(fr, "run_all", lambda: sections("missing again"))
+    monkeypatch.setattr(entry, "run_all", lambda: sections("missing again"))
     assert _execute("facet-reconcile", alert) == 0
     pages = len(ch.pages)
     observation.unlink(missing_ok=True)
     assert _execute("facet-reconcile", resolve) == 0
     assert len(ch.pages) == pages and api.open_titles() != []
-    monkeypatch.setattr(fr, "run_all", lambda: sections())
+    monkeypatch.setattr(entry, "run_all", lambda: sections())
     fr.write_observation(sections())
     assert _execute("facet-reconcile", resolve) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] 每日 facet 对账")

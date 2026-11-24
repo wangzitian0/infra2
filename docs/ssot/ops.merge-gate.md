@@ -82,7 +82,7 @@ Fail closed: when a fact is false or unreadable, the earlier rules apply to ever
 The gate returns `outcome="owner"` (`owner_required=True`) only for a production path (#1340):
 
 - An edit to the settings of the `production` environment.
-- An edit to the jobs `host-hygiene-schedule` or `facet-reconcile` in `.github/workflows/ops-checks.yml`, or to `tools/host_hygiene_schedule.py` or `tools/facet_reconcile.py`.
+- An edit to the jobs `host-hygiene-schedule` or `facet-reconcile` in `.github/workflows/ops-checks.yml`, or to a file in `SCHEDULED_AUTOMATION_FILES` (`common/gate/self_governance.py`): `tools/host_hygiene_schedule.py`, `tools/facet_reconcile.py` and the modules in `common/deploy/` that hold their logic (#1823).
 - A workflow or deploy-triggering edit when the production lock is not verified.
 
 Every other edit in the closure (`common/gate/*.py`, `tools/pr_merge_gate.py`, `common/tests/test_*.py`, `docs/ssot/ci-gate-inventory.yaml`, `AGENTS.md`, `docs/ssot/ops.merge-gate.md`, `pyproject.toml`, shadow files, and required-check workflows when the lock holds) returns `outcome="review_required"` (`review_required=True`, `owner_required=False`) until cleared by one of these exits:
@@ -96,7 +96,7 @@ A file that Python or pytest runs before gate code is also in the gate closure.
 Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `common/tests`.
 Bytecode, `.so` and `.pth` files, virtual environments and `sitecustomize.py` are also in the closure, at any depth.
 `pyproject.toml`, `pytest.ini`, `tox.ini`, `setup.cfg` and `.coveragerc` are in the closure at the root, in `common/` and in `common/tests/` (#1147, #1035).
-`tools/host_hygiene_schedule.py` and `tools/facet_reconcile.py` are in `self_governing_files()` (#1127, #1147).
+Each file in `SCHEDULED_AUTOMATION_FILES` is in `self_governing_files()` (#1127, #1147, #1823).
 The gate compares paths case-folded, because the disk of the gate host does not tell case apart.
 The contract check verifies that every required-check workflow exists at the head SHA, so renaming or deleting a required-check workflow fails the production contract (#1035).
 
@@ -122,7 +122,7 @@ Limits of the lock:
 Residual risks:
 
 - The lock does not cover the production credentials that ungated jobs read.
-- The bodies of ungated jobs remain outside the gate (#1147); `tools/host_hygiene_schedule.py` and `tools/facet_reconcile.py` are in `self_governing_files()`.
+- The bodies of ungated jobs remain outside the gate (#1147); each file in `SCHEDULED_AUTOMATION_FILES` is in `self_governing_files()`.
 - The gate checks that a gated job declares the right environment.
   It does not check that the job body keeps using the input that selects the environment.
   Example: a body edit hard-codes `--type prod`, and the environment condition still reads `inputs.type`.

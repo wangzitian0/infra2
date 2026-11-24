@@ -1,10 +1,10 @@
-"""Tests for tools/facet_reconcile.py (#542 task 4) — pure wiring, no live calls."""
+"""Tests for common/deploy/facet_reconcile.py (#542 task 4) — pure wiring, no live calls."""
 
 from __future__ import annotations
 
 import pytest
 
-from tools import facet_reconcile as fr
+from common.deploy import facet_reconcile as fr
 
 
 def _section(**kw):
@@ -161,3 +161,25 @@ def test_dns_section_fails_job_on_confirmed_drift(monkeypatch):
     assert section.blockers == ["rec-b"]
     assert section.confirmed == ["rec-b"]
     assert not section.skipped
+
+
+def test_the_entry_point_keeps_every_name_a_workflow_imports() -> None:
+    """#1823 Step 4.3 moved the logic to common/deploy. Inline Python in the
+    workflows still imports names from `tools.facet_reconcile`; each must resolve
+    there, or the alert and resolve steps fail at run time."""
+    import re
+    from pathlib import Path
+
+    import tools.facet_reconcile as entry
+
+    root = Path(__file__).resolve().parents[2]
+    pattern = re.compile(
+        r"from tools\.facet_reconcile import (?:\(([^)]*)\)|([^\n(]*))"
+    )
+    imported: set[str] = set()
+    for workflow in sorted((root / ".github" / "workflows").glob("*.y*ml")):
+        for match in pattern.finditer(workflow.read_text(encoding="utf-8")):
+            names = match.group(1) or match.group(2)
+            imported |= {n.strip() for n in names.split(",") if n.strip()}
+    assert imported >= {"run_all", "read_unevaluated"}
+    assert [name for name in sorted(imported) if not hasattr(entry, name)] == []

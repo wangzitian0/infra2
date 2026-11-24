@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import host_hygiene_schedule as hh
+from common.deploy import host_hygiene_schedule as hh
 
 
 def _script(**overrides) -> str:

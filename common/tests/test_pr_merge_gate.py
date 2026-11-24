@@ -1138,7 +1138,12 @@ def test_changing_what_decides_merges_needs_the_owner():
         assert verdict.review_required and not verdict.owner_required, path
         assert verdict.outcome == "review_required", path
         assert any("what decides merges" in r for r in verdict.reasons), path
-    for path in ("tools/host_hygiene_schedule.py", "tools/facet_reconcile.py"):
+    for path in (
+        "tools/host_hygiene_schedule.py",
+        "common/deploy/host_hygiene_schedule.py",
+        "tools/facet_reconcile.py",
+        "common/deploy/facet_reconcile.py",
+    ):
         verdict = gate.evaluate(_green(files=(path,)), now=NOW)
         assert not verdict.ready, path
         assert verdict.owner_required and not verdict.review_required, path

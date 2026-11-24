@@ -35,13 +35,9 @@ MIN_SCANNED_TOOLS = 40
 Size = tuple[int, int]
 
 # tool path relative to tools/ -> (top-level classes, code lines), measured on
-# 2026-11-22 at infra2@907355ac. Step 4.3 of infra2#1823 moves the logic of each
-# entry to `common/`. `facet_reconcile.py` and `host_hygiene_schedule.py` are
-# production paths (AGENTS.md merge gate rule 6): the owner approves their edits.
-DEBT: dict[str, Size] = {
-    "host_hygiene_schedule.py": (0, 406),
-    "facet_reconcile.py": (1, 214),
-}
+# 2026-11-22 at infra2@907355ac. Step 4.3 of infra2#1823 moved the logic of each
+# entry to `common/`; the ledger is empty.
+DEBT: dict[str, Size] = {}
 
 
 def measure(source: str) -> Size:

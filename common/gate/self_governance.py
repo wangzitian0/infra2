@@ -99,9 +99,12 @@ _TESTS_BY_MODULE = {
 PACKAGE_FILES = ("common/__init__.py", "tools/__init__.py")
 
 # Code run by ungated scheduled jobs in ops-checks.yml (#1127, #1147).
+# Each entry point and the common module that holds its logic (#1823 Step 4.3).
 SCHEDULED_AUTOMATION_FILES = (
     "tools/host_hygiene_schedule.py",
+    "common/deploy/host_hygiene_schedule.py",
     "tools/facet_reconcile.py",
+    "common/deploy/facet_reconcile.py",
 )
 
 # pytest runs each conftest.py on the way to a test. One in common/tests can switch off
