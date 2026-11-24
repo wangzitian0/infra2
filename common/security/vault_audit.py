@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import functools
 import re
+import subprocess
 import time
 from typing import Any
 
@@ -129,6 +130,11 @@ def load_inventory() -> list[VaultService]:
     return services
 
 
+def _hand_written_template(compose_path: str) -> str:
+    """The ``secrets.ctmpl`` path that a hand-written stack mounts."""
+    return f"{compose_path.rsplit('/', 1)[0]}/secrets.ctmpl"
+
+
 def _vault_service_from_facet(meta, facet) -> VaultService:
     """Build one VaultService instance from a SecretsFacet and its declaring ServiceMeta."""
     compose_path = facet.compose_path or meta.compose_path
@@ -143,7 +149,7 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
     agent_config, template = (
         (compose_path, compose_path)
         if _compose_path_is_x_infra2(compose_path)
-        else (f"{compose_dir}/vault-agent.hcl", f"{compose_dir}/secrets.ctmpl")
+        else (f"{compose_dir}/vault-agent.hcl", _hand_written_template(compose_path))
     )
     return VaultService(
         id=facet.service_id or meta.service_id,
@@ -338,13 +344,15 @@ def classify_deployed_template(
     service: VaultService,
     deployed_sha256: str,
     deployed_form: str = "",
+    served_ref: str = "",
 ) -> CheckResult:
     """Is the template the agent has mounted the one this release ships?
 
     ``deployed_form`` is the form the container shows (``compiled`` or
-    ``hand-written``; empty when unknown). A container in the other form than the
-    release runs another release, so the check fails; it does not compare a hash
-    read from the wrong path (infra2#1822).
+    ``hand-written``; empty when unknown). ``served_ref`` is the release tag that
+    the environment serves (empty when unknown). Main can be ahead of that tag. When
+    the container form differs from main, the check compares the container with
+    ``served_ref``. The check fails when the container matches neither (infra2#1822).
     """
     import sys
 
@@ -371,6 +379,11 @@ def classify_deployed_template(
         "release_sha256": release_sha256[:12],
     }
     if deployed_form and deployed_form != release_form:
+        served = _served_template(service, served_ref) if served_ref else None
+        if served is not None and served[0] == deployed_form:
+            return _classify_served(
+                service, deployed_sha256, served_ref, served, evidence
+            )
         return _result(
             service,
             "deployed-template",
@@ -418,6 +431,73 @@ def classify_deployed_template(
         "pass",
         "P1",
         f"the template in the vault-agent container matches {release_source}",
+        evidence,
+    )
+
+
+def _served_template(service: VaultService, ref: str) -> tuple[str, str, str] | None:
+    """``(form, sha256, source)`` of the template of ``service`` at ``ref``.
+
+    The sha256 is known only for a hand-written stack (the ``secrets.ctmpl`` bytes).
+    None when git cannot read the compose file at ``ref``.
+    """
+    import hashlib
+
+    from common.deploy.compose_compile import has_x_infra2
+    from common.deploy.config_drift import contents_at_ref
+
+    template_path = _hand_written_template(service.compose_path)
+    paths = [service.compose_path, template_path]
+    try:
+        files = contents_at_ref(ref, paths)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return None
+    compose = files.get(service.compose_path)
+    if compose is None:
+        return None
+    if has_x_infra2(compose.decode("utf-8", "replace")):
+        return "compiled", "", f"the compiled {service.compose_path} template"
+    template = files.get(template_path)
+    sha256 = hashlib.sha256(template).hexdigest() if template is not None else ""
+    return "hand-written", sha256, template_path
+
+
+def _classify_served(
+    service: VaultService,
+    deployed_sha256: str,
+    ref: str,
+    served: tuple[str, str, str],
+    evidence: dict[str, str],
+) -> CheckResult:
+    """Compare the container with the release that the environment serves."""
+    _form, served_sha256, source = served
+    evidence = {**evidence, "served_ref": ref, "served_sha256": served_sha256[:12]}
+    if not deployed_sha256 or not served_sha256:
+        return _result(
+            service,
+            "deployed-template",
+            "info",
+            "P3",
+            f"could not compare {source} at {ref}, the served release",
+            evidence,
+        )
+    if deployed_sha256 != served_sha256:
+        return _result(
+            service,
+            "deployed-template",
+            "fail",
+            "P1",
+            f"the template in the vault-agent container is not {source} at {ref}, "
+            "the served release; a template change never reached the container",
+            evidence,
+        )
+    return _result(
+        service,
+        "deployed-template",
+        "pass",
+        "P1",
+        f"the template in the vault-agent container matches {source} at {ref}, "
+        "the served release; main is ahead of it",
         evidence,
     )
 
@@ -631,6 +711,21 @@ def classify_container(
     )
 
 
+def _served_ref(env: str) -> str:
+    """The release tag that ``env`` serves; empty when it is unknown.
+
+    Only production has a marker tag (``production/vX.Y.Z``).
+    """
+    if env != "production":
+        return ""
+    from common.deploy.config_drift import _production_target_tag
+
+    try:
+        return _production_target_tag()
+    except (SystemExit, OSError, subprocess.CalledProcessError):
+        return ""
+
+
 def audit_from_observations(
     services: list[VaultService],
     observations: dict[str, Any],
@@ -640,6 +735,7 @@ def audit_from_observations(
 ) -> dict[str, Any]:
     results: list[CheckResult] = []
     observed_services = observations.get("services", {})
+    served_ref = _served_ref(env)
     for service in services:
         if service.ephemeral:
             results.append(_preview_stack_skipped(service))
@@ -654,6 +750,7 @@ def audit_from_observations(
                 service,
                 str(obs.get("deployed_template_sha256", "")),
                 str(obs.get("deployed_template_form", "")),
+                served_ref,
             )
         )
         for field_name in service.optional_inert_fields:

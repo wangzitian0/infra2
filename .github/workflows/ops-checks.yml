@@ -917,6 +917,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # The deployed-template check reads the stack at the production/v* marker;
+          # a shallow checkout has no tags and no tag trees.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
