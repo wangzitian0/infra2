@@ -19,7 +19,6 @@ import pathlib
 import subprocess
 import sys
 
-import pytest
 
 from common.gate.self_governance import PACKAGE_FILES
 from common.gate.types import DEFAULT_REPO
@@ -83,6 +82,21 @@ MUST_BE_GOVERNED = (
 def test_the_closure_holds_every_path_that_judges_a_pull_request() -> None:
     found = gate.self_governing_files()
     assert found and len(MUST_BE_GOVERNED) > 30  # an empty set loosens every rule
+    assert gate.RULE_TEXT_FILES, "no rule text is listed"
+    for path in (
+        "common/tests/conftest.py",
+        "common/tests/test_required_checks_can_report.py",
+        "common/tests/test_gate_replay.py",
+    ):
+        assert (ROOT / path).is_file(), path
+    # A closure over code cannot reach a file no code opens, so the rule texts are
+    # listed. Code that reads one must be followed by the walk instead.
+    for code in ("tools/pr_merge_gate.py", "common/gate/pr_merge_gate.py"):
+        source = (ROOT / code).read_text(encoding="utf-8")
+        for rel in gate.RULE_TEXT_FILES:
+            assert f'"{rel}"' not in source or rel == "AGENTS.md", (
+                f"{rel} is now read by {code}; compute it instead"
+            )
     lost = sorted(p for p in MUST_BE_GOVERNED if p not in found)
     assert not lost, f"the computed set no longer protects {lost}"
     unjudged = sorted(p for p in MUST_BE_GOVERNED if not gate.is_self_governing(p))
@@ -203,6 +217,7 @@ UNRELATED = (
 def test_a_path_that_shadows_or_configures_the_gate_is_self_governing() -> None:
     """#1138 re-audit H2, M3, round 3 and round 4: each runs instead of, or before, gate code."""
     paths = SHADOWS + GOVERNED_SPELLINGS
+    assert SHADOWS and GOVERNED_SPELLINGS
     assert len(set(paths)) == len(paths)
     loose = [p for p in paths if not gate.is_self_governing(p)]
     assert not loose, loose
@@ -245,7 +260,7 @@ ORDINARY_PATHS = (
 
 def test_an_unrelated_path_is_not_self_governing() -> None:
     """The rules must not send every PR to the owner."""
-    assert len(ORDINARY_PATHS) == 30
+    assert UNRELATED and len(ORDINARY_PATHS) == 30
     missing = [p for p in ORDINARY_PATHS if not (ROOT / p).is_file()]
     assert not missing, f"pick other tracked paths: {missing}"
     governed = [p for p in (*UNRELATED, *ORDINARY_PATHS) if gate.is_self_governing(p)]
