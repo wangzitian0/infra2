@@ -228,3 +228,22 @@ def test_counterfactual_compose_path_edit_moves_audit_expectation() -> None:
     assert derived.compose_path == "platform/98.moved/compose.yaml"
     assert derived.vault_agent_config_path == "platform/98.moved/vault-agent.hcl"
     assert derived.secret_template_path == "platform/98.moved/secrets.ctmpl"
+
+
+def test_a_declared_optional_inert_field_reaches_the_inventory_row() -> None:
+    """Review of #1954: no service declares an optional inert field now, so the derivation of the inventory row
+    (`_vault_service_from_facet`) is tested with a synthetic declaration. Without it, a derivation that drops the
+    field would pass every test."""
+    import dataclasses
+
+    from common.core.registry import service_attrs
+    from common.security.vault_audit import _vault_service_from_facet
+
+    meta = next(m for m in service_attrs().values() if m.secrets)
+    facet = dataclasses.replace(
+        meta.secrets[0], optional_inert_fields=("EXAMPLE_OPTIONAL_KEY",)
+    )
+    assert _vault_service_from_facet(meta, facet).optional_inert_fields == (
+        "EXAMPLE_OPTIONAL_KEY",
+    )
+    assert _vault_service_from_facet(meta, meta.secrets[0]).optional_inert_fields == ()
