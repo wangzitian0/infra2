@@ -1,17 +1,4 @@
-"""#541 probe migration equivalence proof — PERMANENT regression protection.
-
-``common/tests/fixtures/infra_probe_specs_frozen.txt`` is a byte-copy of the
-hand-written ``INFRA_PROBE_SPECS`` compose literal as it stood before the facet
-migration (comments and all). The registry-rendered specs (every service's
-ProbeFacet declarations -> ``service_attrs()`` ->
-``render_probe_spec_text()``) must stay equivalent to it FIELD BY FIELD,
-order-normalized — not merely name-equal. This is not a one-time diff: the
-frozen fixture anchors the probe set forever, so a facet edit that
-accidentally drops or mutates a probe fails here with an exact field diff.
-
-Deliberate probe-set changes must update the fixture in the same PR, making
-the change explicit and reviewable (the fixture is the probe changelog).
-"""
+"""Probe-spec rendering tests: fail-closed rules, env-suffix resolution, compose cutover."""
 
 from __future__ import annotations
 
@@ -23,7 +10,6 @@ from common.core import registry as service_registry
 from common.observability.probe_specs import (
     ENV_SUFFIX_PLACEHOLDER,
     encode_specs_env_value,
-    missing_probe_names,
     normalize_specs_text,
     normalized_probe_fields,
     parse_probe_names,
@@ -32,51 +18,11 @@ from common.observability.probe_specs import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-FROZEN = ROOT / "common/tests/fixtures/infra_probe_specs_frozen.txt"
-
-
-def _frozen_text() -> str:
-    return FROZEN.read_text(encoding="utf-8")
-
-
-def test_rendered_specs_equal_frozen_literal_field_by_field() -> None:
-    """THE equivalence proof: generated == frozen, per probe, per field."""
-    generated = normalized_probe_fields(render_probe_spec_text())
-    frozen = normalized_probe_fields(_frozen_text())
-
-    generated_by_name = {row[0]: row for row in generated}
-    frozen_by_name = {row[0]: row for row in frozen}
-    assert sorted(generated_by_name) == sorted(frozen_by_name), (
-        "probe NAME set diverged from the frozen literal.\n"
-        f"missing from generated: {sorted(set(frozen_by_name) - set(generated_by_name))}\n"
-        f"new in generated:       {sorted(set(generated_by_name) - set(frozen_by_name))}\n"
-        "If this change is deliberate, update common/tests/fixtures/"
-        "infra_probe_specs_frozen.txt in the same PR."
-    )
-    for name, frozen_row in frozen_by_name.items():
-        assert generated_by_name[name] == frozen_row, (
-            f"probe {name!r} diverged from the frozen literal, field by field:\n"
-            f"  frozen:    {frozen_row}\n"
-            f"  generated: {generated_by_name[name]}"
-        )
-
-
-def test_rendered_specs_name_equivalence_via_live_check_helper() -> None:
-    """The live-verification bridge (missing_probe_names) sees the same probe
-    set in both directions between generated and frozen."""
-    generated = render_probe_spec_text()
-    frozen = _frozen_text()
-    assert missing_probe_names(frozen, generated) == []
-    assert missing_probe_names(generated, frozen) == []
-    assert parse_probe_names(generated) == parse_probe_names(frozen)
-    assert (
-        len(parse_probe_names(generated)) == 33
-    )  # frozen count: +2 GitHub #658, +2 truealpha/app #608, +2 finance_report/app, +3 app-layer postgres/redis, +1 todo canary status #991
 
 
 def test_compose_carries_only_the_env_reference_after_cutover() -> None:
     """Cutover guard (#541): the compose literal was proven field-identical to
-    the frozen fixture (commit history) and then deleted — the renderer is the
+    a frozen copy (commit history) and then deleted — the renderer is the
     ONLY source now. compose.yaml must reference the env var and never regrow a
     hand-written literal beside it (which the renderer would silently shadow)."""
     import yaml

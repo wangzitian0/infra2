@@ -33,12 +33,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from common.deploy.github_api import Opener, get_json, github_headers
+from common.deploy.github_api import Opener, get_json, github_headers, with_retry
 
 AGENT = "infra2-stage-records/1.0"
 PREFIX = "stage-"
@@ -76,17 +76,21 @@ def open_url(request: urllib.request.Request, timeout: float = 30) -> Any:
 
 def _download(url: str, token: str, opener: Opener) -> bytes:
     """The zip bytes. GitHub answers 302; the signed target takes no Authorization header."""
-    try:
-        request = urllib.request.Request(url, headers=github_headers(token, AGENT))
-        with opener(request, timeout=60) as response:
-            return response.read()
-    except urllib.error.HTTPError as err:
-        if err.code != 302 or not err.headers.get("Location"):
-            raise
-        with opener(
-            urllib.request.Request(err.headers["Location"]), timeout=60
-        ) as response:
-            return response.read()
+
+    def call() -> bytes:
+        try:
+            request = urllib.request.Request(url, headers=github_headers(token, AGENT))
+            with opener(request, timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as err:
+            if err.code != 302 or not err.headers.get("Location"):
+                raise
+            with opener(
+                urllib.request.Request(err.headers["Location"]), timeout=60
+            ) as response:
+                return response.read()
+
+    return with_retry(call)
 
 
 def _check_artifact(
@@ -177,28 +181,21 @@ def _created(artifact: dict) -> datetime:
     return datetime.fromisoformat(str(artifact["created_at"]).replace("Z", "+00:00"))
 
 
-def list_records(
+def _checked_records(
     repo: str,
     token: str,
+    opener: Opener,
     *,
-    env: str = "",
-    subject: str = "",
-    phase: str = "",
-    last: int = 0,
-    since: datetime | None = None,
-    opener: Opener = open_url,
-) -> list[dict]:
-    """The records that pass the provenance checks, newest first.
-
-    ``env`` is a stage id (``staging.release_validation``) or its first part (``staging``).
-    ``last`` keeps the newest N subjects (0 keeps all). ``since`` ignores older artifacts.
-    """
-    prefix = PREFIX + env + ("-" if "." in env else ".") if env else PREFIX
-    found: list[tuple[datetime, dict]] = []
+    prefix: str,
+    subject: str,
+    phase: str,
+    since: datetime | None,
+) -> Iterator[tuple[datetime, dict]]:
+    """``(created, record)`` of each record that passes the provenance checks, newest first."""
     for artifact in _artifacts(repo, token, opener):
         name = str(artifact.get("name") or "")
         if since and _created(artifact) < since:
-            break
+            return
         if not name.startswith(prefix) or (phase and f"-{phase}-" not in name):
             continue
         if subject and not name.endswith("-" + subject.replace(":", "-")):
@@ -217,16 +214,76 @@ def list_records(
             and record["phase"] == (phase or record["phase"])
             and record["subject"] == (subject or record["subject"])
         ):
-            found.append((_created(artifact), record))
-            # Newest first: once N+1 subjects are seen, the N newest are complete.
-            if last and len({(r["env"], r["subject"]) for _, r in found}) > last:
-                break
+            yield _created(artifact), record
+
+
+def _env_prefix(env: str) -> str:
+    return PREFIX + env + ("-" if "." in env else ".") if env else PREFIX
+
+
+def list_records(
+    repo: str,
+    token: str,
+    *,
+    env: str = "",
+    subject: str = "",
+    phase: str = "",
+    last: int = 0,
+    since: datetime | None = None,
+    opener: Opener = open_url,
+) -> list[dict]:
+    """The records that pass the provenance checks, newest first.
+
+    ``env`` is a stage id (``staging.release_validation``) or its first part (``staging``).
+    ``last`` keeps the newest N subjects (0 keeps all). ``since`` ignores older artifacts.
+    """
+    found: list[tuple[datetime, dict]] = []
+    for item in _checked_records(
+        repo,
+        token,
+        opener,
+        prefix=_env_prefix(env),
+        subject=subject,
+        phase=phase,
+        since=since,
+    ):
+        found.append(item)
+        # Newest first: once N+1 subjects are seen, the N newest are complete.
+        if last and len({(r["env"], r["subject"]) for _, r in found}) > last:
+            break
     found.sort(key=lambda item: (item[0], PHASES.index(item[1]["phase"])), reverse=True)
     records = [record for _, record in found]
     if last:
         keep = list(dict.fromkeys((r["env"], r["subject"]) for r in records))[:last]
         records = [r for r in records if (r["env"], r["subject"]) in keep]
     return records
+
+
+def _canary_verified_sdks(rec: Mapping[str, Any]) -> set[str]:
+    """``X`` of each ``sdk:X`` unit of one record, when the record verifies it (#1635)."""
+    if (
+        rec.get("env") != "staging.release_validation"
+        or rec.get("phase") != "post"
+        or rec.get("event") not in ("tag", "push")
+    ):
+        return set()
+    if not str(rec.get("subject") or "").startswith("tag:"):
+        return set()
+    checks = rec.get("checks") or ()
+    if not any(
+        isinstance(chk, Mapping)
+        and chk.get("name") in CANARY_STAGING_GATE_CHECKS
+        and chk.get("ok") is True
+        for chk in checks
+    ):
+        return set()
+    verified: set[str] = set()
+    for unit in rec.get("units") or ():
+        if isinstance(unit, str) and unit.startswith("sdk:"):
+            version_str = unit.removeprefix("sdk:").strip()
+            if version_str and version_str != "unknown":
+                verified.add(version_str)
+    return verified
 
 
 def verified_sdk_versions(
@@ -236,53 +293,45 @@ def verified_sdk_versions(
     token: str = "",
     since_days: float = 30.0,
     opener: Opener = open_url,
+    wanted: Iterable[str] | None = None,
 ) -> set[str]:
-    """Return ``X`` from ``sdk:X`` units in staging release post records where Canary ``staging_gate`` passed (#1635)."""
-    loaded = records
-    if loaded is None:
-        resolved_repo = repo or os.environ.get("GITHUB_REPOSITORY", "")
-        resolved_token = (
-            token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
-        )
-        if not (resolved_repo and resolved_token):
-            raise ValueError("verified_sdk_versions requires repo and token")
-        since = (
-            datetime.now(timezone.utc) - timedelta(days=since_days)
-            if since_days > 0
-            else None
-        )
-        loaded = list_records(
-            resolved_repo,
-            resolved_token,
-            env="staging.release_validation",
-            phase="post",
-            since=since,
-            opener=opener,
-        )
-    verified: set[str] = set()
-    for rec in loaded:
-        if (
-            rec.get("env") != "staging.release_validation"
-            or rec.get("phase") != "post"
-            or rec.get("event") not in ("tag", "push")
-        ):
-            continue
-        if not str(rec.get("subject") or "").startswith("tag:"):
-            continue
-        checks = rec.get("checks") or ()
-        if not any(
-            isinstance(chk, Mapping)
-            and chk.get("name") in CANARY_STAGING_GATE_CHECKS
-            and chk.get("ok") is True
-            for chk in checks
-        ):
-            continue
-        for unit in rec.get("units") or ():
-            if isinstance(unit, str) and unit.startswith("sdk:"):
-                version_str = unit.removeprefix("sdk:").strip()
-                if version_str and version_str != "unknown":
-                    verified.add(version_str)
-    return verified
+    """Return ``X`` from ``sdk:X`` units in staging release post records where Canary ``staging_gate`` passed (#1635).
+
+    ``wanted`` stops the scan of the stage records when each wanted version is verified. The
+    result then holds the versions found so far. A wanted version that no record verifies
+    still scans the full window. ``wanted`` has no effect when ``records`` is given.
+    """
+    if records is not None:
+        verified: set[str] = set()
+        for rec in records:
+            verified |= _canary_verified_sdks(rec)
+        return verified
+    resolved_repo = repo or os.environ.get("GITHUB_REPOSITORY", "")
+    resolved_token = (
+        token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
+    )
+    if not (resolved_repo and resolved_token):
+        raise ValueError("verified_sdk_versions requires repo and token")
+    since = (
+        datetime.now(timezone.utc) - timedelta(days=since_days)
+        if since_days > 0
+        else None
+    )
+    targets = None if wanted is None else {str(v) for v in wanted}
+    found: set[str] = set()
+    for _, record in _checked_records(
+        resolved_repo,
+        resolved_token,
+        opener,
+        prefix=_env_prefix("staging.release_validation"),
+        subject="",
+        phase="post",
+        since=since,
+    ):
+        found |= _canary_verified_sdks(record)
+        if targets and targets <= found:
+            break
+    return found
 
 
 @dataclass(frozen=True)

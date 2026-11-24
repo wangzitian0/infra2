@@ -144,6 +144,9 @@ def _stub_app_sdk_version_verified(
     monkeypatch.setattr(
         reconcile, "assert_app_sdk_version_verified", lambda *_a, **_kw: None
     )
+    monkeypatch.setattr(
+        reconcile, "assert_app_sdk_versions_verified", lambda *_a, **_kw: {}
+    )
 
 
 def test_changed_app_services_from_repos_yaml_detects_single_app_tag_bump() -> None:
@@ -848,6 +851,48 @@ def test_reconcile_job_runs_on_ubuntu_24_04_for_playwright() -> None:
     assert {job: spec["runs-on"] for job, spec in workflow["jobs"].items()} == {
         job: "ubuntu-24.04" for job in ("pre", "operation", "post", "alert")
     }
+
+
+def test_post_job_restores_app_tool_caches_before_the_hooks_run() -> None:
+    """#1843: the hook bootstrap installs Playwright and bun on a fresh runner each time. The
+    post job restores their caches (restore only) before the Post phase step; the warm
+    workflow saves them on main, the only ref a tag run can restore from."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["post"]["steps"]
+    names = [step.get("name") for step in steps]
+    restore = steps[names.index("Restore App tool caches")]
+    assert restore["uses"] == "./.github/actions/app-caches"
+    assert "warm" not in restore.get("with", {})
+    assert names.index("Set up the train") < names.index("Restore App tool caches")
+    assert names.index("Restore App tool caches") < names.index("Post phase")
+
+    root = WORKFLOW.parents[2]
+    action = yaml.safe_load(
+        (root / ".github/actions/app-caches/action.yml").read_text("utf-8")
+    )
+    uses = [step["uses"] for step in action["runs"]["steps"] if "uses" in step]
+    # The job env of `post` holds secrets, so every action is pinned by commit SHA.
+    assert uses and all(
+        re.fullmatch(r"actions/cache/(restore|save)@[0-9a-f]{40}", u) for u in uses
+    )
+    assert action["inputs"]["warm"]["default"] == "false"
+    keys = [step["with"]["key"] for step in action["runs"]["steps"] if "uses" in step]
+    assert all("steps.keys.outputs.truealpha" in key for key in keys)
+
+    warm = yaml.safe_load(
+        (root / ".github/workflows/warm-app-caches.yml").read_text("utf-8")
+    )
+    assert warm["permissions"] == {"contents": "read"}
+    assert warm["jobs"]["warm"]["if"] == "${{ github.ref == 'refs/heads/main' }}"
+    assert "secrets." not in (root / ".github/workflows/warm-app-caches.yml").read_text(
+        "utf-8"
+    )
+    uses_warm = [
+        s
+        for s in warm["jobs"]["warm"]["steps"]
+        if s.get("uses") == "./.github/actions/app-caches"
+    ]
+    assert [s["with"] for s in uses_warm] == [{"warm": "true"}]
 
 
 def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
@@ -6097,3 +6142,110 @@ def test_the_entry_point_keeps_every_name_a_workflow_imports() -> None:
     assert {"hook_findings_from_result", "resolve_workflow_failure_alert"} <= imported
     missing = sorted(name for name in imported if not hasattr(entry, name))
     assert not missing, f"tools.reconcile_iac_inputs no longer exports {missing}"
+
+
+def test_app_pins_scan_the_sdk_stage_records_once_for_all_apps(
+    monkeypatch, tmp_path
+) -> None:
+    """A staging train with two App pins scans the stage records one time. The scan receives
+    the locked SDK of each App, and each App is checked against that one result (#1635)."""
+    from infra2_sdk.refs import ResolvedRef
+
+    (tmp_path / "harness").mkdir(parents=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\nrepositories:\n"
+        "  - id: finance-report\n    role: external-application\n    release_tag: v0.2.47\n"
+        "  - id: truealpha\n    role: external-application\n    release_tag: v0.2.89\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile, "assert_app_version_ref_on_main", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "fetch_hooks_manifest",
+        lambda service, *_a, **_kw: _hooks_v3(service),
+    )
+    locked = {"finance_report/app": "4.4.0", "truealpha/app": "4.3.0"}
+    monkeypatch.setattr(
+        reconcile,
+        "locked_sdk_version_for_app_ref",
+        lambda service, _ref, **_kw: locked[service],
+    )
+    scans: list[set[str]] = []
+    monkeypatch.setattr(
+        reconcile,
+        "verified_sdk_versions",
+        lambda **kw: scans.append(set(kw.get("wanted") or ())) or {"4.4.0", "4.3.0"},
+    )
+    checked: list[tuple[str, frozenset[str]]] = []
+    real_assert = reconcile.assert_app_sdk_version_verified
+
+    def spy(service, app_tag, **kw):
+        checked.append((service, frozenset(kw.get("verified_versions") or ())))
+        return real_assert(service, app_tag, **kw)
+
+    monkeypatch.setattr(reconcile, "assert_app_sdk_version_verified", spy)
+
+    class _StopAfterPre(Exception):
+        pass
+
+    def stop(*_a, **_kw):
+        raise _StopAfterPre
+
+    monkeypatch.setattr(reconcile, "run_deploy_commands", stop)
+    with pytest.raises((_StopAfterPre, SystemExit)) as raised:
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--after",
+                "v9.9.9",
+                "--env",
+                "staging",
+                "--changed-file",
+                "harness/repos.yaml",
+            ]
+        )
+    assert isinstance(raised.value, _StopAfterPre), raised.value
+    assert scans == [{"4.4.0", "4.3.0"}]
+    assert sorted(checked) == [
+        ("finance_report/app", frozenset({"4.4.0", "4.3.0"})),
+        ("truealpha/app", frozenset({"4.4.0", "4.3.0"})),
+    ]
+
+
+def test_app_sdk_pins_reject_an_unverified_locked_version_after_one_scan(
+    monkeypatch,
+) -> None:
+    """One App pin with an unverified SDK fails closed. The scan ran one time for both pins."""
+    locked = {"finance_report/app": "4.4.0", "truealpha/app": "4.5.0"}
+    monkeypatch.setattr(
+        reconcile,
+        "locked_sdk_version_for_app_ref",
+        lambda service, _ref, **_kw: locked[service],
+    )
+    monkeypatch.setattr(reconcile, "in_app_sdk_range", lambda _v: True)
+    scans: list[set[str]] = []
+    monkeypatch.setattr(
+        reconcile,
+        "verified_sdk_versions",
+        lambda **kw: scans.append(set(kw["wanted"])) or {"4.4.0"},
+    )
+    with pytest.raises(reconcile.UnverifiedSdkError, match="truealpha/app@v2 pins"):
+        reconcile.assert_app_sdk_versions_verified(
+            [
+                ("finance_report/app", "v1"),
+                ("truealpha/app", "v2"),
+                ("finance_report/app", "v1"),
+            ]
+        )
+    assert scans == [{"4.4.0", "4.5.0"}]
+    assert reconcile.assert_app_sdk_versions_verified([]) == {}
+    assert scans == [{"4.4.0", "4.5.0"}]

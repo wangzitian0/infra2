@@ -999,9 +999,13 @@ def assert_app_sdk_version_verified(
     repo_root: Path = REPO_ROOT,
     verified_versions: set[str] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    sdk_version: str = "",
 ) -> str:
-    """Reject App tags whose locked SDK has not passed Canary ``staging_gate`` (#1635)."""
-    sdk_ver = locked_sdk_version_for_app_ref(
+    """Reject App tags whose locked SDK has not passed Canary ``staging_gate`` (#1635).
+
+    ``sdk_version`` is the locked SDK of ``app_tag`` when the caller already read it.
+    """
+    sdk_ver = sdk_version or locked_sdk_version_for_app_ref(
         service,
         app_tag,
         repo_root=repo_root,
@@ -1027,6 +1031,43 @@ def assert_app_sdk_version_verified(
             f"(verified={sorted(verified)})"
         )
     return sdk_ver
+
+
+def assert_app_sdk_versions_verified(
+    pins: Sequence[tuple[str, str]],
+    *,
+    repo_root: Path = REPO_ROOT,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> dict[tuple[str, str], str]:
+    """Check the locked SDK of each ``(service, app_tag)`` with one scan of the stage records.
+
+    The scan stops when each locked SDK version is verified. An unverified version scans the
+    full window, and ``assert_app_sdk_version_verified`` rejects its App tag.
+    """
+    unique = list(dict.fromkeys(pins))
+    if not unique:
+        return {}
+    locked = {
+        (svc, tag): locked_sdk_version_for_app_ref(
+            svc, tag, repo_root=repo_root, runner=runner
+        )
+        for svc, tag in unique
+    }
+    verified = verified_sdk_versions(
+        repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2"),
+        wanted=set(locked.values()),
+    )
+    return {
+        (svc, tag): assert_app_sdk_version_verified(
+            svc,
+            tag,
+            repo_root=repo_root,
+            verified_versions=verified,
+            runner=runner,
+            sdk_version=locked[(svc, tag)],
+        )
+        for svc, tag in unique
+    }
 
 
 def _open_or_update_pr(
@@ -3260,6 +3301,7 @@ def run_pre(
         stage.units = plan_units(train.plan)
         if train.applied and not args.dry_run:
             with timed_check(checks, "app_pins"):
+                pins: list[tuple[str, str]] = []
                 for cmd in train.applied:
                     is_bootstrap = "--bootstrap" in cmd.argv
                     for svc in (s.strip() for s in cmd.service.split(",") if s.strip()):
@@ -3281,14 +3323,15 @@ def run_pre(
                                         service=svc,
                                         repo_root=repo_root,
                                     )
-                                    if not promote_prod:
-                                        assert_app_sdk_version_verified(
-                                            svc,
-                                            app_tag,
-                                            repo_root=repo_root,
-                                        )
                                 except (ValueError, RuntimeError) as exc:
                                     raise SystemExit(f"::error::{exc}") from exc
+                                pins.append((svc, app_tag))
+                if not promote_prod:
+                    # One scan of the stage records for all App pins of this run.
+                    try:
+                        assert_app_sdk_versions_verified(pins, repo_root=repo_root)
+                    except (ValueError, RuntimeError) as exc:
+                        raise SystemExit(f"::error::{exc}") from exc
         if promote_prod and not args.dry_run:
             with timed_check(checks, "upstream_post"):
                 require_upstream_post(

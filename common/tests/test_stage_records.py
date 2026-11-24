@@ -996,6 +996,176 @@ def test_verified_sdk_versions_returns_only_canary_staging_gate_passed_versions(
     assert verified_sdk_versions(records) == {"3.29.0"}
 
 
+def _sdk_record(
+    version: str, tag: str, *, run: int = 777, canary_ok: bool = True
+) -> dict:
+    record = _record(subject=f"tag:{tag}", run=run)
+    record["units"] = ["platform/todo", f"sdk:{version}"]
+    record["checks"] = [{"name": "platform/todo:staging_gate", "ok": canary_ok}]
+    return record
+
+
+class _CountingGitHub(FakeGitHub):
+    """A FakeGitHub that counts the run reads: one run read for each record it checks."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.run_reads = 0
+
+    def __call__(self, request, timeout=0):
+        if "/actions/runs/" in request.full_url:
+            self.run_reads += 1
+        return super().__call__(request, timeout)
+
+
+def _sdk_window() -> _CountingGitHub:
+    """Newest first: 4.4.0 verified, a red Canary of 4.5.0, a fork run of 4.6.0, then 4.3.0."""
+    gh = _CountingGitHub()
+    gh.add(
+        _sdk_record("4.4.0", "v1.0.4", run=104), run=104, created="2026-11-04T00:00:00Z"
+    )
+    gh.add(
+        _sdk_record("4.5.0", "v1.0.3", run=103, canary_ok=False),
+        run=103,
+        created="2026-11-03T00:00:00Z",
+    )
+    gh.add(
+        _sdk_record("4.6.0", "v1.0.2", run=102),
+        run=102,
+        created="2026-11-02T00:00:00Z",
+        head_repository_id=2,
+    )
+    gh.add(
+        _sdk_record("4.3.0", "v1.0.1", run=101), run=101, created="2026-11-01T00:00:00Z"
+    )
+    return gh
+
+
+def _verified(gh, wanted=None) -> set[str]:
+    return stage_records.verified_sdk_versions(
+        repo="o/r", token="tok", since_days=0, opener=gh, wanted=wanted
+    )
+
+
+def test_verified_sdk_scan_stops_when_each_wanted_version_is_verified() -> None:
+    full = _sdk_window()
+    assert _verified(full) == {"4.4.0", "4.3.0"}
+    assert full.run_reads == 3  # the fork artifact fails before its run is read
+    early = _sdk_window()
+    assert _verified(early, wanted={"4.4.0"}) == {"4.4.0"}
+    assert early.run_reads == 1
+
+
+def test_verified_sdk_scan_keeps_the_verdict_of_the_full_scan() -> None:
+    """A wanted version is in the result only when the full scan verifies it. A red Canary
+    record and a fork record never verify their version, and the scan goes past them."""
+    full = _verified(_sdk_window())
+    for wanted in (
+        {"4.4.0"},
+        {"4.3.0"},
+        {"4.4.0", "4.3.0"},
+        {"4.5.0"},
+        {"4.6.0"},
+        {"9.9.9"},
+        {"4.4.0", "9.9.9"},
+    ):
+        gh = _sdk_window()
+        assert _verified(gh, wanted=wanted) & wanted == full & wanted, wanted
+    for unverified in ({"4.5.0"}, {"4.6.0"}, {"9.9.9"}):
+        gh = _sdk_window()
+        assert _verified(gh, wanted=unverified) == full
+        assert gh.run_reads == 3, unverified  # the full window, as without `wanted`
+    empty = _CountingGitHub()
+    assert _verified(empty, wanted={"4.4.0"}) == set()
+    assert _verified(empty) == set()
+
+
+def test_verified_sdk_scan_with_records_ignores_wanted() -> None:
+    records = [_sdk_record("4.4.0", "v1.0.4"), _sdk_record("4.3.0", "v1.0.1")]
+    assert stage_records.verified_sdk_versions(records, wanted={"4.4.0"}) == {
+        "4.4.0",
+        "4.3.0",
+    }
+
+
+# -- a GitHub GET that fails with 5xx is sent again (#1645) -------------------------------------
+
+
+class _Flaky:
+    """Raise each error of ``errors`` in turn, then answer ``body``."""
+
+    def __init__(self, errors, body=b'{"ok": true}') -> None:
+        self.errors = list(errors)
+        self.body = body
+        self.calls = 0
+
+    def __call__(self, request, timeout=0):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return _Raw(self.body)
+
+
+def _http(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("u", code, "x", {}, None)
+
+
+def test_get_json_repeats_a_5xx_or_network_error_and_returns_the_answer(
+    monkeypatch,
+) -> None:
+    from common.deploy import github_api
+
+    waits: list[float] = []
+    monkeypatch.setattr(github_api, "_sleep", waits.append)
+    flaky = _Flaky([_http(502), urllib.error.URLError("reset"), _http(503)])
+    assert github_api.get_json("/x", "tok", flaky, "a") == {"ok": True}
+    assert flaky.calls == 4
+    assert waits == [1.0, 2.0, 4.0]
+
+
+def test_get_json_raises_the_last_5xx_after_the_bounded_attempts() -> None:
+    from common.deploy import github_api
+
+    flaky = _Flaky([_http(502)] * 10)
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        github_api.get_json("/x", "tok", flaky, "a")
+    assert raised.value.code == 502
+    assert flaky.calls == len(github_api.RETRY_DELAYS) + 1 == 4
+
+
+@pytest.mark.parametrize("code", [302, 401, 404, 422])
+def test_get_json_does_not_repeat_a_non_5xx_error(code) -> None:
+    from common.deploy import github_api
+
+    flaky = _Flaky([_http(code)])
+    with pytest.raises(urllib.error.HTTPError):
+        github_api.get_json("/x", "tok", flaky, "a")
+    assert flaky.calls == 1
+
+
+def test_list_reads_a_record_when_the_api_and_the_signed_host_fail_once() -> None:
+    """The v3.1.154 failure: one HTTP 502 of the GitHub API. A repeat reads the record."""
+
+    class _FailOnce(FakeGitHub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed: list[str] = []
+
+        def __call__(self, request, timeout=0):
+            url = request.full_url
+            for part in ("/actions/artifacts", "/actions/runs/", "signed.example"):
+                if part in url and part not in self.failed:
+                    self.failed.append(part)
+                    raise _http(502)
+            return super().__call__(request, timeout)
+
+    gh = _FailOnce()
+    gh.add(_record())
+    (found,) = _list(gh, env="staging")
+    assert found["subject"] == "tag:v1.0.0"
+    assert gh.failed == ["/actions/artifacts", "/actions/runs/", "signed.example"]
+
+
 # -- a production run writes its post record in `operation` (#1646) -----------------------------
 
 

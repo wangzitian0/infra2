@@ -1,0 +1,48 @@
+name: Warm App Caches
+run-name: Warm App tool caches (${{ github.event_name }})
+
+# A tag run of `reconcile-iac-inputs.yml` restores only caches that a run on `main` saved
+# (GitHub scopes a cache to its ref). This workflow runs on `main`, installs the Playwright
+# browsers and the bun cache that the App hook bootstrap installs, and saves them (#1843).
+# It reads no secret and holds `contents: read`. Its own concurrency group keeps it away from
+# the release train.
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - harness/repos.yaml
+      - repos/truealpha
+      - repos/finance_report
+      - .github/actions/app-caches/action.yml
+      - .github/workflows/warm-app-caches.yml
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-app-caches
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    name: warm (Playwright browsers and bun cache)
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up the train
+        uses: ./.github/actions/train-setup
+        with:
+          bun: "true"
+
+      - name: Warm the caches
+        uses: ./.github/actions/app-caches
+        with:
+          warm: "true"

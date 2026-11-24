@@ -150,10 +150,8 @@ signals:
   # common/observability/signal_entries.py::render_internal_signal_entries();
   # tools/watchdog_consistency_audit.py merges the derived entries into this
   # inventory at load time. Declaring a probe registers its signal — there is
-  # no second list to keep in sync. The pre-#543 handwritten section is frozen
-  # at common/tests/fixtures/watchdog_internal_signals_frozen.yaml and
-  # common/tests/test_watchdog_signal_entries.py proves the derivation stays
-  # field-level equivalent to it.
+  # no second list to keep in sync. common/tests/test_watchdog_signal_entries.py
+  # tests the derivation.
   #
   # ClickHouse liveness is deliberately NOT probed read-only: /ping stayed
   # green on an unwritable data dir (read green / write dead). It is covered

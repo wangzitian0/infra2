@@ -27,7 +27,7 @@ promoting any future check to blocks_merge: true extends this guard with it.
 
 Two older guards asked the narrower question "is *this* entry present in the
 list": test_layer_coverage.py checked every registered service layer, and
-test_ci_gate_audit.py checked every workflow the coverage audit claims to cover.
+test_ci_gate_meta.py checked every workflow the coverage audit claims to cover.
 Both become vacuous once there is no list, and a vacuous guard is the quiet kind
 of failure -- so both were rewritten to assert this same structural fact rather
 than left to pass over an empty check.
