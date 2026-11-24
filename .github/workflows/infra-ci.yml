@@ -355,7 +355,7 @@ jobs:
           # tag (#1822). It reads the App manifests from GitHub, so only shard 1 runs it.
           if [[ "${{ matrix.shard }}" == "1" ]]; then
             uv run --locked python tools/app_manifest_sync.py --check
-            # The real verify_app_manifests (test_deploy_v2 stubs it): each App stack, staging
+            # The real verify_app_manifests (a unit test stubs it): each App stack, staging
             # and prod, at the pinned and the production release tags (#1822, v3.1.148).
             uv run --locked python tools/app_manifest_verify.py
           fi
