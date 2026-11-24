@@ -678,6 +678,189 @@ def test_the_audit_fails_a_hand_written_sidecar_when_the_release_is_compiled(
     assert "hand-written" not in same_form.summary
 
 
+_HAND_WRITTEN_COMPOSE = "services:\n  vault-agent:\n    image: vault\n"
+_HAND_WRITTEN_TEMPLATE = '{{ with secret "x" }}A={{ .Data.data.a }}{{ end }}\n'
+
+
+def _git(root: Path, *args: str) -> None:
+    import subprocess
+
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.test", "-c", "user.name=t", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _served_repo(monkeypatch, tmp_path: Path, *, served_compiled: bool) -> str:
+    """A git repo whose tag holds the served stack and whose disk holds x-infra2 main."""
+    import common.deploy.config_drift as drift
+    import common.security.vault_audit as va
+
+    _git(tmp_path, "init", "-q")
+    _repo_with(
+        monkeypatch,
+        tmp_path,
+        TODO,
+        _todo_source() if served_compiled else _HAND_WRITTEN_COMPOSE,
+    )
+    (tmp_path / TODO_DIR / "secrets.ctmpl").write_text(
+        _HAND_WRITTEN_TEMPLATE, encoding="utf-8"
+    )
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "served")
+    _git(tmp_path, "tag", "production/v1.0.0")
+    # Main moves on: the stack becomes x-infra2 and the template file goes away.
+    (tmp_path / TODO_DIR / "secrets.ctmpl").unlink()
+    (tmp_path / TODO).write_text(_todo_source(), encoding="utf-8")
+    monkeypatch.setattr(drift, "ROOT", tmp_path)
+    monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
+    return "production/v1.0.0"
+
+
+def _x_infra2_service():
+    """The service as main derives it for an x-infra2 stack: the compose is the source."""
+    return dataclasses.replace(
+        _vault_service(TODO), secret_template_path=TODO, vault_agent_config_path=TODO
+    )
+
+
+def test_served_template_reads_the_stack_at_the_served_tag(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import common.security.vault_audit as va
+
+    ref = _served_repo(monkeypatch, tmp_path, served_compiled=False)
+    service = _x_infra2_service()
+    form, sha, source = va._served_template(service, ref)
+    assert form == "hand-written"
+    assert sha == hashlib.sha256(_HAND_WRITTEN_TEMPLATE.encode()).hexdigest()
+    assert source == f"{TODO_DIR}/secrets.ctmpl"
+    assert va._served_template(service, "production/v9.9.9") is None
+
+
+def test_the_audit_compares_a_lagging_container_with_the_served_release(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Main ships x-infra2; production still serves the hand-written tag."""
+    import common.security.vault_audit as va
+
+    ref = _served_repo(monkeypatch, tmp_path, served_compiled=False)
+    service = _x_infra2_service()
+    served_sha = hashlib.sha256(_HAND_WRITTEN_TEMPLATE.encode()).hexdigest()
+
+    same = va.classify_deployed_template(service, served_sha, "hand-written", ref)
+    assert (same.status, same.severity) == ("pass", "P1"), same
+    assert ref in same.summary and same.evidence["served_ref"] == ref
+
+    other = va.classify_deployed_template(service, "b" * 64, "hand-written", ref)
+    assert (other.status, other.severity) == ("fail", "P1"), other
+    assert ref in other.summary
+
+    # An unreadable container hash is not lag: the form mismatch stays a fail.
+    unreadable = va.classify_deployed_template(service, "", "hand-written", ref)
+    assert (unreadable.status, unreadable.severity) == ("fail", "P1"), unreadable
+
+    # Without a served release, the form mismatch stays a fail.
+    unknown = va.classify_deployed_template(service, served_sha, "hand-written", "")
+    assert (unknown.status, unknown.severity) == ("fail", "P1"), unknown
+    assert "never reached" in unknown.summary
+
+
+def test_the_audit_fails_a_container_that_matches_neither_main_nor_the_served_release(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The served tag is x-infra2 too, so a hand-written container is a rollback."""
+    import common.security.vault_audit as va
+
+    ref = _served_repo(monkeypatch, tmp_path, served_compiled=True)
+    service = _x_infra2_service()
+    served_sha = hashlib.sha256(_HAND_WRITTEN_TEMPLATE.encode()).hexdigest()
+    result = va.classify_deployed_template(service, served_sha, "hand-written", ref)
+    assert (result.status, result.severity) == ("fail", "P1"), result
+    assert "never reached" in result.summary
+
+
+def test_the_audit_compares_a_hand_written_container_with_the_served_template(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Both forms are hand-written; main changed the template after the served tag."""
+    import common.deploy.config_drift as drift
+    import common.security.vault_audit as va
+
+    _git(tmp_path, "init", "-q")
+    _repo_with(monkeypatch, tmp_path, TODO, _HAND_WRITTEN_COMPOSE)
+    template = tmp_path / TODO_DIR / "secrets.ctmpl"
+    template.write_text(_HAND_WRITTEN_TEMPLATE, encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "served")
+    _git(tmp_path, "tag", "production/v1.0.0")
+    template.write_text(_HAND_WRITTEN_TEMPLATE + "B=1\n", encoding="utf-8")
+    monkeypatch.setattr(drift, "ROOT", tmp_path)
+    monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
+    service = _vault_service(TODO)
+    served_sha = hashlib.sha256(_HAND_WRITTEN_TEMPLATE.encode()).hexdigest()
+    ref = "production/v1.0.0"
+
+    lagging = va.classify_deployed_template(service, served_sha, "hand-written", ref)
+    assert (lagging.status, lagging.severity) == ("pass", "P1"), lagging
+    assert ref in lagging.summary
+
+    neither = va.classify_deployed_template(service, "c" * 64, "hand-written", ref)
+    assert (neither.status, neither.severity) == ("fail", "P1"), neither
+
+    # Without a served release, main's template stays the only reference.
+    unknown = va.classify_deployed_template(service, served_sha, "hand-written", "")
+    assert (unknown.status, unknown.severity) == ("fail", "P1"), unknown
+
+
+def test_a_compiled_served_release_does_not_soften_a_compiled_mismatch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The served tag is compiled, so its hash is unknown: a stale container fails."""
+    import common.security.vault_audit as va
+
+    ref = _served_repo(monkeypatch, tmp_path, served_compiled=True)
+    service = _x_infra2_service()
+    result = va.classify_deployed_template(service, "d" * 64, "compiled", ref)
+    assert (result.status, result.severity) == ("fail", "P1"), result
+    assert "never reached" in result.summary
+    assert ref not in result.summary
+
+
+def test_served_ref_is_the_production_marker_only_for_production(monkeypatch) -> None:
+    import common.deploy.config_drift as drift
+    import common.security.vault_audit as va
+
+    monkeypatch.setattr(drift, "_production_target_tag", lambda: "production/v1.2.3")
+    assert va._served_ref("production") == "production/v1.2.3"
+    assert va._served_ref("staging") == ""
+
+    def no_marker():
+        raise SystemExit("no production/v* marker found")
+
+    monkeypatch.setattr(drift, "_production_target_tag", no_marker)
+    assert va._served_ref("production") == ""
+
+
+def test_audit_from_observations_passes_the_served_ref(monkeypatch) -> None:
+    import common.security.vault_audit as va
+
+    seen: list[str] = []
+    monkeypatch.setattr(va, "_served_ref", lambda env: f"served-for-{env}")
+
+    def classify(service, sha, form, served_ref):
+        seen.append(served_ref)
+        return va._result(service, "deployed-template", "pass", "P1", "ok", {})
+
+    monkeypatch.setattr(va, "classify_deployed_template", classify)
+    va.audit_from_observations(
+        [_vault_service(TODO)], {"services": {}}, env="production", now=0
+    )
+    assert seen == ["served-for-production"]
+
+
 def test_the_audit_fails_a_compiled_release_without_its_template_label(
     monkeypatch, tmp_path: Path
 ) -> None:
