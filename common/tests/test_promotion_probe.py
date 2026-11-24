@@ -204,3 +204,16 @@ def test_a_crash_while_building_the_inputs_still_exits_0_when_report_only(
     assert probe.main(["--after", "v3.1.23", "--report-only"], root=repo) == 0
     assert "could not build the promotion" in capsys.readouterr().out
     assert probe.main(["--after", "v3.1.23"], root=repo) == 1
+
+
+def test_report_only_exits_0_when_the_candidate_search_itself_crashes(
+    repo, monkeypatch, capsys
+) -> None:
+    def boom(_root):
+        raise subprocess.CalledProcessError(128, "git tag")
+
+    monkeypatch.setattr(probe, "next_candidate", boom)
+    assert probe.main(["--report-only"], root=repo) == 0
+    assert "::warning::promotion probe: crashed" in capsys.readouterr().out
+    with pytest.raises(subprocess.CalledProcessError):
+        probe.main([], root=repo)

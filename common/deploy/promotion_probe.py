@@ -116,6 +116,17 @@ def probe(
 
 
 def main(argv: list[str] | None = None, *, root: Path = REPO_ROOT) -> int:
+    """Run the probe. With ``--report-only`` any crash is a warning and the exit code is 0."""
+    try:
+        return _run(argv, root)
+    except Exception as exc:  # noqa: BLE001 - report-only must never fail a job
+        if "--report-only" not in (argv if argv is not None else sys.argv[1:]):
+            raise
+        print(f"::warning::promotion probe: crashed: {exc!r}")
+        return 0
+
+
+def _run(argv: list[str] | None, root: Path) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--after", default="", help="release tag to probe; default: next candidate"
