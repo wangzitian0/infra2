@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import textwrap
 from pathlib import Path
@@ -80,8 +81,7 @@ def _make_runtime_env_py(extra_key: str = "", extra_spec: str = "") -> str:
     )
 
 
-@pytest.fixture()
-def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
+def _workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
     """Build a synthetic SDK package and two consumer repositories that pass all M1-M6 checks."""
     sdk_root = tmp_path / "sdk_repo"
     pkg_root = sdk_root / "src" / PKG_UNDER
@@ -168,7 +168,7 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
     return pkg_root, {"consumer_a": consumer_a, "consumer_b": consumer_b}
 
 
-def test_clean_fixture_passes_all_metrics_and_cli_check(
+def _case_clean_fixture_passes_all_metrics_and_cli_check(
     synthetic_workspace: tuple[Path, dict[str, Path]],
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -232,7 +232,7 @@ def test_clean_fixture_passes_all_metrics_and_cli_check(
     assert (out_dir / "sdk_usage_census.json").is_file()
 
 
-def test_public_defs_skips_overload_stubs(tmp_path: Path) -> None:
+def _case_public_defs_skips_overload_stubs(tmp_path: Path) -> None:
     pkg_root = tmp_path / "src" / PKG_UNDER
     _write(
         pkg_root,
@@ -257,7 +257,7 @@ def test_public_defs_skips_overload_stubs(tmp_path: Path) -> None:
     assert defs[0]["line"] == 10
 
 
-def test_m1_mutation_fails_when_consumer_imports_missing_sdk_symbol(
+def _case_m1_mutation_fails_when_consumer_imports_missing_sdk_symbol(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -278,7 +278,7 @@ def test_m1_mutation_fails_when_consumer_imports_missing_sdk_symbol(
     )
 
 
-def test_m1_mutation_fails_on_test_import_when_tests_flag_enabled(
+def _case_m1_mutation_fails_on_test_import_when_tests_flag_enabled(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -298,7 +298,7 @@ def test_m1_mutation_fails_on_test_import_when_tests_flag_enabled(
     )
 
 
-def test_m2_mutation_fails_when_zero_contract_keys_are_used_in_prod(
+def _case_m2_mutation_fails_when_zero_contract_keys_are_used_in_prod(
     synthetic_workspace: tuple[Path, dict[str, Path]],
     tmp_path: Path,
 ) -> None:
@@ -318,7 +318,7 @@ def test_m2_mutation_fails_when_zero_contract_keys_are_used_in_prod(
     )
 
 
-def test_m3_mutation_fails_when_consumer_pin_lags_behind_latest_version(
+def _case_m3_mutation_fails_when_consumer_pin_lags_behind_latest_version(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -334,7 +334,7 @@ def test_m3_mutation_fails_when_consumer_pin_lags_behind_latest_version(
     )
 
 
-def test_m3_pyproject_wheel_and_git_tag_fallback(
+def _case_m3_pyproject_wheel_and_git_tag_fallback(
     tmp_path: Path,
 ) -> None:
     wheel_repo, git_tag_repo = tmp_path / "wheel_repo", tmp_path / "git_tag_repo"
@@ -362,7 +362,7 @@ def test_m3_pyproject_wheel_and_git_tag_fallback(
     ) == (VER_OLD, False, VER_LATEST, True, None)
 
 
-def test_m3_missing_pin_detection(tmp_path: Path) -> None:
+def _case_m3_missing_pin_detection(tmp_path: Path) -> None:
     no_pin = tmp_path / "no_pin"
     _write(no_pin, "app.py", "x = 1\n")
     m3 = census.compute_m3({"no_pin": no_pin}, latest_version=VER_LATEST)
@@ -373,7 +373,7 @@ def test_m3_missing_pin_detection(tmp_path: Path) -> None:
     ) == (None, False, ["no_pin"])
 
 
-def test_m1_ignores_module_dunder_attributes_with_uninstalled_sdk_sdk_src(
+def _case_m1_ignores_module_dunder_attributes_with_uninstalled_sdk_sdk_src(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     pkg_root, consumers = synthetic_workspace
@@ -396,7 +396,7 @@ def test_m1_ignores_module_dunder_attributes_with_uninstalled_sdk_sdk_src(
     assert census.evaluate_checks(report, check_test_imports=True) == []
 
 
-def test_m4_mutation_fails_when_consumer_references_left_the_packages_symbol(
+def _case_m4_mutation_fails_when_consumer_references_left_the_packages_symbol(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -428,7 +428,7 @@ def test_m4_mutation_fails_when_consumer_references_left_the_packages_symbol(
     assert any("M4:" in f and "ENV_FALLBACK_KEYS" in f for f in failures)
 
 
-def test_m4_dict_left_the_packages_and_wheel_smoke_removed_names(
+def _case_m4_dict_left_the_packages_and_wheel_smoke_removed_names(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     pkg_root, consumers = synthetic_workspace
@@ -482,7 +482,7 @@ def test_m4_dict_left_the_packages_and_wheel_smoke_removed_names(
     }
 
 
-def test_m4_mutation_fails_on_residual_libs_tools_lib_and_sdk_import_error_fallback(
+def _case_m4_mutation_fails_on_residual_libs_tools_lib_and_sdk_import_error_fallback(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -513,7 +513,7 @@ def test_m4_mutation_fails_on_residual_libs_tools_lib_and_sdk_import_error_fallb
     assert any("M4:" in f for f in failures)
 
 
-def test_m5_mutation_fails_on_hardcoded_service_name_collection_dict_lookup_and_manifest(
+def _case_m5_mutation_fails_on_hardcoded_service_name_collection_dict_lookup_and_manifest(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -549,7 +549,7 @@ def test_m5_mutation_fails_on_hardcoded_service_name_collection_dict_lookup_and_
     assert any("M5:" in f and "hardcoded SERVICE_NAME/OTEL" in f for f in failures)
 
 
-def test_m4_mutation_fails_on_pure_reexport_shim_in_common(
+def _case_m4_mutation_fails_on_pure_reexport_shim_in_common(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -572,7 +572,7 @@ def test_m4_mutation_fails_on_pure_reexport_shim_in_common(
     assert any("M4:" in f and "pure_reexport_shim" in f for f in failures)
 
 
-def test_m6_mutation_fails_when_tools_script_imports_from_tools(
+def _case_m6_mutation_fails_when_tools_script_imports_from_tools(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -595,7 +595,7 @@ def test_m6_mutation_fails_when_tools_script_imports_from_tools(
     assert any("M6:" in f and "tools.cli_b" in f for f in failures)
 
 
-def test_m6_mutation_fails_on_wildcard_reexport_sys_modules_hijack_and_reverse_common_to_tools(
+def _case_m6_mutation_fails_on_wildcard_reexport_sys_modules_hijack_and_reverse_common_to_tools(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     _pkg_root, consumers = synthetic_workspace
@@ -636,7 +636,7 @@ def test_m6_mutation_fails_on_wildcard_reexport_sys_modules_hijack_and_reverse_c
     assert any("M6:" in f for f in failures)
 
 
-def test_m1_and_m2_check_fails_when_non_prod_symbols_or_keys_exist(
+def _case_m1_and_m2_check_fails_when_non_prod_symbols_or_keys_exist(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     pkg_root, _consumers = synthetic_workspace
@@ -663,24 +663,19 @@ def test_m1_and_m2_check_fails_when_non_prod_symbols_or_keys_exist(
     )
 
 
-@pytest.mark.parametrize(
-    "flags",
-    [
+def _case_cli_invalid_repo_or_sdk_src_exits_with_code_2(tmp_path: Path) -> None:
+    for flags in (
         ["--repo", "missing=/nonexistent"],
         ["--repo", "="],
         ["--sdk-src", "/no_such_sdk"],
-    ],
-)
-def test_cli_invalid_repo_or_sdk_src_exits_with_code_2(
-    tmp_path: Path, flags: list[str]
-) -> None:
-    argv = [f"{arg}{tmp_path}" if arg == "=" else arg for arg in flags]
-    with pytest.raises(SystemExit) as exc:
-        census.main(argv)
-    assert exc.value.code == 2
+    ):
+        argv = [f"{arg}{tmp_path}" if arg == "=" else arg for arg in flags]
+        with pytest.raises(SystemExit) as exc:
+            census.main(argv)
+        assert exc.value.code == 2, flags
 
 
-def test_human_summary_and_nonzero_exit_on_check_failure(
+def _case_human_summary_and_nonzero_exit_on_check_failure(
     synthetic_workspace: tuple[Path, dict[str, Path]],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -707,7 +702,7 @@ def test_human_summary_and_nonzero_exit_on_check_failure(
     assert "M5:" in out
 
 
-def test_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use(
+def _case_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     pkg_root, consumers = synthetic_workspace
@@ -742,7 +737,7 @@ def test_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use(
     assert by_name["test_method_sym"] == "test_only"
 
 
-def test_m1_ignores_empty_dunder_all_and_credits_cli_main_call_sites(
+def _case_m1_ignores_empty_dunder_all_and_credits_cli_main_call_sites(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     pkg_root, consumers = synthetic_workspace
@@ -765,7 +760,7 @@ def test_m1_ignores_empty_dunder_all_and_credits_cli_main_call_sites(
     assert by_name["unreferenced_in_main"] == "unused"
 
 
-def test_m2_credits_canonical_key_when_registered_alias_is_used_in_prod(
+def _case_m2_credits_canonical_key_when_registered_alias_is_used_in_prod(
     synthetic_workspace: tuple[Path, dict[str, Path]],
     tmp_path: Path,
 ) -> None:
@@ -787,7 +782,7 @@ def test_m2_credits_canonical_key_when_registered_alias_is_used_in_prod(
     assert by_key["SERVICE_VERSION"] == "prod_used"
 
 
-def test_m1_audits_package_dunder_all_even_when_submodule_dunder_all_hides_symbol(
+def _case_m1_audits_package_dunder_all_even_when_submodule_dunder_all_hides_symbol(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     """#1410: package `__init__.py` `__all__` is the public contract; a symbol omitted from
@@ -811,7 +806,7 @@ def test_m1_audits_package_dunder_all_even_when_submodule_dunder_all_hides_symbo
     assert any("reexported_only_in_pkg" in f for f in failures)
 
 
-def test_m1_verifies_surface_json_consumer_claims_and_honors_documented_and_held(
+def _case_m1_verifies_surface_json_consumer_claims_and_honors_documented_and_held(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
     """#1410: M1 honors `documented:` and `held:` entries in `tests/surface.json` while
@@ -858,7 +853,7 @@ def test_m1_verifies_surface_json_consumer_claims_and_honors_documented_and_held
     assert clean_failures == []
 
 
-def test_live_infra2_repository_census_contract() -> None:
+def _case_live_infra2_repository_census_contract() -> None:
     report = census.run_census(consumers={"infra2": census.REPO_ROOT})
     metrics = report["metrics"]
     assert metrics["M1"]["contract_source"] == "package_dunder_all"
@@ -882,7 +877,7 @@ def test_live_infra2_repository_census_contract() -> None:
     assert census.evaluate_checks(report) == []
 
 
-def test_m3_compares_with_newest_canary_verified_sdk(
+def _case_m3_compares_with_newest_canary_verified_sdk(
     synthetic_workspace: tuple[Path, dict[str, Path]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -937,7 +932,7 @@ def test_m3_compares_with_newest_canary_verified_sdk(
     assert rep_behind["metrics"]["M3"]["all_up_to_date"] is False
 
 
-def test_m3_reads_lock_path_from_repos_yaml(tmp_path: Path) -> None:
+def _case_m3_reads_lock_path_from_repos_yaml(tmp_path: Path) -> None:
     """#1635: consumer_pinned_version locates an App lock path via harness/repos.yaml sdk_lock."""
     from common.core.constants import load_app_sdk_locks
 
@@ -960,7 +955,7 @@ def test_m3_reads_lock_path_from_repos_yaml(tmp_path: Path) -> None:
     )
 
 
-def test_each_sdk_extra_key_names_the_sdk_file_that_reads_it() -> None:
+def _case_each_sdk_extra_key_names_the_sdk_file_that_reads_it() -> None:
     """One table (env_inventory.SDK_EXTRA_KEYS) for both tools (infra2#1824). Each file
     must exist in the installed SDK and hold the name; a stale file such as scaffold.py
     fails here."""
@@ -977,7 +972,7 @@ def test_each_sdk_extra_key_names_the_sdk_file_that_reads_it() -> None:
         assert needle in target.read_text("utf-8"), (name, rel)
 
 
-def test_an_sdk_without_a_runtime_contract_fails(tmp_path: Path) -> None:
+def _case_an_sdk_without_a_runtime_contract_fails(tmp_path: Path) -> None:
     """An empty RuntimeEnvKey contract stops the census; it never reports an empty
     vocabulary as green (infra2#1824)."""
     pkg = tmp_path / "pkg"
@@ -985,3 +980,107 @@ def test_an_sdk_without_a_runtime_contract_fails(tmp_path: Path) -> None:
     (pkg / "runtime/environment.py").write_text("X = 1\n", encoding="utf-8")
     with pytest.raises(ValueError, match="no RuntimeEnvKey contract"):
         census.sdk_env_vocabulary(pkg)
+
+
+def _run_cases(tmp_path: Path, capsys: pytest.CaptureFixture[str], *cases) -> None:
+    """Run each case in its own directory, with fresh patches and a flushed capture."""
+    assert cases, "a group without cases checks nothing"
+    for index, case in enumerate(cases):
+        base = tmp_path / f"{index}_{case.__name__}"
+        base.mkdir()
+        capsys.readouterr()
+        params = inspect.signature(case).parameters
+        kwargs: dict[str, Any] = {}
+        if "synthetic_workspace" in params:
+            kwargs["synthetic_workspace"] = _workspace(base)
+        if "tmp_path" in params:
+            kwargs["tmp_path"] = base
+        if "capsys" in params:
+            kwargs["capsys"] = capsys
+        with pytest.MonkeyPatch.context() as patch:
+            if "monkeypatch" in params:
+                kwargs["monkeypatch"] = patch
+            case(**kwargs)
+
+
+def test_the_census_cli_and_the_live_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_cases(
+        tmp_path,
+        capsys,
+        _case_clean_fixture_passes_all_metrics_and_cli_check,
+        _case_cli_invalid_repo_or_sdk_src_exits_with_code_2,
+        _case_human_summary_and_nonzero_exit_on_check_failure,
+        _case_live_infra2_repository_census_contract,
+        _case_each_sdk_extra_key_names_the_sdk_file_that_reads_it,
+        _case_an_sdk_without_a_runtime_contract_fails,
+    )
+
+
+def test_m1_classifies_sdk_symbols_by_reach(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_cases(
+        tmp_path,
+        capsys,
+        _case_public_defs_skips_overload_stubs,
+        _case_m1_mutation_fails_when_consumer_imports_missing_sdk_symbol,
+        _case_m1_mutation_fails_on_test_import_when_tests_flag_enabled,
+        _case_m1_ignores_module_dunder_attributes_with_uninstalled_sdk_sdk_src,
+        _case_m1_and_m2_check_fails_when_non_prod_symbols_or_keys_exist,
+        _case_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use,
+        _case_m1_ignores_empty_dunder_all_and_credits_cli_main_call_sites,
+        _case_m1_audits_package_dunder_all_even_when_submodule_dunder_all_hides_symbol,
+        _case_m1_verifies_surface_json_consumer_claims_and_honors_documented_and_held,
+    )
+
+
+def test_m2_credits_runtime_env_keys_used_in_production(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_cases(
+        tmp_path,
+        capsys,
+        _case_m2_mutation_fails_when_zero_contract_keys_are_used_in_prod,
+        _case_m2_credits_canonical_key_when_registered_alias_is_used_in_prod,
+    )
+
+
+def test_m3_compares_the_consumer_pin_with_the_latest_sdk(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_cases(
+        tmp_path,
+        capsys,
+        _case_m3_mutation_fails_when_consumer_pin_lags_behind_latest_version,
+        _case_m3_pyproject_wheel_and_git_tag_fallback,
+        _case_m3_missing_pin_detection,
+        _case_m3_compares_with_newest_canary_verified_sdk,
+        _case_m3_reads_lock_path_from_repos_yaml,
+    )
+
+
+def test_m4_finds_references_to_what_left_the_package(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_cases(
+        tmp_path,
+        capsys,
+        _case_m4_mutation_fails_when_consumer_references_left_the_packages_symbol,
+        _case_m4_dict_left_the_packages_and_wheel_smoke_removed_names,
+        _case_m4_mutation_fails_on_residual_libs_tools_lib_and_sdk_import_error_fallback,
+        _case_m4_mutation_fails_on_pure_reexport_shim_in_common,
+    )
+
+
+def test_m5_and_m6_find_hardcoded_names_and_tool_imports(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_cases(
+        tmp_path,
+        capsys,
+        _case_m5_mutation_fails_on_hardcoded_service_name_collection_dict_lookup_and_manifest,
+        _case_m6_mutation_fails_when_tools_script_imports_from_tools,
+        _case_m6_mutation_fails_on_wildcard_reexport_sys_modules_hijack_and_reverse_common_to_tools,
+    )

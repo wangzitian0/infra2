@@ -35,14 +35,11 @@ def _build_workspace(root) -> None:  # type: ignore[no-untyped-def]
     put("common/sub/__pycache__/junk.py", "JUNK = 1\n")
 
 
-def test_collect_excludes_tests_and_pycache(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    _build_workspace(tmp_path)
-    names = {p.name for p in collect(tmp_path, ["common"])}
-    assert names == {"shared_impl.py", "divergent.py", "dup_one.py"}
-
-
 def test_main_reports_duplicates_and_near_duplicates(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
     _build_workspace(tmp_path)
+    # tests and pycache must not enter the probe
+    names = {p.name for p in collect(tmp_path, ["common"])}
+    assert names == {"shared_impl.py", "divergent.py", "dup_one.py"}
     code = main(["--root", str(tmp_path), "--json"])
     assert code == 0
     report = json.loads(capsys.readouterr().out)

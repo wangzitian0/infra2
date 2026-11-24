@@ -7,9 +7,13 @@ must be discovered from the workspace submodule even in default mode.
 
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from common.core import sdk_usage_census as C
 
@@ -18,7 +22,7 @@ def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
 
 
-def test_list_repo_files_raises_when_git_fails(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def _case_list_repo_files_raises_when_git_fails(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     (tmp_path / ".git").mkdir()
     (tmp_path / "mod.py").write_text("VALUE = 1\n")
 
@@ -39,7 +43,7 @@ def test_list_repo_files_raises_when_git_fails(tmp_path: Path, monkeypatch) -> N
         )
 
 
-def test_list_repo_files_lists_tracked_python(tmp_path: Path) -> None:
+def _case_list_repo_files_lists_tracked_python(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "keep.py").write_text("A = 1\n")
     (tmp_path / "skip.txt").write_text("nope\n")
@@ -49,7 +53,7 @@ def test_list_repo_files_lists_tracked_python(tmp_path: Path) -> None:
     assert files == ["keep.py"]
 
 
-def test_surface_ledger_found_via_workspace_submodule(
+def _case_surface_ledger_found_via_workspace_submodule(
     tmp_path: Path, monkeypatch
 ) -> None:  # type: ignore[no-untyped-def]
     pkg = tmp_path / "repos/infra2-sdk/src/infra2_sdk"
@@ -66,7 +70,7 @@ def test_surface_ledger_found_via_workspace_submodule(
     assert out[("infra2_sdk", "thing")]["kind"] == "held"
 
 
-def test_m1_reach_pins_a_known_caller_as_prod_used(tmp_path: Path) -> None:
+def _case_m1_reach_pins_a_known_caller_as_prod_used(tmp_path: Path) -> None:
     """A consumer prod import of a package symbol must classify prod_used.
 
     This pins the #1642 class: the walk seeing the file is the only way this
@@ -88,3 +92,35 @@ def test_m1_reach_pins_a_known_caller_as_prod_used(tmp_path: Path) -> None:
     row = next(s for s in m1["symbols"] if s["name"] == "thing")
     assert row["reach"] == "prod_used", row
     assert "fake_app" in row["prod_repos"]
+
+
+def _run_cases(tmp_path: Path, capsys: pytest.CaptureFixture[str], *cases) -> None:
+    """Run each case in its own directory, with fresh patches and a flushed capture."""
+    assert cases, "a group without cases checks nothing"
+    for index, case in enumerate(cases):
+        base = tmp_path / f"{index}_{case.__name__}"
+        base.mkdir()
+        capsys.readouterr()
+        params = inspect.signature(case).parameters
+        kwargs: dict[str, Any] = {}
+        if "tmp_path" in params:
+            kwargs["tmp_path"] = base
+        if "capsys" in params:
+            kwargs["capsys"] = capsys
+        with pytest.MonkeyPatch.context() as patch:
+            if "monkeypatch" in params:
+                kwargs["monkeypatch"] = patch
+            case(**kwargs)
+
+
+def test_the_census_walk_and_surface_ledger_find_what_is_there(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_cases(
+        tmp_path,
+        capsys,
+        _case_list_repo_files_raises_when_git_fails,
+        _case_list_repo_files_lists_tracked_python,
+        _case_surface_ledger_found_via_workspace_submodule,
+        _case_m1_reach_pins_a_known_caller_as_prod_used,
+    )

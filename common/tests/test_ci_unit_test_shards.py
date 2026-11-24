@@ -77,7 +77,7 @@ def many_files(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return directory
 
 
-def test_shards_are_complete_disjoint_and_not_empty(many_files: Path) -> None:
+def test_shards_are_complete_disjoint_stable_and_not_empty(many_files: Path) -> None:
     full, full_run = _run([many_files], None, many_files)
     assert len(full) == FILE_COUNT * TESTS_PER_FILE, full_run.stdout + full_run.stderr
     shards = []
@@ -92,6 +92,9 @@ def test_shards_are_complete_disjoint_and_not_empty(many_files: Path) -> None:
                 f"shards {a + 1} and {b + 1} split a test file"
             )
     assert set().union(*shards) == full
+    # The split is the same in every process.
+    again, _ = _run([many_files], f"1/{SHARD_COUNT}", many_files)
+    assert again == shards[0]
 
 
 def test_a_shard_does_not_import_the_test_files_of_other_shards(
@@ -114,12 +117,6 @@ def test_a_shard_does_not_import_the_test_files_of_other_shards(
     assert len(failed) == 1, f"shards that imported the poison file: {failed}"
 
 
-def test_shard_split_is_the_same_in_every_process(many_files: Path) -> None:
-    first, _ = _run([many_files], f"1/{SHARD_COUNT}", many_files)
-    second, _ = _run([many_files], f"1/{SHARD_COUNT}", many_files)
-    assert first and first == second
-
-
 def test_test_files_named_on_the_command_line_are_split_by_file(
     many_files: Path,
 ) -> None:
@@ -135,45 +132,35 @@ def test_test_files_named_on_the_command_line_are_split_by_file(
     assert all(len(shards) == 1 for shards in owners.values()), owners
 
 
-@pytest.mark.parametrize("value", ["0/2", "3/2", "x", "1/0", "1"])
-def test_a_malformed_shard_option_fails_the_run(many_files: Path, value: str) -> None:
-    _, run = _run([many_files], value, many_files)
-    assert run.returncode != 0
-    assert "--shard" in run.stdout + run.stderr
+def test_a_malformed_option_fails_the_run(many_files: Path, tmp_path: Path) -> None:
+    for value in ("0/2", "3/2", "x", "1/0", "1"):
+        _, run = _run([many_files], value, many_files)
+        assert run.returncode != 0, value
+        assert "--shard" in run.stdout + run.stderr, value
+    weights = tmp_path / "weights.json"
+    for body in ("[1, 2]", '{"a": -1}', '{"a": "slow"}'):
+        weights.write_text(body, encoding="utf-8")
+        _, run = _run(
+            [many_files], f"1/{SHARD_COUNT}", many_files, f"--shard-weights={weights}"
+        )
+        assert run.returncode != 0, body
+        # The plugin's own message names the file; a crash deeper in json or float does not.
+        assert f"{weights}: " in run.stdout + run.stderr, body
 
 
-def test_longest_files_first_balances_the_shards() -> None:
+def test_the_assignment_balances_by_weight_and_ignores_input_order() -> None:
+    plugin = _plugin()
     weights = {"a": 10.0, "b": 9.0, "c": 8.0, "d": 1.0, "e": 1.0, "f": 1.0}
-    shard = _plugin().assign(weights, weights, 3)
+    shard = plugin.assign(weights, weights, 3)
     loads = [sum(w for f, w in weights.items() if shard[f] == k) for k in (1, 2, 3)]
     assert loads == [10.0, 10.0, 10.0], shard
-
-
-def test_a_file_without_a_weight_gets_the_median_weight() -> None:
-    # Median 4.0 puts "z" in shard 2 (loads 8 and 8); a default of 1.0 puts it in shard 1.
-    shard = _plugin().assign(["a", "b", "c", "z"], {"a": 4.0, "b": 2.0, "c": 6.0}, 2)
+    # A file without a weight gets the median: 4.0 puts "z" in shard 2 (loads 8 and 8);
+    # a default of 1.0 puts it in shard 1.
+    shard = plugin.assign(["a", "b", "c", "z"], {"a": 4.0, "b": 2.0, "c": 6.0}, 2)
     assert shard == {"c": 1, "a": 2, "z": 2, "b": 1}
-
-
-def test_the_assignment_does_not_depend_on_the_input_order() -> None:
-    weights = {f"f{i}": float(i % 4) for i in range(20)}
-    plugin = _plugin()
-    files = sorted(weights)
-    assert plugin.assign(files, weights, 3) == plugin.assign(files[::-1], weights, 3)
-
-
-@pytest.mark.parametrize("body", ["[1, 2]", '{"a": -1}', '{"a": "slow"}'])
-def test_bad_shard_weights_fail_the_run(
-    many_files: Path, tmp_path: Path, body: str
-) -> None:
-    weights = tmp_path / "weights.json"
-    weights.write_text(body, encoding="utf-8")
-    _, run = _run(
-        [many_files], f"1/{SHARD_COUNT}", many_files, f"--shard-weights={weights}"
-    )
-    assert run.returncode != 0
-    # The plugin's own message names the file; a crash deeper in json or float does not.
-    assert f"{weights}: " in run.stdout + run.stderr
+    many = {f"f{i}": float(i % 4) for i in range(20)}
+    files = sorted(many)
+    assert plugin.assign(files, many, 3) == plugin.assign(files[::-1], many, 3)
 
 
 def test_a_run_places_the_files_by_the_weights_file(
@@ -208,7 +195,7 @@ def test_the_committed_weights_parse_and_use_rootdir_paths() -> None:
     assert not wrong, f"keys that are not rootdir paths: {wrong[:5]}"
 
 
-def test_the_durations_out_option_writes_the_seconds_of_each_file(
+def test_durations_are_written_per_file_and_merged_by_sum(
     many_files: Path, tmp_path: Path
 ) -> None:
     out = tmp_path / "durations.json"
@@ -223,6 +210,19 @@ def test_the_durations_out_option_writes_the_seconds_of_each_file(
     seconds = json.loads(out.read_text(encoding="utf-8"))
     assert sorted(seconds) == sorted(p.name for p in many_files.glob("test_*.py"))
     assert all(isinstance(s, float | int) and s >= 0 for s in seconds.values())
+    first, second, merged = (tmp_path / n for n in ("a.json", "b.json", "out.json"))
+    first.write_text('{"t_a.py": 1.5, "t_b.py": 2.0}', encoding="utf-8")
+    second.write_text('{"t_b.py": 0.25, "t_c.py": 4.0}', encoding="utf-8")
+    assert _plugin().main(["merge", str(merged), str(first), str(second)]) == 0
+    assert json.loads(merged.read_text(encoding="utf-8")) == {
+        "t_a.py": 1.5,
+        "t_b.py": 2.25,
+        "t_c.py": 4.0,
+    }
+    # No input file: the merge fails and writes nothing.
+    none = tmp_path / "none.json"
+    assert _plugin().main(["merge", str(none), str(tmp_path / "absent.json")]) == 1
+    assert not none.exists()
 
 
 def _workflow() -> dict:
@@ -234,39 +234,57 @@ def _final_gate_step() -> dict:
     return next(s for s in steps if "SHARD_RESULT" in s.get("env", {}))
 
 
-def test_final_job_keeps_the_required_name_and_runs_after_a_failed_shard() -> None:
+def test_final_job_check_fails_unless_the_shards_succeeded() -> None:
+    run_script = _final_gate_step()["run"]
+    for result, expected_code in (
+        ("success", 0),
+        ("failure", 1),
+        ("cancelled", 1),
+        ("skipped", 1),
+        ("", 1),
+    ):
+        completed = subprocess.run(
+            ["bash", "-e", "-c", run_script],
+            env={**os.environ, "SHARD_RESULT": result},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert completed.returncode == expected_code, (
+            result,
+            completed.stdout + completed.stderr,
+        )
+        assert f"result: {result}" in completed.stdout
+
+
+def test_final_job_wiring_runs_after_a_failed_shard_and_reports_weights() -> None:
     job = _workflow()["jobs"][FINAL_JOB]
     assert job["name"] == "Test Deployer Hash Logic"
     assert "always()" in job["if"]
     assert "has_non_doc == 'true'" in job["if"]
     assert SHARD_JOB in job["needs"]
     assert "detect-changes" in job["needs"]
-
-
-def test_final_job_reads_the_shard_job_result() -> None:
+    steps = job["steps"]
     step = _final_gate_step()
     assert step["env"]["SHARD_RESULT"] == f"${{{{ needs.{SHARD_JOB}.result }}}}"
-    steps = _workflow()["jobs"][FINAL_JOB]["steps"]
-    assert steps[0] is step or steps[0] == step, "the result check must run first"
-
-
-@pytest.mark.parametrize(
-    ("result", "expected_code"),
-    [("success", 0), ("failure", 1), ("cancelled", 1), ("skipped", 1), ("", 1)],
-)
-def test_final_job_check_fails_unless_the_shards_succeeded(
-    result: str, expected_code: int
-) -> None:
-    run_script = _final_gate_step()["run"]
-    completed = subprocess.run(
-        ["bash", "-e", "-c", run_script],
-        env={**os.environ, "SHARD_RESULT": result},
-        capture_output=True,
-        text=True,
-        timeout=30,
+    assert steps[0] == step, "the result check must run first"
+    combine = next(s for s in steps if "coverage combine" in s.get("run", ""))
+    assert "coverage/.coverage.shard*" in combine["run"]
+    assert ".coverage.shard1" not in combine["run"]
+    merge = next(s for s in steps if "pytest_shard.py merge" in s.get("run", ""))
+    assert "coverage/durations.shard*.json" in merge["run"]
+    upload = next(
+        s for s in steps if s.get("with", {}).get("name") == "infra2-shard-weights"
     )
-    assert completed.returncode == expected_code, completed.stdout + completed.stderr
-    assert f"result: {result}" in completed.stdout
+    assert upload["with"]["path"] == "coverage/shard_weights.json"
+    # The weights report runs after every gate and cannot fail the check: a report
+    # for a later commit must not hide a gate or fail the required check.
+    names = [s.get("name", "") for s in steps]
+    gates = [i for i, n in enumerate(names) if n.startswith(("Gate ", "Audit "))]
+    report = [steps.index(merge), steps.index(upload)]
+    assert report[0] < report[1] and len(gates) >= 3, (report, gates)
+    assert min(report) > max(gates)
+    assert all(steps[i].get("continue-on-error") is True for i in report)
 
 
 def test_shard_jobs_gate_before_pytest_and_keep_the_coverage_targets() -> None:
@@ -278,56 +296,15 @@ def test_shard_jobs_gate_before_pytest_and_keep_the_coverage_targets() -> None:
     assert "strategy.job-total" in job["name"]
     names = [s.get("name", "") for s in job["steps"]]
     assert names.index(PREFLIGHT_STEP) < names.index("Run infra unit tests")
+    # Exactly one shard runs the preflight.
+    step = next(s for s in job["steps"] if s.get("name") == PREFLIGHT_STEP)
+    assert step.get("if") == "matrix.shard == 1"
     run = next(s for s in job["steps"] if s.get("name") == "Run infra unit tests")
     assert "--shard=${{ matrix.shard }}/${{ strategy.job-total }}" in run["run"]
     assert "/2" not in run["run"].split("--shard=")[1].split()[0]
     assert "--cov=common" in run["run"] and "--cov=tools" in run["run"]
     assert "-n auto" in run["run"]
-    upload = next(
-        s
-        for s in job["steps"]
-        if s.get("uses", "").startswith("actions/upload-artifact")
-    )
-    assert upload["with"]["include-hidden-files"] is True
-
-
-def test_final_job_combines_the_shard_files_by_glob() -> None:
-    steps = _workflow()["jobs"][FINAL_JOB]["steps"]
-    combine = next(s for s in steps if "coverage combine" in s.get("run", ""))
-    assert "coverage/.coverage.shard*" in combine["run"]
-    assert ".coverage.shard1" not in combine["run"]
-
-
-def test_exactly_one_shard_runs_the_preflight() -> None:
-    job = _workflow()["jobs"][SHARD_JOB]
-    step = next(s for s in job["steps"] if s.get("name") == PREFLIGHT_STEP)
-    assert step.get("if") == "matrix.shard == 1"
-    assert job["strategy"]["matrix"]["shard"][0] == 1
-
-
-def test_merge_sums_the_seconds_of_the_shard_files(tmp_path: Path) -> None:
-    first, second, out = (tmp_path / n for n in ("a.json", "b.json", "out.json"))
-    first.write_text('{"t_a.py": 1.5, "t_b.py": 2.0}', encoding="utf-8")
-    second.write_text('{"t_b.py": 0.25, "t_c.py": 4.0}', encoding="utf-8")
-    code = _plugin().main(["merge", str(out), str(first), str(second)])
-    assert code == 0
-    assert json.loads(out.read_text(encoding="utf-8")) == {
-        "t_a.py": 1.5,
-        "t_b.py": 2.25,
-        "t_c.py": 4.0,
-    }
-
-
-def test_merge_fails_when_no_durations_file_exists(tmp_path: Path) -> None:
-    out = tmp_path / "out.json"
-    code = _plugin().main(["merge", str(out), str(tmp_path / "absent.json")])
-    assert code == 1
-    assert not out.exists()
-
-
-def test_each_shard_records_and_uploads_its_file_seconds() -> None:
-    job = _workflow()["jobs"][SHARD_JOB]
-    run = next(s for s in job["steps"] if s.get("name") == "Run infra unit tests")
+    # Each shard records and uploads the seconds of its files.
     out = "coverage/durations.shard${{ matrix.shard }}.json"
     assert f"--shard-durations-out={out}" in run["run"]
     upload = next(
@@ -335,31 +312,5 @@ def test_each_shard_records_and_uploads_its_file_seconds() -> None:
         for s in job["steps"]
         if s.get("uses", "").startswith("actions/upload-artifact")
     )
+    assert upload["with"]["include-hidden-files"] is True
     assert out in upload["with"]["path"].splitlines()
-
-
-def test_the_final_job_merges_the_shard_seconds_into_a_weights_artifact() -> None:
-    steps = _workflow()["jobs"][FINAL_JOB]["steps"]
-    merge = next(s for s in steps if "pytest_shard.py merge" in s.get("run", ""))
-    assert "coverage/durations.shard*.json" in merge["run"]
-    upload = next(
-        s for s in steps if s.get("with", {}).get("name") == "infra2-shard-weights"
-    )
-    assert upload["with"]["path"] == "coverage/shard_weights.json"
-    assert steps.index(merge) < steps.index(upload)
-
-
-def test_the_weights_report_runs_after_every_gate_and_cannot_fail_the_check() -> None:
-    # A report for a later commit must not hide a gate or fail the required check.
-    steps = _workflow()["jobs"][FINAL_JOB]["steps"]
-    names = [s.get("name", "") for s in steps]
-    report = [
-        i
-        for i, s in enumerate(steps)
-        if "pytest_shard.py merge" in s.get("run", "")
-        or s.get("with", {}).get("name") == "infra2-shard-weights"
-    ]
-    gates = [i for i, n in enumerate(names) if n.startswith(("Gate ", "Audit "))]
-    assert len(report) == 2 and len(gates) >= 3, (report, gates)
-    assert min(report) > max(gates)
-    assert all(steps[i].get("continue-on-error") is True for i in report)
