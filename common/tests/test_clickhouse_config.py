@@ -154,7 +154,10 @@ def test_container_memory_limits_and_baseline_empty() -> None:
     def load_services(rel_path: str) -> dict[str, Any]:
         path = ROOT / rel_path
         assert path.exists(), f"missing compose file: {rel_path}"
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # The compiled text is what deploys: an x-infra2 stack gets its vault-agent there.
+        from common.deploy.compose_compile import load_stack
+
+        data = yaml.safe_load(load_stack(rel_path).compiled) or {}
         return data.get("services", {})
 
     # Postgres (4g)

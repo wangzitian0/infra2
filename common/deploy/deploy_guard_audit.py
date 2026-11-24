@@ -52,8 +52,10 @@ _COMPOSE_GLOB = "*compose*.y*ml"
 # `_SERVICE_ROOTS` is truncated, or bind mounts/contexts are rewritten to bare `${VAR}`.
 _SERVICE_ROOT_FLOORS: dict[str, tuple[int, int]] = {
     "platform": (13, 350),
-    "finance_report": (4, 8),
-    "truealpha": (4, 9),
+    # finance_report and truealpha read fewer inputs since #1822 Slice 3: an x-infra2
+    # stack has no mounted secrets.ctmpl or vault-agent.hcl.
+    "finance_report": (4, 4),
+    "truealpha": (4, 7),
     "bootstrap": (4, 12),
 }
 

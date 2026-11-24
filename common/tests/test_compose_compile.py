@@ -28,7 +28,12 @@ from common.deploy.config_hash import config_hash_from_items
 ROOT = Path(__file__).resolve().parents[2]
 TODO = "platform/30.todo/compose.yaml"
 # The stacks on x-infra2. A migration adds its file here and proves its equivalence.
-X_INFRA2_FILES = {TODO}
+X_INFRA2_FILES = {
+    TODO,
+    "finance_report/finance_report/01.postgres/compose.yaml",
+    "finance_report/finance_report/02.redis/compose.yaml",
+    "truealpha/truealpha/01.postgres/compose.yaml",
+}
 
 
 # The Canary image has no default hosts: /api/canary/status turns red when the compiled

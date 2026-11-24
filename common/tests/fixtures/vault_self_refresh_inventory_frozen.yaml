@@ -139,8 +139,9 @@ services:
     # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
     auth_method: approle
     compose_path: finance_report/finance_report/01.postgres/compose.yaml
-    vault_agent_config_path: finance_report/finance_report/01.postgres/vault-agent.hcl
-    secret_template_path: finance_report/finance_report/01.postgres/secrets.ctmpl
+    # x-infra2 since infra2#1822 Slice 3: the compiled compose holds the agent config and template.
+    vault_agent_config_path: finance_report/finance_report/01.postgres/compose.yaml
+    secret_template_path: finance_report/finance_report/01.postgres/compose.yaml
     vault_path_template: secret/data/finance_report/{env}/postgres
     vault_agent_container: finance_report-postgres-vault-agent${ENV_SUFFIX}
     app_containers:
@@ -152,8 +153,9 @@ services:
     # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
     auth_method: approle
     compose_path: finance_report/finance_report/02.redis/compose.yaml
-    vault_agent_config_path: finance_report/finance_report/02.redis/vault-agent.hcl
-    secret_template_path: finance_report/finance_report/02.redis/secrets.ctmpl
+    # x-infra2 since infra2#1822 Slice 3: the compiled compose holds the agent config and template.
+    vault_agent_config_path: finance_report/finance_report/02.redis/compose.yaml
+    secret_template_path: finance_report/finance_report/02.redis/compose.yaml
     vault_path_template: secret/data/finance_report/{env}/redis
     vault_agent_container: finance_report-redis-vault-agent${ENV_SUFFIX}
     app_containers:
@@ -194,8 +196,9 @@ services:
     # AppRole auth from day one (same model as finance_report post-#257/#259).
     auth_method: approle
     compose_path: truealpha/truealpha/01.postgres/compose.yaml
-    vault_agent_config_path: truealpha/truealpha/01.postgres/vault-agent.hcl
-    secret_template_path: truealpha/truealpha/01.postgres/secrets.ctmpl
+    # x-infra2 since infra2#1822 Slice 3: the compiled compose holds the agent config and template.
+    vault_agent_config_path: truealpha/truealpha/01.postgres/compose.yaml
+    secret_template_path: truealpha/truealpha/01.postgres/compose.yaml
     vault_path_template: secret/data/truealpha/{env}/postgres
     vault_agent_container: truealpha-postgres-vault-agent${ENV_SUFFIX}
     app_containers:
