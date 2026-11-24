@@ -11,7 +11,10 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None:
     """Infra-012.13: infra CI publishes coverage before enforcing thresholds."""
     workflow = (ROOT / ".github/workflows/infra-ci.yml").read_text(encoding="utf-8")
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
+    assert "pytest-cov" in pyproject
+    assert 'source = ["common", "tools"]' in pyproject
     assert "uv run --locked python -m pytest common/tests -q -n auto" in workflow
     assert 'PYTHONSAFEPATH: "1"' in workflow
     assert "--cov=common" in workflow

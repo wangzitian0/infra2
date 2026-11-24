@@ -66,3 +66,9 @@ def test_every_registered_layer_is_in_the_ruff_lint_scope() -> None:
             f"layer {layer!r} is registered in service_registry._LAYERS but is "
             f"missing from the ruff check scope: {ruff_line.strip()!r}"
         )
+
+
+def test_loader_does_not_reference_a_nonexistent_finance_project() -> None:
+    """tools/loader.py once loaded a stale `finance` directory that no longer exists."""
+    loader_src = (REPO_ROOT / "tools/loader.py").read_text(encoding="utf-8")
+    assert '"finance"' not in loader_src
