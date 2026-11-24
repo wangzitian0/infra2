@@ -1,12 +1,13 @@
-import sys
+"""TrueAlpha PostgreSQL: one PostgresStackDeployer declaration (#1825).
 
-from common.deploy.deployer import Deployer, make_tasks
-from common.core.facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
+common/core/stack_preset_facts.py derives the other facts from `project`.
+"""
 
-shared_tasks = sys.modules.get("truealpha.01.postgres.shared")
+from common.common import check_service
+from common.deploy.stack_presets import PostgresStackDeployer, stack_tasks
 
 
-class PostgresDeployer(Deployer):
+class PostgresDeployer(PostgresStackDeployer):
     """TrueAlpha PostgreSQL Deployer.
 
     Schema DDL (raw/staging/mart/dagster + kg tables) lives in the truealpha
@@ -14,63 +15,7 @@ class PostgresDeployer(Deployer):
     this compose — see truealpha/README.md.
     """
 
-    service = "postgres"
-    compose_path = "truealpha/truealpha/01.postgres/compose.yaml"
-    data_path = "/data/truealpha/postgres"
-
-    # Backup facts (#542): the backup inventory derives from these
-    # (formerly the ops.backup-inventory YAML, deleted).
-    backups = (
-        BackupFacet(
-            method="pg_dump_plus_data_archive",
-            restore_command="restore latest truealpha pg_dump, then reattach DATA_PATH if needed.",
-        ),
-    )
-    secret_key = "POSTGRES_PASSWORD"
     project = "truealpha"  # Dokploy project name
-
-    # PostgreSQL Alpine requires uid=70 and chmod=700
-    uid = "70"
-    chmod = "700"
-
-    # No public domain (internal only)
-    subdomain = None
-    service_port = 5432
-
-    # Minute-tier liveness from the probe runner (TCP: the app's own credentials are
-    # not the runner's, so a protocol probe would only prove the password).
-    probes = (
-        ProbeFacet(
-            name="truealpha-postgres-tcp",
-            kind="tcp",
-            target="truealpha-postgres${ENV_SUFFIX}:5432",
-            expected="connected",
-        ),
-    )
-    signals = (
-        SignalFacet(
-            tier="minute",
-            type="alert",
-            consecutive_failures=3,
-            renotify_window_sec=0,
-        ),
-    )
-    service_name = "postgres"
-
-    # Production went live 2026-07-19 (#522): truealpha-postgres +
-    # truealpha-postgres-vault-agent verified running in prod, so the former
-    # `not_yet_in_production` flag is removed — the reconcile prod selection and
-    # the vault audit's production sweep now include this service automatically.
-
-    # Vault self-refresh facts (#542): the audit inventory derives from this
-    # (AppRole auth from day one, same model as finance_report post-#257/#259).
-    secrets = (
-        SecretsFacet(
-            vault_agent_container="truealpha-postgres-vault-agent${ENV_SUFFIX}",
-            app_containers=("truealpha-postgres${ENV_SUFFIX}",),
-            auth_method="approle",
-        ),
-    )
 
     # Host-loopback port per env (the ingestion runtime runs as HOST processes
     # next to moomoo OpenD, and cannot route into the dokploy overlay). Fixed
@@ -93,11 +38,5 @@ class PostgresDeployer(Deployer):
         return base
 
 
-if shared_tasks:
-    _tasks = make_tasks(PostgresDeployer, shared_tasks)
-    status = _tasks["status"]
-    pre_compose = _tasks["pre_compose"]
-    composing = _tasks["composing"]
-    post_compose = _tasks["post_compose"]
-    setup = _tasks["setup"]
-    sync = _tasks["sync"]
+# tools/loader.py reads the module tasks: status, sync, setup and the others.
+globals().update(stack_tasks(PostgresDeployer, check_service))

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from common.core.constants import PRODUCTION, REPO_ROOT
+from common.core.stack_preset_facts import preset_defaults
 from common.core.facets import (
     FACET_CLASSES,
     BackupFacet,
@@ -541,8 +542,11 @@ def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
 
     Handles str / int / bool constants. `x = None` and non-literal values
     (calls, names) read back as None — the attribute is treated as unset.
+    A stack preset subclass (#1825) without the attribute reads the preset fact.
     """
     value = _deployer_assign(tree, attr_name)
+    if value is None:
+        return preset_defaults(tree).get(attr_name)
     if (
         value is not None
         and isinstance(value, ast.Constant)
@@ -604,10 +608,13 @@ def _facet_instance(node: ast.expr, facet_cls: type, where: str):
 
 
 def _facet_seq(tree: ast.Module, attr_name: str, facet_cls: type, where: str) -> tuple:
-    """The Deployer's ``attr_name`` facet tuple, AST-evaluated. Absent -> ()."""
+    """The Deployer's ``attr_name`` facet tuple, AST-evaluated. Absent -> ().
+
+    A stack preset subclass (#1825) without the attribute reads the preset facets.
+    """
     value = _deployer_assign(tree, attr_name)
     if value is None:
-        return ()
+        return preset_defaults(tree).get(attr_name, ())
     if not isinstance(value, (ast.Tuple, ast.List)):
         raise ValueError(
             f"{where}: `{attr_name}` must be a literal tuple/list of "

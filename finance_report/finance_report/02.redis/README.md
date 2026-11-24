@@ -23,7 +23,7 @@ Secrets stored at: `secret/data/finance_report/<env>/redis`
 python -m tools.deploy_v2 --service finance_report/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
-invoke finance_report.redis.status
+invoke fr-redis.shared.status
 
 # Connect (from within Docker network)
 docker exec -it finance_report-redis redis-cli -a <password>

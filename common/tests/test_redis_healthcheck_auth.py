@@ -26,20 +26,52 @@ def _redis_service(service_dir: str) -> dict:
     return compose["services"]["redis"]
 
 
-def _status_command(service_dir: str, monkeypatch) -> tuple[str, str]:
-    """Load the service's shared_tasks and capture what `status` hands check_service."""
-    name = "redis_shared_tasks_" + service_dir.replace("/", "_").replace(".", "_")
-    spec = importlib.util.spec_from_file_location(
-        name, ROOT / service_dir / "shared_tasks.py"
-    )
+def _load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    seen: list[tuple[str, str]] = []
+    return module
+
+
+def _platform_status(service_dir: str, monkeypatch, seen: list) -> None:
+    """platform/02.redis keeps its own shared_tasks.py `status` task."""
+    module = _load(
+        "redis_shared_tasks_platform", ROOT / service_dir / "shared_tasks.py"
+    )
     monkeypatch.setattr(
         module, "check_service", lambda c, service, cmd: seen.append((service, cmd))
     )
     module.status.body(None)
+
+
+def _preset_status(service_dir: str, monkeypatch, seen: list) -> None:
+    """An App Redis stack gets `shared.status` from RedisStackDeployer (#1825)."""
+    import common.common
+
+    # deploy.py binds common.common.check_service at import: patch it first.
+    monkeypatch.setattr(
+        common.common,
+        "check_service",
+        lambda c, service, cmd: seen.append((service, cmd)),
+    )
+    module = _load(
+        "redis_deploy_" + service_dir.replace("/", "_").replace(".", "_"),
+        ROOT / service_dir / "deploy.py",
+    )
+    module.shared.tasks["status"].body(None)
+
+
+_STATUS_LOADERS = {
+    "platform/02.redis": _platform_status,
+    "finance_report/finance_report/02.redis": _preset_status,
+}
+
+
+def _status_command(service_dir: str, monkeypatch) -> tuple[str, str]:
+    """Capture what the service `status` task hands check_service."""
+    seen: list[tuple[str, str]] = []
+    _STATUS_LOADERS[service_dir](service_dir, monkeypatch, seen)
     assert len(seen) == 1
     return seen[0]
 
