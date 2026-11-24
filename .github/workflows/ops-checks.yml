@@ -497,6 +497,17 @@ jobs:
           PROMOTION_REMINDER_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
         run: python tools/promotion_reminder.py
 
+      # Report-only: would a production promotion pass the upstream guard now? It reads stage
+      # records and the git tags, writes nothing and dispatches nothing (#1830). A refusal
+      # prints a warning; the owner decides production, so the step never fails the job.
+      - name: Probe the next production promotion
+        if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'promotion-reminder' || inputs.task == 'all' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          git fetch --quiet --tags --force --depth=2147483647 origin
+          python tools/promotion_probe.py --report-only
+
       # Two Mondays (08-31, 09-07) the stability report died on the watchdog ledger and
       # nothing paged: the digest job had no failure path (#658, recommendation 4).
       - name: Alert on failure

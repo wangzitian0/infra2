@@ -137,6 +137,17 @@ gates:
     # (#1645); it gates nothing, and it holds no secret.
     blocks_merge: false
     failure_semantics: The CI post record of a commit on main is not written or not uploaded.
+  - id: infra_ci.promotion_probe
+    stage: github_ci.merge_authority
+    task_category: change_detection
+    workflow: .github/workflows/infra-ci.yml
+    job: promotion-probe
+    # A pull request only. It runs the production promotion guard on the real stage records
+    # when the pull request changes the guard files (#1830); it changes nothing and holds
+    # no secret. It is not a required context: an open production decision is not a
+    # defect of the pull request.
+    blocks_merge: false
+    failure_semantics: The production promotion guard would refuse the next release candidate on the real stage records.
   - id: infra_ci.harness_replay
     stage: github_ci.merge_authority
     task_category: gate_replay

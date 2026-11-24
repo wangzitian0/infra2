@@ -322,6 +322,13 @@ jobs:
           while read -r file; do test -f "$pin/$file"; echo "pinned: $file"; done < "$files"
           echo "FINANCE_REPORT_PINNED_CHECKOUT=$pin" >> "$GITHUB_ENV"
 
+      # app_manifest_verify reads harness/repos.yaml at the newest production marker. A
+      # depth-1 fetch of the marker tags brings only the tagged commits.
+      - name: Fetch the production markers
+        if: matrix.shard == 1
+        timeout-minutes: 2
+        run: git fetch --quiet --depth=1 origin '+refs/tags/production/*:refs/tags/production/*'
+
       - name: Run infra unit tests
         # PYTHONSAFEPATH (not -P) so pytest-xdist's execnet worker subprocesses also
         # get path isolation — a CLI flag on the parent invocation doesn't propagate to
@@ -348,6 +355,9 @@ jobs:
           # tag (#1822). It reads the App manifests from GitHub, so only shard 1 runs it.
           if [[ "${{ matrix.shard }}" == "1" ]]; then
             uv run --locked python tools/app_manifest_sync.py --check
+            # The real verify_app_manifests (test_deploy_v2 stubs it): each App stack, staging
+            # and prod, at the pinned and the production release tags (#1822, v3.1.148).
+            uv run --locked python tools/app_manifest_verify.py
           fi
           uv run --locked python tools/lint_anti_tautology.py common/tests
           # Print the runner facts that explain a slow run (#1494). The worker count comes
@@ -752,6 +762,41 @@ jobs:
   # The CI post record of a commit on main (#1645). The production pre record of a release
   # reads it, so it names every job of the merge authority (`blocks_merge: true` in
   # docs/ssot/ci-gate-inventory.yaml). always(): a failed job is a red check, not a missing one.
+  # Read-only: would a production promotion pass require_upstream_post now? It runs the guard
+  # on the real stage records of the next candidate tag. A pull request that does not change
+  # the guard skips in one second (#1830). The schedule runs it in ops-checks.yml, report-only.
+  promotion-probe:
+    name: Probe the production promotion guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      # read the stage record artifacts
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install the SDK that uv.lock pins
+        run: |
+          pip install pyyaml httpx
+          pip install --no-deps "$(python tools/sdk_requirement.py)"
+
+      - name: Probe the guard when the pull request changes it
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python tools/promotion_probe.py --only-if-changed "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
   record:
     name: Write the CI stage record
     needs:
