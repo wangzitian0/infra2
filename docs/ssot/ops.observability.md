@@ -250,7 +250,7 @@ compose 里 `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` 只写成 `${…:-}
 
 ### 4.3 finance_report 接入(BE + 浏览器 FE,Infra-014)
 
-后端(Docker 网络内 OTLP HTTP)由 `10.app/secrets.ctmpl` / `preview/secrets.ctmpl` 按环境渲染
+后端(Docker 网络内 OTLP HTTP)由 `10.app/compose.yaml` 编译出的 Vault 模板 / `preview/secrets.ctmpl` 按环境渲染
 `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SERVICE_NAME=finance-report-backend` / 由部署入口签发的 `OTEL_RESOURCE_ATTRIBUTES`。Vault template 只转交进程环境；不得从 Vault secret 覆盖服务、环境、版本或 IaC 身份。迁移期 payload 同时含 `deployment.environment.name=<alias>` 与旧 `deployment.environment=<alias>`。
 
 浏览器前端走**唯一公网 ingest** `otel.${INTERNAL_DOMAIN}`(§4.4),运行时(非 build-time)env 注入

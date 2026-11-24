@@ -9,6 +9,7 @@ import yaml
 
 from common.core import registry as service_registry
 
+from common.tests.compose_env import compiled_vault_template
 from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -949,31 +950,32 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
         (
             SERVICE_DIR / "env.manifest.json",
             SERVICE_DIR / "compose.yaml",
-            SERVICE_DIR / "secrets.ctmpl",
+            (SERVICE_DIR / "secrets.ctmpl").read_text(encoding="utf-8"),
             ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
         ),
         (
             ROOT / "truealpha/truealpha/10.app/env.manifest.json",
             ROOT / "truealpha/truealpha/10.app/compose.yaml",
-            ROOT / "truealpha/truealpha/10.app/secrets.ctmpl",
+            compiled_vault_template(ROOT / "truealpha/truealpha/10.app"),
             ("llm", "web"),
         ),
         (
             ROOT / "truealpha/truealpha/10.app/env.manifest.json",
             ROOT / "truealpha/truealpha/preview/compose.yaml",
-            ROOT / "truealpha/truealpha/preview/secrets.ctmpl",
+            (ROOT / "truealpha/truealpha/preview/secrets.ctmpl").read_text(
+                encoding="utf-8"
+            ),
             ("llm", "web"),
         ),
     )
-    for contract_path, compose_path, template_path, roles in checks:
+    for contract_path, compose_path, template_text, roles in checks:
         contract_data = json.loads(contract_path.read_text(encoding="utf-8"))
         compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-        template_text = template_path.read_text(encoding="utf-8")
         missing = _missing_injected_contract_vars(
             contract_data, compose_data, roles, template_text
         )
         assert not missing, (
-            f"{compose_path.relative_to(ROOT)} and {template_path.relative_to(ROOT)} miss injected "
+            f"{compose_path.relative_to(ROOT)} and its Vault template miss injected "
             f"contract vars from {contract_path.relative_to(ROOT)}: {missing}"
         )
 

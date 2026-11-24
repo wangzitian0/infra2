@@ -28,7 +28,7 @@ def test_service_key_from_path_layouts():
     # the missing truealpha branch made v1.1.23's reconcile drop
     # truealpha/truealpha/10.app/* changes on the floor (no auto-promotion)
     assert (
-        service_key_from_path("truealpha/truealpha/10.app/secrets.ctmpl")
+        service_key_from_path("truealpha/truealpha/10.app/vault-policy.hcl")
         == "truealpha/app"
     )
     assert (

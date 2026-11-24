@@ -17,7 +17,7 @@ from infra2_sdk.runtime.config_schema import EnvironmentManifest, validate_envir
 
 from common.deploy import promote
 from common.deploy.env_config import app_compose_env_config
-from common.tests.compose_env import container_env
+from common.tests.compose_env import compiled_vault_template, container_env
 
 APP = Path(__file__).resolve().parents[2] / "finance_report/finance_report/10.app"
 MANIFEST = APP / "env.manifest.json"
@@ -30,7 +30,7 @@ BACKEND = EnvironmentManifest(
     source=COPY.source, fields=tuple(f for f in COPY.fields if f.group != "Frontend")
 )
 FIELDS = BACKEND.fields
-VAULT = re.findall(r"^(\w+)=", (APP / "secrets.ctmpl").read_text(), re.M)
+VAULT = re.findall(r"^(\w+)=", compiled_vault_template(APP), re.M)
 SERVICE = "finance_report/app"
 
 

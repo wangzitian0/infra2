@@ -13,9 +13,10 @@ from pathlib import Path
 
 import yaml
 
+from common.tests.compose_env import compiled_vault_template
+
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "finance_report/finance_report/10.app/compose.yaml"
-TEMPLATE = ROOT / "finance_report/finance_report/10.app/secrets.ctmpl"
 PREFECT_SERVER = "http://platform-prefect-server${ENV_SUFFIX}:4200/api"
 
 
@@ -37,7 +38,7 @@ def test_backend_and_worker_both_name_the_prefect_server() -> None:
 def test_the_template_no_longer_carries_the_value_so_compose_is_the_only_source() -> (
     None
 ):
-    assert "PREFECT_API_URL" not in TEMPLATE.read_text(encoding="utf-8")
+    assert "PREFECT_API_URL" not in compiled_vault_template(COMPOSE.parent)
 
 
 #: Configuration BOTH processes that run the backend image need. The worker parses

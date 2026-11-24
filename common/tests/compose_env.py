@@ -70,3 +70,21 @@ def container_env(
         key: resolve(value, issued_env)
         for key, value in raw_environment(services[service]).items()
     }
+
+
+def compiled_vault_template(directory: Path) -> str:
+    """The Vault Agent template that the deploy mounts for the stack ``directory``.
+
+    An x-infra2 stack commits no ``secrets.ctmpl``; the compile renders it from the stack
+    manifests (``compose_compile.vault_template_for``). A hand-written stack still commits
+    the file, which this function reads. Fails when neither source gives a template.
+    """
+    from common.deploy.compose_compile import has_x_infra2, vault_template_for
+
+    compose = directory / "compose.yaml"
+    text = compose.read_text(encoding="utf-8")
+    if not has_x_infra2(text):
+        return (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+    template = vault_template_for(compose, text)
+    assert template, f"{directory}: the compile renders no Vault template"
+    return template

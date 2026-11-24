@@ -1,6 +1,6 @@
 """Infra-009: finance_report fixed-env rate-limit capacity contract.
 
-The hand-written secrets.ctmpl used to carry the staging/production fallback (#615);
+The hand-written secrets.ctmpl (deleted; the deploy now compiles the template) used to carry the staging/production fallback (#615);
 since #637 the template is generated from the app manifest and the environment-specific
 value lives where the deployment states configuration: the compose file's inline
 default for production and AppDeployer.compose_env_overrides for staging.
@@ -12,9 +12,10 @@ import importlib.util
 import re
 from pathlib import Path
 
+from common.tests.compose_env import compiled_vault_template
+
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "finance_report/finance_report/10.app/compose.yaml"
-TEMPLATE = ROOT / "finance_report/finance_report/10.app/secrets.ctmpl"
 
 
 def _deployer():
@@ -52,7 +53,7 @@ def test_finance_report_rate_limit_fallback_is_environment_specific() -> None:
 
 def test_rate_limit_is_deployment_configuration_not_a_vault_value() -> None:
     """The generated template renders human / runtime values only; a rate limit is neither."""
-    template = TEMPLATE.read_text(encoding="utf-8")
+    template = compiled_vault_template(COMPOSE.parent)
     assert "API_RATE_LIMIT_REQUESTS" not in template
 
 

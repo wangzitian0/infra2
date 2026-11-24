@@ -17,7 +17,11 @@ from common.deploy.app_contract import (
 )
 from common.security import secrets_render
 from common.security.registry import ROOT, SERVICES
-from common.tests.compose_env import compose_services, raw_environment
+from common.tests.compose_env import (
+    compiled_vault_template,
+    compose_services,
+    raw_environment,
+)
 
 FR_SHA = "f" * 40
 
@@ -144,7 +148,7 @@ def test_release_template_from_the_copy_equals_the_committed_template(service) -
         service.id, [("release", copy)], stack_manifest_body=copy
     )
     directory = ROOT / service.directory
-    assert template == (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+    assert template == compiled_vault_template(directory)
     assert policy == (directory / "vault-policy.hcl").read_text(encoding="utf-8")
 
 
@@ -157,6 +161,13 @@ def _seed(root: Path, text: str) -> None:
             (root / service.directory).mkdir(parents=True, exist_ok=True)
     (root / "finance_report/finance_report/10.app/env.manifest.json").write_text(
         text, encoding="utf-8"
+    )
+    # The stack compose file is an x-infra2 source, so secrets_render commits no template.
+    (root / "finance_report/finance_report/10.app/compose.yaml").write_text(
+        (ROOT / "finance_report/finance_report/10.app/compose.yaml").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
     )
 
 
@@ -189,8 +200,6 @@ def test_write_copies_rewrites_the_copy_and_the_vault_files_of_each_reader(
     )
     assert changed == [
         "finance_report/finance_report/10.app/env.manifest.json",
-        "finance_report/finance_report/10.app/secrets.ctmpl",
-        "finance_report/finance_report/10.app/vault-agent.hcl",
         "finance_report/finance_report/10.app/vault-policy.hcl",
         "finance_report/finance_report/preview/secrets.ctmpl",
         "finance_report/finance_report/preview/vault-agent.hcl",
@@ -200,9 +209,10 @@ def test_write_copies_rewrites_the_copy_and_the_vault_files_of_each_reader(
     assert copy.read_text(encoding="utf-8") == sync.render(
         sync.project(service_for_id("finance_report/app"), FR_SHA, fetcher=fetch)
     )
-    template = (
-        tmp_path / "finance_report/finance_report/10.app/secrets.ctmpl"
-    ).read_text(encoding="utf-8")
+    # The x-infra2 stack commits neither file: the deploy compiles them.
+    for name in ("secrets.ctmpl", "vault-agent.hcl"):
+        assert not (tmp_path / "finance_report/finance_report/10.app" / name).exists()
+    template = compiled_vault_template(ROOT / "finance_report/finance_report/10.app")
     assert 'SECRET_KEY={{ printf "%q" .Data.data.SECRET_KEY }}' in template
     preview = secrets_render.render(
         service_for_id("finance_report/app", preview=True), root=tmp_path
@@ -222,7 +232,7 @@ def _supplied_names(directory: Path) -> set[str]:
     names: set[str] = set()
     for container in compose_services(directory / "compose.yaml").values():
         names |= set(raw_environment(container))
-    template = (directory / "secrets.ctmpl").read_text(encoding="utf-8")
+    template = compiled_vault_template(directory)
     names |= set(re.findall(r"(?m)(?:^|\}\})([A-Z_][A-Z0-9_]*)=", template))
     return names
 
