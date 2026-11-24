@@ -379,9 +379,13 @@ def classify_deployed_template(
         "release_sha256": release_sha256[:12],
     }
     served = _served_template(service, served_ref) if served_ref else None
-    served_matches_form = served is not None and served[0] == deployed_form
+    # The served release replaces main only when its hash is known; an unknown
+    # hash (a compiled stack at the tag) keeps the strict comparison with main.
+    served_comparable = (
+        served is not None and served[0] == deployed_form and bool(served[1])
+    )
     if deployed_form and deployed_form != release_form:
-        if served_matches_form:
+        if served_comparable:
             return _classify_served(
                 service, deployed_sha256, served_ref, served, evidence
             )
@@ -417,7 +421,7 @@ def classify_deployed_template(
             evidence,
         )
     if deployed_sha256 != release_sha256:
-        if served_matches_form:
+        if served_comparable:
             # Main can change a template after the served release (#1937).
             return _classify_served(
                 service, deployed_sha256, served_ref, served, evidence
@@ -475,18 +479,9 @@ def _classify_served(
     served: tuple[str, str, str],
     evidence: dict[str, str],
 ) -> CheckResult:
-    """Compare the container with the release that the environment serves."""
+    """Compare the container with the served release, whose hash is known."""
     _form, served_sha256, source = served
     evidence = {**evidence, "served_ref": ref, "served_sha256": served_sha256[:12]}
-    if not deployed_sha256 or not served_sha256:
-        return _result(
-            service,
-            "deployed-template",
-            "info",
-            "P3",
-            f"could not compare {source} at {ref}, the served release",
-            evidence,
-        )
     if deployed_sha256 != served_sha256:
         return _result(
             service,

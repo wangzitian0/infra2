@@ -758,8 +758,9 @@ def test_the_audit_compares_a_lagging_container_with_the_served_release(
     assert (other.status, other.severity) == ("fail", "P1"), other
     assert ref in other.summary
 
+    # An unreadable container hash is not lag: the form mismatch stays a fail.
     unreadable = va.classify_deployed_template(service, "", "hand-written", ref)
-    assert (unreadable.status, unreadable.severity) == ("info", "P3"), unreadable
+    assert (unreadable.status, unreadable.severity) == ("fail", "P1"), unreadable
 
     # Without a served release, the form mismatch stays a fail.
     unknown = va.classify_deployed_template(service, served_sha, "hand-written", "")
@@ -812,6 +813,20 @@ def test_the_audit_compares_a_hand_written_container_with_the_served_template(
     # Without a served release, main's template stays the only reference.
     unknown = va.classify_deployed_template(service, served_sha, "hand-written", "")
     assert (unknown.status, unknown.severity) == ("fail", "P1"), unknown
+
+
+def test_a_compiled_served_release_does_not_soften_a_compiled_mismatch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The served tag is compiled, so its hash is unknown: a stale container fails."""
+    import common.security.vault_audit as va
+
+    ref = _served_repo(monkeypatch, tmp_path, served_compiled=True)
+    service = _x_infra2_service()
+    result = va.classify_deployed_template(service, "d" * 64, "compiled", ref)
+    assert (result.status, result.severity) == ("fail", "P1"), result
+    assert "never reached" in result.summary
+    assert ref not in result.summary
 
 
 def test_served_ref_is_the_production_marker_only_for_production(monkeypatch) -> None:
