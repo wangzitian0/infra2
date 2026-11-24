@@ -15,7 +15,7 @@ import subprocess
 from typing import Any
 
 from common.core.constants import REPO_ROOT
-from common.deploy.compose_compile import COMPILED_TEMPLATE_PATH
+from common.deploy.compose_compile import COMPILED_TEMPLATE_PATH, VAULT_TEMPLATE_LABEL
 from common.security.vault_audit import (
     CheckResult,
     DEFAULT_LOG_SINCE,
@@ -313,26 +313,31 @@ FORM_HAND_WRITTEN = "hand-written"
 def _remote_template_identity(host: str, vault_agent_container: str) -> tuple[str, str]:
     """``(form, sha256)`` of the template that the vault-agent container reads.
 
-    The container tells its form, not the checkout: a release can lag main, and a
-    rollback can run a hand-written stack that main has moved to ``x-infra2``.
+    The container label gives the form, not the checkout and not the file path. A
+    release can lag main, and a rollback can run a hand-written stack that main has
+    moved to ``x-infra2``. Only a compiled sidecar carries ``VAULT_TEMPLATE_LABEL``.
+    A hand-written sidecar can also write ``/vault/secrets.ctmpl`` (from
+    ``VAULT_SECRETS_TEMPLATE``), so the path does not give the form.
     A compiled sidecar writes ``/vault/secrets.ctmpl`` with
     ``printf '%s\\n' "$VAULT_SECRETS_TEMPLATE"``, which adds one newline after the
     template text. The release label hashes the template text, so this function
-    removes that one newline before it hashes. A hand-written sidecar mounts
-    ``/etc/vault/secrets.ctmpl``; its hash is the hash of the file bytes.
-    The result is ``("", "")`` when the container shows neither file.
+    removes that one newline before it hashes. For a hand-written sidecar the hash
+    is the hash of the mounted ``/etc/vault/secrets.ctmpl`` bytes.
+    The result is ``("", "")`` when the container or its template file is missing.
     """
+    container = shlex.quote(vault_agent_container)
+    label_format = shlex.quote(f'{{{{index .Config.Labels "{VAULT_TEMPLATE_LABEL}"}}}}')
     compiled = shlex.quote(COMPILED_TEMPLATE_PATH)
     mounted = shlex.quote(HAND_WRITTEN_TEMPLATE_PATH)
     script = (
-        f"if [ -f {compiled} ]; then printf '{FORM_COMPILED}\\n'; cat {compiled}; "
-        f"elif [ -f {mounted} ]; then printf '{FORM_HAND_WRITTEN}\\n'; "
-        f"sha256sum {mounted} | cut -d' ' -f1; fi"
+        f"label=$(docker inspect --format {label_format} {container}); "
+        'case "$label" in '
+        f"''|'<no value>') sum=$(docker exec {container} sha256sum {mounted}) "
+        f"|| exit 1; printf '{FORM_HAND_WRITTEN}\\n%s\\n' \"${{sum%% *}}\";; "
+        f"*) printf '{FORM_COMPILED}\\n'; docker exec {container} cat {compiled} "
+        "|| exit 1;; esac"
     )
-    command = (
-        f"docker exec {shlex.quote(vault_agent_container)} sh -c {shlex.quote(script)}"
-    )
-    result = _ssh(host, command)
+    result = _ssh(host, f"sh -c {shlex.quote(script)}")
     if result.returncode != 0:
         return "", ""
     form, _, body = result.stdout.partition("\n")
@@ -340,7 +345,7 @@ def _remote_template_identity(host: str, vault_agent_container: str) -> tuple[st
         if not body.endswith("\n"):
             return form, ""
         return form, hashlib.sha256(body[:-1].encode("utf-8")).hexdigest()
-    if form == FORM_HAND_WRITTEN:
+    if form == FORM_HAND_WRITTEN and body.strip():
         return form, body.strip()
     return "", ""
 
