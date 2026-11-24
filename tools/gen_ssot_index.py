@@ -3,7 +3,7 @@
 
 The index tables are a pure projection of MANIFEST (file + key + summary, grouped by key
 prefix), so they must NOT be hand-edited — change a topic's index line via MANIFEST `summary`.
-`test_ssot_index_generated_matches_committed` locks generated == committed; run
+`test_generated_index_equals_committed` locks generated == committed; run
 `python tools/gen_ssot_index.py --write` to regenerate after editing MANIFEST.
 
 This is the "central index construction" half of the doc-consistency work: one source

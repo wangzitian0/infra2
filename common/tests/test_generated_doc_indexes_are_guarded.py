@@ -1,37 +1,10 @@
 """A change that can make a generated index stale must not be classed doc-only.
 
-Two indexes are projections of documentation:
-
-- ``docs/project/README.md`` from each ``Infra-NNN`` doc's H1 and Status line
-  (``tools/gen_project_index.py``)
-- ``docs/ssot/README.md`` from ``MANIFEST.yaml`` (``tools/gen_ssot_index.py``)
-
-``test_project_index_generated`` and ``test_ssot_index_generated`` already prove
-each index is in sync, and they run in infra-ci's ``test-deployer-logic`` --
-one of the seven checks GitHub's ruleset requires with no bypass actors. The
-defect was never those tests; it was that the job hosting them is gated on
-``has_non_doc``, and a pull request that adds, renames or re-statuses a project
-doc, or hand-edits a generated block, is all Markdown. The change that makes an
-index stale was the change that skipped the test proving it is not. #505 is the
-recorded instance: Infra-004/005 showing the wrong status, Infra-010/014/016
-missing outright.
-
-So the fix is one rule in ``detect-changes``, and this file proves the two
-things that rule has to get right, plus the one property the guarding tests
-rest on.
-
-**Why this shape.** The first attempt instead added the generators to
-``docs.yml`` and modelled CI to prove that step would run and bite: path
-filters, the job's ``if:``, ``needs:``, ``shell:``, preceding ``uses:`` steps.
-Six rounds of adversarial audit defeated it nineteen distinct ways -- step and
-job ``if:``, ``working-directory``, ``strategy.matrix``, ``container``,
-``services``, ``environment``, ``concurrency``, ``runs-on``, ``permissions``,
-``timeout-minutes``, ``env``, ``defaults``, ``with: {ref: main}`` on checkout,
-``on.pull_request.types``, a mistyped step id in ``outputs:`` -- because its
-input was the GitHub Actions schema, which is not a set anyone finishes
-enumerating. Here the input is the classifier's own shell and the generators'
-own behaviour. Whether the job runs is GitHub's problem, and GitHub is the one
-component that cannot get it wrong.
+The indexes docs/project/README.md and docs/ssot/README.md are generated from docs
+(tools/gen_project_index.py, tools/gen_ssot_index.py). The check in test_docs_lint.py
+proves each index is current. It runs in infra-ci job test-deployer-logic, which
+detect-changes skips for a doc-only change. These tests run the real classifier
+script of detect-changes and the generators on a throwaway repository.
 """
 
 from __future__ import annotations
@@ -60,31 +33,14 @@ SUBPROCESS_TIMEOUT_S = 120
 
 
 def _sanitized_env() -> dict[str, str]:
-    """The ambient environment, minus every ``GIT_*``.
-
-    Inherited rather than rebuilt: a step on a runner gets a populated
-    environment, and a hand-picked PATH-only one is not a smaller version of
-    that but a different one, where git and grep can behave differently.
-    The exception is a prefix rather than a list of names, because the list is
-    open -- ``GIT_DIR`` and ``GIT_CONFIG_GLOBAL`` redirect git, and
-    ``GIT_AUTHOR_*``/``GIT_COMMITTER_*`` beat the ``-c`` pins below outright.
-    """
+    """Return the ambient environment without any ``GIT_*`` variable."""
     return {
         name: value for name, value in os.environ.items() if not name.startswith("GIT_")
     }
 
 
 def _git(*args: str, cwd: Path) -> str:
-    """git in a throwaway repository, with the settings that can block pinned off.
-
-    ``HOME`` is kept on purpose, so ``~/.gitconfig`` IS in play -- the point is
-    not to isolate git from it but to override the handful of keys that can
-    hang. Each of
-    these can block: a ``commit.gpgsign`` whose gpg waits on a pinentry with no
-    TTY, a ``core.hooksPath`` holding a pre-commit hook, a ``core.fsmonitor``
-    pointing at a daemon that stopped answering -- the last measured blocking
-    ``git add -A`` with the other pins already in place.
-    """
+    """Run git in a throwaway repository with the keys that can block pinned off."""
     return subprocess.run(
         [
             "git",
@@ -112,17 +68,9 @@ def _git(*args: str, cwd: Path) -> str:
 
 
 def _detect_changes_script() -> str:
-    """infra-ci's own doc/non-doc classifier, lifted out rather than restated.
+    """Return the run body of the detect-changes step with id ``DETECT_STEP_ID``.
 
-    Selected by ``id``, not by being the only ``run:`` step: the job is free to
-    grow a second one, and picking whichever happens to be first would then
-    execute something other than the classifier while still looking right.
-
-    ``bash -e`` below is GitHub's implicit default, which holds only while
-    nothing declares otherwise. A ``shell:`` on the step, or in ``defaults.run``
-    on the job or the workflow, changes the semantics -- ``bash {0}`` drops
-    ``-e`` -- so this refuses rather than measuring a different shell than CI
-    runs. That is the same trap this file's predecessor was defeated by.
+    Fail when a ``shell:`` override changes the ``bash -e`` default that CI uses.
     """
     doc = yaml.safe_load(INFRA_CI.read_text(encoding="utf-8"))
     keys = [k for k in (True, "on") if k in doc]
@@ -304,7 +252,7 @@ def test_a_generator_detects_drift_that_changes_no_line_count(
 ) -> None:
     """The guarding tests only read an exit code, so the comparison must bite.
 
-    ``test_project_index_generated`` and ``test_ssot_index_generated`` run the
+    ``test_generated_index_equals_committed`` run the
     generator and assert its exit code, which makes the generator's own
     comparison the thing being trusted. Weakening it to a cheaper proxy -- line
     counts instead of content, the kind of change that reads as an optimisation

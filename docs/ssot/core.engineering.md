@@ -76,7 +76,7 @@
 > （`tools/gen_project_index.py`）——改索引要改那份文档，不是改索引。
 
 **守卫必须能被它要守的改动触发。** 这两个索引「是否同步」早就有测试证明
-（`test_project_index_generated` / `test_ssot_index_generated`），它们跑在 infra-ci 的
+（`test_generated_index_equals_committed`），它们跑在 infra-ci 的
 `test-deployer-logic` 里——GitHub ruleset 强制的七个必需检查之一。缺陷从来不在这两个测试，
 而在承载它们的 job 由 `has_non_doc` 门控：**新增/改名/改 Status 一篇 Project 文档、
 手改生成块，全都是纯 Markdown**，于是「让索引过期的那种改动」恰好就是「跳过证明索引没过期的那个测试」
