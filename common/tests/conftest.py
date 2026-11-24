@@ -103,3 +103,20 @@ def _no_ambient_op_cli(monkeypatch):
         real_init(self, *args, runner=runner, **kwargs)
 
     monkeypatch.setattr(OnePasswordBackend, "__init__", init)
+
+
+@pytest.fixture
+def fake_iac_ref_reads_the_working_tree(monkeypatch):
+    """promote reads the stack file at iac_ref (#1822 Slice 3, deploy provenance). The
+    fake ref ``"b" * 40`` reads the working tree; every other ref reads git."""
+    import common.deploy.config_drift as config_drift
+
+    real = config_drift.contents_at_ref
+    root = Path(__file__).resolve().parents[2]
+
+    def contents_at_ref(ref, paths):
+        if ref != "b" * 40:
+            return real(ref, paths)
+        return {p: (root / p).read_bytes() for p in paths if (root / p).is_file()}
+
+    monkeypatch.setattr(config_drift, "contents_at_ref", contents_at_ref)

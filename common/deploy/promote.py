@@ -643,30 +643,58 @@ class ReleaseTemplateMismatch(ValueError):
     """The compiled Vault template of an x-infra2 app stack is not the release template."""
 
 
-def rollout_source_fields(service: str, *, branch: str | None) -> dict[str, Any]:
+def rollout_source_fields(
+    service: str, *, branch: str | None, iac_ref: str = ""
+) -> dict[str, Any]:
     """The ``compose.update`` fields that set the source this promote runs (#1822).
 
-    A plain stack keeps the GitHub source: only ``branch`` is set, when given. An
-    ``x-infra2`` stack runs its compiled text as ``sourceType=raw``: Dokploy has no
-    checkout to compile, and ``branch`` does not apply.
+    The stack file is read at ``iac_ref`` (the checked-out ``HEAD`` when empty), never
+    from the working tree: a production promote runs from ``main`` with the approved
+    tag as ``iac_ref``, and the deploy must run that tag's compose (deploy provenance).
+
+    A plain stack at ``iac_ref`` keeps the GitHub source: only ``branch`` is set, when
+    given. An ``x-infra2`` stack at ``iac_ref`` runs its compiled text as
+    ``sourceType=raw``. ``config_drift.compiled_at_ref`` compiles it with the manifests
+    at ``iac_ref``, and stops when ``iac_ref`` pins another infra2-sdk than this process
+    runs. ``branch`` does not apply.
 
     The compiled vault-agent sidecar embeds its template. The deploy path renders the
     release template from the app release manifests and exports it as
     ``VAULT_SECRETS_TEMPLATE`` (base64). A compiled sidecar ignores that variable, so
-    the deploy stops when the two templates differ. Every other reader (config hash,
-    config drift, Vault audit label) reads the compiled template, so the release cannot
-    run a template that they do not see.
+    the deploy stops when the release template differs from the compiled one (the
+    ``infra2.vault.template.sha256`` label). Every other reader (config hash, config
+    drift, Vault audit label) reads the compiled template, so the release cannot run a
+    template that they do not see.
     """
     from common.core.registry import service_attrs
-    from common.deploy.compose_compile import load_stack, vault_template_for
+    from common.deploy.compose_compile import (
+        ComposeSourceError,
+        StackCompose,
+        has_x_infra2,
+        vault_template_label,
+    )
+    from common.deploy.config_drift import compiled_at_ref, contents_at_ref
 
     meta = service_attrs().get(service)
-    stack = load_stack(meta.compose_path) if meta and meta.compose_path else None
-    if stack is None or not stack.x_infra2:
+    if not meta or not meta.compose_path:
         return {"branch": branch} if branch else {}
+    ref = iac_ref.strip() or "HEAD"
+    found = contents_at_ref(ref, [meta.compose_path]).get(meta.compose_path)
+    if found is None:
+        raise ComposeSourceError(
+            f"{service}: {meta.compose_path} is absent at infra2 ref {ref!r}"
+        )
+    text = found.decode("utf-8")
+    if not has_x_infra2(text):
+        return {"branch": branch} if branch else {}
+    stack = StackCompose(
+        source=text,
+        compiled=compiled_at_ref(meta.compose_path, text, ref),
+        x_infra2=True,
+    )
     # Raises ComposeSourceError when the compiled stack is not raw-eligible.
     stack.source_type
-    compiled_template = vault_template_for(meta.compose_path, stack.source)
+    compiled_label = vault_template_label(stack.compiled)
     injected = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
     if injected:
         try:
@@ -675,16 +703,16 @@ def rollout_source_fields(service: str, *, branch: str | None) -> dict[str, Any]
             raise ReleaseTemplateMismatch(
                 f"{service}: VAULT_SECRETS_TEMPLATE is not base64 UTF-8 text: {exc}"
             ) from None
-        if compiled_template is None:
+        if not compiled_label:
             raise ReleaseTemplateMismatch(
                 f"{service}: the release has a Vault template, but the compiled stack "
-                f"{meta.compose_path} has no x-infra2.vault sidecar"
+                f"{meta.compose_path}@{ref} has no x-infra2.vault sidecar"
             )
-        if release != compiled_template:
+        if _sha256(release) != compiled_label:
             raise ReleaseTemplateMismatch(
-                f"{service}: the compiled Vault template of {meta.compose_path} "
-                f"(sha256 {_sha256(compiled_template)[:12]}) differs from the release "
-                f"template (sha256 {_sha256(release)[:12]}). Regenerate the stack "
+                f"{service}: the compiled Vault template of {meta.compose_path}@{ref} "
+                f"(sha256 {compiled_label[:12]}) differs from the release template "
+                f"(sha256 {_sha256(release)[:12]}). Regenerate the stack "
                 "env.manifest.json from the release tag (tools/app_manifest_sync.py "
                 "--write), merge, cut an infra2 release, then deploy again"
             )
@@ -1033,8 +1061,11 @@ def deploy(
     else:
         config_hash = f"deploy-{image_tag}-{int(now_fn() * 1000)}"
 
-    # Before any side effect: compile an x-infra2 stack and stop on a template mismatch.
-    source_fields = rollout_source_fields(opt.service, branch=opt.branch)
+    # Before any Dokploy write: compile an x-infra2 stack at iac_ref and stop on a
+    # template mismatch.
+    source_fields = rollout_source_fields(
+        opt.service, branch=opt.branch, iac_ref=opt.iac_ref
+    )
 
     env_vars, identity = _build_deploy_env_vars(
         service=opt.service,

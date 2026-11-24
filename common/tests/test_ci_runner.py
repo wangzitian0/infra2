@@ -162,6 +162,38 @@ def test_ci_runner_vault_agents_only_succeeds() -> None:
     assert ret == 0
 
 
+@pytest.mark.parametrize(
+    "stack",
+    [
+        # Names `vault-agent` only in depends_on.
+        "finance_report/finance_report/10.app/compose.yaml",
+        # Does not name `vault-agent` at all.
+        "finance_report/finance_report/02.redis/compose.yaml",
+    ],
+)
+def test_ci_runner_checks_the_compiled_sidecar_of_each_x_infra2_vault_stack(
+    monkeypatch, capsys, stack
+) -> None:
+    """#1822: an x-infra2 stack with `x-infra2.vault` is checked on its compiled text."""
+    import common.deploy.compose_compile as compose_compile
+
+    real = compose_compile.load_stack
+
+    def load_stack(path, **kwargs):
+        loaded = real(path, **kwargs)
+        if str(path) != stack:
+            return loaded
+        return compose_compile.StackCompose(
+            source=loaded.source,
+            compiled=loaded.compiled.replace("lookup-self", "lookup"),
+            x_infra2=True,
+        )
+
+    monkeypatch.setattr(compose_compile, "load_stack", load_stack)
+    assert run_vault(agents_only=True, verbose=False) == 1
+    assert f"missing token lookup in {stack}" in capsys.readouterr().out
+
+
 def test_ci_runner_vault_policy_only_succeeds() -> None:
     ret = run_vault(policy_only=True, verbose=False)
     assert ret == 0

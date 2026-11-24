@@ -122,6 +122,11 @@ def healthy_host() -> list[dict]:
     return rows
 
 
+# The fake infra2 ref that most tests below pass as iac_ref reads the working tree.
+FAKE_IAC_REF = "b" * 40
+pytestmark = pytest.mark.usefixtures("fake_iac_ref_reads_the_working_tree")
+
+
 @pytest.fixture(autouse=True)
 def _stub_secret_provisioning(monkeypatch):
     """deploy() now self-heals missing Vault-generated secrets before mutating
@@ -290,6 +295,87 @@ def test_an_x_infra2_app_stack_uploads_its_compiled_text_as_raw(
     ]
     assert client.branch_updates == []
     assert client.deployed == [compose_id]
+
+
+TAG_SHA = "c" * 40
+
+
+def test_the_deployed_compose_is_the_stack_file_at_iac_ref_not_the_checkout(
+    monkeypatch,
+):
+    """Deploy provenance (#1822 Slice 3): a production promote runs from main with the
+    approved tag as iac_ref. The raw upload must compile the tag's file, not main's."""
+    import common.deploy.config_drift as config_drift
+
+    path = "finance_report/finance_report/10.app/compose.yaml"
+    root = Path(__file__).parents[2]
+    checkout = (root / path).read_text(encoding="utf-8")
+    marker = "      DEBUG: ${DEBUG:-false}\n"
+    assert marker in checkout
+    at_tag = checkout.replace(marker, "      DEBUG: at-the-tag\n", 1)
+    real = config_drift.contents_at_ref
+
+    def contents_at_ref(ref, paths):
+        if ref != TAG_SHA:
+            return real(ref, paths)
+        out = {p: (root / p).read_bytes() for p in paths if (root / p).is_file()}
+        if path in out:
+            out[path] = at_tag.encode()
+        return out
+
+    monkeypatch.setattr(config_drift, "contents_at_ref", contents_at_ref)
+    client = FakeDokploy()
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        options=PromoteOptions(iac_ref=TAG_SHA),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
+    )
+    uploaded = client.source_updates[0][1]["compose_file"]
+    assert "DEBUG: at-the-tag" in uploaded
+    assert "${DEBUG:-false}" not in uploaded
+
+
+def test_a_plain_stack_file_at_iac_ref_keeps_the_github_branch(monkeypatch):
+    """A promote of a tag from before the move runs that tag's plain file: the git
+    branch is set, and no raw text is uploaded."""
+    import common.deploy.config_drift as config_drift
+
+    path = "finance_report/finance_report/10.app/compose.yaml"
+    plain = "services:\n  backend:\n    image: x\n"
+    real = config_drift.contents_at_ref
+    monkeypatch.setattr(
+        config_drift,
+        "contents_at_ref",
+        lambda ref, paths: (
+            {path: plain.encode()} if ref == "v0.0.1" else real(ref, paths)
+        ),
+    )
+    assert dp.rollout_source_fields(
+        "finance_report/app", branch="v0.0.1", iac_ref="v0.0.1"
+    ) == {"branch": "v0.0.1"}
+
+
+def test_a_release_template_without_a_compiled_sidecar_stops_the_deploy(monkeypatch):
+    import common.deploy.config_drift as config_drift
+
+    path = "finance_report/finance_report/10.app/compose.yaml"
+    no_vault = (
+        "x-infra2: {}\nservices:\n  frontend:\n    image: x\n"
+        "    container_name: finance_report-frontend${ENV_SUFFIX}\n"
+    )
+    real = config_drift.contents_at_ref
+
+    def contents_at_ref(ref, paths):
+        out = real("HEAD", paths) if ref == "v0.0.2" else real(ref, paths)
+        if ref == "v0.0.2" and path in paths:
+            out[path] = no_vault.encode()
+        return out
+
+    monkeypatch.setattr(config_drift, "contents_at_ref", contents_at_ref)
+    monkeypatch.setenv("VAULT_SECRETS_TEMPLATE", base64.b64encode(b"K=1\n").decode())
+    with pytest.raises(dp.ReleaseTemplateMismatch, match="no x-infra2.vault sidecar"):
+        dp.rollout_source_fields("finance_report/app", branch=None, iac_ref="v0.0.2")
 
 
 def _release_template(service: str) -> str:
