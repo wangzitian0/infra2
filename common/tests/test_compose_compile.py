@@ -35,7 +35,6 @@ X_INFRA2_FILES = {
     "truealpha/truealpha/01.postgres/compose.yaml",
     "finance_report/finance_report/10.app/compose.yaml",
     "truealpha/truealpha/10.app/compose.yaml",
-    "truealpha/truealpha/20.data_engine/compose.yaml",
 }
 
 
@@ -529,25 +528,6 @@ def test_equivalence_allows_only_the_release_template_injection_in_the_base() ->
     ]
 
 
-def test_equivalence_allows_only_environment_equal_to_env_in_the_base_sidecar() -> None:
-    """A hand sidecar sets `ENVIRONMENT: ${ENV}` next to `ENV: ${ENV}` (#1823 N1). Only
-    that exact pair is dropped; another value, or no ENV, is a difference."""
-    compiled, base, files = _eq_case()
-    marker = "      ENV: ${ENV}\n"
-    assert base.count(marker) == 1
-    paired = base.replace(marker, marker + "      ENVIRONMENT: ${ENV}\n")
-    assert equivalence_problems(_EQ_SOURCE, compiled, paired, files) == []
-    other = base.replace(marker, marker + "      ENVIRONMENT: production\n")
-    assert equivalence_problems(_EQ_SOURCE, compiled, other, files) == [
-        "services.vault-agent.environment.ENVIRONMENT: only in the base file"
-    ]
-    alone = base.replace(marker, "      ENVIRONMENT: ${ENV}\n")
-    assert sorted(equivalence_problems(_EQ_SOURCE, compiled, alone, files)) == [
-        "services.vault-agent.environment.ENV: only in the compiled file",
-        "services.vault-agent.environment.ENVIRONMENT: only in the base file",
-    ]
-
-
 def test_equivalence_finds_an_env_that_the_source_drops() -> None:
     compiled, base, files = _eq_case()
     source = _EQ_SOURCE.replace('      A: "1"\n', "")
@@ -664,8 +644,7 @@ def test_check_reports_a_plain_file_that_the_compile_changes(monkeypatch) -> Non
     monkeypatch.setattr(eq, "compile_stack", lambda text, **k: text + "\n")
     report = eq.check("HEAD")
     plain = [p for p in report.problems if not p.startswith(tuple(X_INFRA2_FILES))]
-    # 19 plain files on 2026-11-25, after truealpha 20.data_engine moved to x-infra2.
-    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 19
+    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 20
     assert all("a plain file changed in the compile" in p for p in plain)
 
 

@@ -11,9 +11,7 @@ from common.core import registry as service_registry
 from common.tests.compose_env import (
     TEMPLATE_ENV_CALL,
     compiled_vault_template,
-    compose_services,
     missing_template_envs,
-    raw_environment,
 )
 from common.tests.conftest import load_repo_module
 
@@ -223,38 +221,29 @@ def test_the_dialled_s3_port_matches_the_one_minio_publishes():
 
 
 def _vault_agent_environment() -> dict[str, str]:
-    """The environment of the compiled vault-agent sidecar (x-infra2, #1822 Slice 3)."""
-    return raw_environment(
-        compose_services(SERVICE_DIR / "compose.yaml")["vault-agent"]
-    )
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text())
+    return compose["services"]["vault-agent"]["environment"]
 
 
 def test_vault_agent_forwards_every_template_env():
-    """`env "X"` in the template reads the vault-agent container's own environment,
+    """`env "X"` in secrets.ctmpl reads the vault-agent container's own environment,
     not the Compose project env. #604 added `env "TA_MINIO_S3_PORT"` to the template
     while compose.yaml kept forwarding only TA_POSTGRES_PORT, so a recreated agent
     rendered S3_ENDPOINT=http://127.0.0.1: (no port) and every raw capture failed
     with `cannot access bucket truealpha-raw` (staging, 2026-09-07).
     """
-    template = compiled_vault_template(SERVICE_DIR)
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text()
     referenced = set(TEMPLATE_ENV_CALL.findall(template))
     assert referenced, "template no longer reads any env — update this test"
     forwarded = set(_vault_agent_environment())
     missing = missing_template_envs(template, forwarded)
     assert not missing, (
-        f"the template reads {missing} but vault-agent does not forward them"
+        f"secrets.ctmpl reads {missing} but vault-agent does not forward them"
     )
     # The generated template builds DATABASE_URL with the host Postgres port. Since #637
     # it reads no MinIO port: the compose anchor derives S3_ENDPOINT (test below).
     assert referenced == {"ENVIRONMENT", "ENV", "TA_POSTGRES_PORT"}
     assert _vault_agent_environment()["TA_POSTGRES_PORT"] == "${TA_POSTGRES_PORT}"
-    # The source forwards it with x-infra2.vault.env.
-    source = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
-    assert source["x-infra2"]["vault"] == {
-        "name": "truealpha-data-engine",
-        "env": ["TA_POSTGRES_PORT"],
-    }
-    assert "vault-agent" not in source["services"]
 
 
 DAGSTER_SERVICES = ("dagster-code-server", "dagster-webserver", "dagster-daemon")
@@ -262,7 +251,7 @@ IMAGE_ENTRYPOINT = "/app/dagster-entrypoint.sh"
 
 
 def test_each_dagster_service_runs_the_entrypoint_after_the_vault_wait():
-    """#1822 Slice 3 step B: each Dagster service is an x-vault service.
+    """#1822 Slice 3 step A: each Dagster service has the compiled x-vault shape.
 
     The SDK wait script exports /secrets/.env and runs `command`. The command runs
     dagster-entrypoint.sh at its image path. The image carries the script since
@@ -270,11 +259,7 @@ def test_each_dagster_service_runs_the_entrypoint_after_the_vault_wait():
     """
     from infra2_sdk.rules import compile_compose
 
-    source = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
-    for name in DAGSTER_SERVICES:
-        assert source["services"][name]["x-vault"] == {}, name
-        assert "entrypoint" not in source["services"][name], name
-    compose = {"services": compose_services(SERVICE_DIR / "compose.yaml")}
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     probe = compile_compose(
         {
             "x-infra2": {"vault": {"name": "probe"}},
@@ -312,10 +297,12 @@ def test_the_pinned_truealpha_release_carries_the_image_entrypoint():
 
 
 def test_vault_agent_is_recreated_when_its_templates_change():
-    """Compose recreates the agent only when its resolved config changes. The compiled
-    sidecar holds its template inline, and CONFIGURATION_SHA256 (the compiled compose +
-    vault-policy.hcl + public env) is part of its config, as for the runtime services.
-    Otherwise template edits could ship without ever rendering (#604, #626).
+    """secrets.ctmpl is a single-file bind mount: a checkout that rewrites the file
+    gives it a new inode, the running agent keeps the old one, and Compose only
+    recreates the agent when its resolved config changes. CONFIGURATION_SHA256
+    (compose.yaml + secrets.ctmpl + vault-agent.hcl + vault-policy.hcl + public env)
+    must therefore be part of the agent's config, as it already is for the runtime
+    services — otherwise template edits ship without ever rendering (#604, #626).
     """
     environment = _vault_agent_environment()
     assert environment.get("CONFIGURATION_SHA256", "").startswith(
@@ -331,7 +318,7 @@ def test_s3_endpoint_is_derived_not_taken_from_vault():
     `network_mode: host` container."""
     # Since #637 the template is generated from the app manifest and carries no
     # S3_ENDPOINT at all; the compose anchor derives it from the published port.
-    template = compiled_vault_template(SERVICE_DIR)
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text()
     assert ".Data.data.S3_ENDPOINT" not in template, (
         "S3_ENDPOINT must not come from Vault"
     )
@@ -1019,7 +1006,7 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
         (
             SERVICE_DIR / "env.manifest.json",
             SERVICE_DIR / "compose.yaml",
-            compiled_vault_template(SERVICE_DIR),
+            (SERVICE_DIR / "secrets.ctmpl").read_text(encoding="utf-8"),
             ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
         ),
         (
@@ -1071,7 +1058,7 @@ def test_missing_injected_contract_variable_in_compose_is_detected():
         contract_data,
         compose_data,
         ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
-        compiled_vault_template(SERVICE_DIR),
+        (SERVICE_DIR / "secrets.ctmpl").read_text(encoding="utf-8"),
     )
     assert missing == {
         "dagster-code-server": ["RELEASE_ID"],
@@ -1089,7 +1076,7 @@ def test_store_backed_injected_variable_missing_from_the_template_is_detected():
     compose_data = yaml.safe_load(
         (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
     )
-    template = compiled_vault_template(SERVICE_DIR)
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text(encoding="utf-8")
     assert _template_renders(template, "SEC_USER_AGENT"), (
         "the template lost the line the contract needs"
     )
@@ -1104,149 +1091,3 @@ def test_store_backed_injected_variable_missing_from_the_template_is_detected():
     assert _missing_injected_contract_vars(
         contract_data, compose_data, roles, stale
     ) == {role: ["SEC_USER_AGENT"] for role in roles}
-
-
-# --- x-infra2 deploy: compiled hash, raw upload, release template (#1822 Slice 3 B) ----
-
-_STAGING = {
-    "ENV": "staging",
-    "ENV_SUFFIX": "-staging",
-    "ENV_DOMAIN_SUFFIX": "-staging",
-    "INTERNAL_DOMAIN": "example.test",
-}
-
-
-def _compiled_stack():
-    from common.deploy.compose_compile import load_stack
-
-    return load_stack(_load_deploy_module().DataEngineDeployer.compose_path)
-
-
-def test_the_stack_compiles_to_a_raw_eligible_text_with_one_vault_sidecar():
-    stack = _compiled_stack()
-    assert stack.x_infra2
-    assert stack.source_type == "raw"
-    services = yaml.safe_load(stack.compiled)["services"]
-    assert services["vault-agent"]["container_name"] == (
-        "truealpha-data-engine-vault-agent${ENV_SUFFIX}"
-    )
-    assert set(services) == {"vault-agent", *DAGSTER_SERVICES}
-
-
-def test_configuration_sha256_hashes_the_compiled_compose(monkeypatch):
-    deployer = _load_deploy_module().DataEngineDeployer
-    base = deployer.source_config_env_base(_STAGING)
-    compiled = _compiled_stack().compiled
-    assert deployer._configuration_sha256(base) == deployer._configuration_sha256(
-        base, compiled
-    )
-    source = (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
-    assert deployer._configuration_sha256(base, source) != (
-        deployer._configuration_sha256(base, compiled)
-    )
-    # Another compiled text gives another hash; the source bytes are not read.
-    monkeypatch.setattr(
-        deployer, "_compiled_compose", classmethod(lambda cls: compiled + "# x\n")
-    )
-    assert deployer._configuration_sha256(base) != (
-        deployer._configuration_sha256(base, compiled)
-    )
-
-
-def test_configuration_sha256_ignores_the_files_that_the_stack_no_longer_deploys(
-    monkeypatch, tmp_path
-):
-    """secrets.ctmpl, vault-agent.hcl and dagster-entrypoint.sh stay for rollback only."""
-    module = _load_deploy_module()
-    deployer = module.DataEngineDeployer
-    base = deployer.source_config_env_base(_STAGING)
-    compiled = _compiled_stack().compiled
-    before = deployer._configuration_sha256(base, compiled)
-    fake_dir = tmp_path / "20.data_engine"
-    fake_dir.mkdir()
-    (fake_dir / "vault-policy.hcl").write_bytes(
-        (SERVICE_DIR / "vault-policy.hcl").read_bytes()
-    )
-    for name in ("secrets.ctmpl", "vault-agent.hcl", "dagster-entrypoint.sh"):
-        (fake_dir / name).write_text("changed\n", encoding="utf-8")
-    monkeypatch.setattr(module, "__file__", str(fake_dir / "deploy.py"))
-    assert deployer._configuration_sha256(base, compiled) == before
-    (fake_dir / "vault-policy.hcl").write_text("changed\n", encoding="utf-8")
-    assert deployer._configuration_sha256(base, compiled) != before
-
-
-def _deployer_with_secrets(monkeypatch):
-    deployer = _load_deploy_module().DataEngineDeployer
-    values = _secret_values()
-    monkeypatch.setattr(
-        deployer, "secrets_backend", classmethod(lambda cls: _Secrets(values))
-    )
-    return deployer
-
-
-def _b64(text: str) -> str:
-    import base64
-
-    return base64.b64encode(text.encode("utf-8")).decode("ascii")
-
-
-def test_an_equal_release_template_deploys_and_is_not_forwarded(monkeypatch):
-    deployer = _deployer_with_secrets(monkeypatch)
-    release = compiled_vault_template(SERVICE_DIR)
-    config = deployer.compose_env_base(
-        {**_STAGING, "VAULT_SECRETS_TEMPLATE": _b64(release)}
-    )
-    assert "VAULT_SECRETS_TEMPLATE" not in config
-    plain = deployer.compose_env_base(_STAGING)
-    assert config["CONFIGURATION_SHA256"] == plain["CONFIGURATION_SHA256"]
-
-
-@pytest.mark.parametrize(
-    "encoded",
-    [
-        pytest.param(_b64("other template\n"), id="template-differs"),
-        pytest.param("not base64!", id="not-base64"),
-    ],
-)
-def test_a_release_template_that_is_not_the_compiled_one_stops_the_deploy(
-    monkeypatch, encoded
-):
-    deployer = _deployer_with_secrets(monkeypatch)
-    with pytest.raises(ValueError, match="VAULT_SECRETS_TEMPLATE|release Vault"):
-        deployer.compose_env_base({**_STAGING, "VAULT_SECRETS_TEMPLATE": encoded})
-
-
-def test_composing_uploads_the_compiled_text_as_raw(monkeypatch):
-    """The iac-runner sync (Deployer.composing) is the data_engine deploy path."""
-    from unittest.mock import MagicMock
-
-    import common.deploy.dokploy_adapter as adapter
-
-    deployer = _load_deploy_module().DataEngineDeployer
-    monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
-    for name, fn in (
-        ("_assert_approle_creds_present", lambda cls, e: None),
-        ("_deploy_compose_with_record_check", lambda cls, c, i: None),
-        ("_prune_stale_dokploy_domains", lambda cls, c, i: None),
-        ("ensure_compose_domains", lambda cls, c, i, e: {"errors": []}),
-    ):
-        monkeypatch.setattr(deployer, name, classmethod(fn))
-    client = MagicMock()
-    client.find_compose_by_name.return_value = None
-    monkeypatch.setattr("common.deploy.dokploy_client.get_dokploy", lambda **k: client)
-    monkeypatch.setattr(
-        "common.deploy.dokploy_client.ensure_project", lambda *a, **k: ("p-1", "e-1")
-    )
-    calls = []
-    monkeypatch.setattr(
-        adapter, "upsert_raw_compose", lambda *a, **k: calls.append(("raw", k)) or "c-1"
-    )
-    monkeypatch.setattr(
-        adapter,
-        "upsert_github_compose",
-        lambda *a, **k: calls.append(("github", k)) or "c-1",
-    )
-    assert deployer.composing(MagicMock(), {}) == "c-1"
-    assert [kind for kind, _ in calls] == ["raw"]
-    assert calls[0][1]["compose_file"] == _compiled_stack().compiled
-    client.get_github_provider_id.assert_not_called()
