@@ -62,6 +62,8 @@ def _canned_stdout(
     traces: str,
     logs: str,
     bridge: str = BRIDGE_HEALTHY,
+    feishu: str = '{"status": "ok", "reachable": true, "mode": "feishu_app"}',
+    canary_metrics: str | None = None,
     ledger: str = DEFAULT_LEDGER_LINE,
     status: str = HEALTHY_STATUS_LINE,
     sdk: str | None = None,
@@ -71,6 +73,7 @@ def _canned_stdout(
     sdk_version = (
         sdk if sdk is not None else _resolve_locked_sdk_version(environment=environment)
     )
+    metrics_line = canary_metrics or f"6\t6\t{_relative_ts(30, now=FIXED_NOW)}"
     started_section = (
         f"=== CONTAINER_STARTED_AT ===\n{container_started_at}\n"
         if container_started_at is not None
@@ -87,9 +90,28 @@ def _canned_stdout(
         f"{logs}\n"
         "=== LEDGER ===\n"
         f"{ledger}\n"
+        "=== CANARY_METRICS ===\n"
+        f"{metrics_line}\n"
         f"{started_section}"
         "=== ALERT_BRIDGE ===\n"
         f"{bridge}\n"
+        "=== ALERT_BRIDGE_FEISHU ===\n"
+        f"{feishu}\n"
+        "=== LLM_SUMMARY ===\n"
+        '{"status": "pass", "input_tokens": 120, "output_tokens": 35}\n'
+        "=== LLM_SUMMARY_STREAM ===\n"
+        '{"status": "pass", "input_tokens": 120, "output_tokens": 35}\n'
+        "=== GEN_AI_SPANS ===\n"
+        "1\t1\t2\t0\t1\n"
+        "=== GEN_AI_METRICS ===\n"
+        "2\t2\n"
+        "=== WORKER ===\n"
+        '{"logger": "platform-todo-worker", "service.name": "platform-todo-worker"}\n'
+        '{"ok": true, "status_code": 200, "service": "platform-todo"}\n'
+        "__EXIT__=0\n"
+        "=== SCHEMA_CHECK ===\n"
+        "ROLLBACK_CLASS: A\n"
+        "__EXIT__=0\n"
     )
 
 
@@ -103,16 +125,27 @@ def _verify_with_canned_ssh(
 
     Return the report and every remote command passed to `_ssh_cmd`.
     """
+    import contextlib
+    from common.observability import canary_verify
+
     commands: list[str] = []
 
     def fake_ssh(command: str, *_args: object, **_kwargs: object):
         commands.append(command)
         return 0, stdout, ""
 
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("common.observability.canary_verify._ssh_cmd", side_effect=fake_ssh),
-    ):
+    with contextlib.ExitStack() as stack:
+        mock_url = stack.enter_context(patch("urllib.request.urlopen"))
+        stack.enter_context(
+            patch("common.observability.canary_verify._ssh_cmd", side_effect=fake_ssh)
+        )
+        if not isinstance(canary_verify._probe_public_summary_sso, MagicMock):
+            stack.enter_context(
+                patch(
+                    "common.observability.canary_verify._probe_public_summary_sso",
+                    return_value=(True, 302),
+                )
+            )
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.read.return_value = json.dumps(
@@ -574,7 +607,13 @@ def test_logs_query_exact_contract() -> None:
 
 @pytest.mark.parametrize(
     "builder",
-    ["traces_query", "logs_query", "gen_ai_spans_query", "gen_ai_metrics_query"],
+    [
+        "traces_query",
+        "logs_query",
+        "canary_metrics_query",
+        "gen_ai_spans_query",
+        "gen_ai_metrics_query",
+    ],
 )
 @pytest.mark.parametrize(
     "bad_value", ["x' OR 1=1 --", "a b", "", "prod;DROP", "a\\b", "x'"]
@@ -589,7 +628,13 @@ def test_query_builders_reject_unsafe_values(builder: str, bad_value: str) -> No
 
 @pytest.mark.parametrize(
     "builder",
-    ["traces_query", "logs_query", "gen_ai_spans_query", "gen_ai_metrics_query"],
+    [
+        "traces_query",
+        "logs_query",
+        "canary_metrics_query",
+        "gen_ai_spans_query",
+        "gen_ai_metrics_query",
+    ],
 )
 @pytest.mark.parametrize("bad_window", [0, -1, True, 1.5, "60"])
 def test_query_builders_reject_bad_window(builder: str, bad_window: object) -> None:
@@ -1381,46 +1426,60 @@ def test_app_peer_pillar_passes_on_460_and_enforces_fail_closed() -> None:
         expected_sdk="4.6.0",
     )
     assert missing_460.app_peer.ok is False
-    assert ">= 4.6.0" in missing_460.app_peer.summary
+    assert "unsupported" in missing_460.app_peer.summary
 
 
-def test_app_peer_pillar_allows_unsupported_on_pre_460_unless_required() -> None:
+def test_app_peer_pillar_rejects_unsupported_and_accepts_platform_todo_service() -> (
+    None
+):
     pre_base = _canned_stdout(
         traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
         logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
         environment="production",
-        sdk="4.5.0",
+        sdk="4.9.1",
     )
     stdout = _with_app_peer_sections(
         pre_base,
         worker='{"status":"unsupported"}\n__EXIT__=0',
         schema_check="UNSUPPORTED\n__EXIT__=0",
     )
-    soft, _ = _verify_with_canned_ssh("production", stdout, expected_sdk="4.5.0")
-    assert soft.app_peer.ok is True
-    assert soft.all_ok is True
-
-    strict, _ = _verify_with_canned_ssh(
-        "production", stdout, expected_sdk="4.5.0", require_app_peer=True
-    )
+    strict, _ = _verify_with_canned_ssh("production", stdout, expected_sdk="4.9.1")
     assert strict.app_peer.ok is False
     assert strict.all_ok is False
+    assert "unsupported" in strict.app_peer.summary
 
-    # Error prose containing "unsupported" must not trigger pre-4.6.0 tolerance.
+    # /readyz returns service="platform-todo" while legacy /api/health returned "platform/todo".
+    readyz_ok, _ = _verify_with_canned_ssh(
+        "production",
+        _with_app_peer_sections(
+            pre_base,
+            worker=(
+                '{"logger":"platform-todo-worker","service.name":"platform-todo-worker"}\n'
+                '{"ok":true,"status_code":200,"service":"platform-todo"}\n'
+                "__EXIT__=0"
+            ),
+            schema_check="ROLLBACK_CLASS: A\n__EXIT__=0",
+        ),
+        expected_sdk="4.9.1",
+    )
+    assert readyz_ok.app_peer.ok is True
+    assert readyz_ok.all_ok is True
+
+    # Error prose containing "unsupported" must fail with non-zero exit.
     false_unsupported, _ = _verify_with_canned_ssh(
         "production",
         _with_app_peer_sections(
             pre_base,
             worker='{"level":"ERROR","message":"unsupported protocol"}\n__EXIT__=1',
-            schema_check=stdout.split("=== SCHEMA_CHECK ===\n", 1)[1],
+            schema_check="ROLLBACK_CLASS: A\n__EXIT__=0",
         ),
-        expected_sdk="4.5.0",
+        expected_sdk="4.9.1",
     )
     assert false_unsupported.app_peer.ok is False
     assert "worker exited 1" in false_unsupported.app_peer.summary
 
 
-def test_app_peer_remote_script_passes_db_url_and_valid_shell_syntax() -> None:
+def test_app_peer_remote_script_uses_readyz_and_passes_valid_shell_syntax() -> None:
     captured: list[str] = []
 
     def fake_ssh(script, host, user, key_path, port):
@@ -1432,11 +1491,11 @@ def test_app_peer_remote_script_passes_db_url_and_valid_shell_syntax() -> None:
                     traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
                     logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
                     environment="staging",
-                    sdk="4.6.0",
+                    sdk="4.9.1",
                 ),
                 worker=(
-                    '{"logger":"platform-todo-worker","service.name":"platform-todo"}\n'
-                    '{"ok":true,"status_code":200,"service":"platform/todo"}\n'
+                    '{"logger":"platform-todo-worker","service.name":"platform-todo-worker"}\n'
+                    '{"ok":true,"status_code":200,"service":"platform-todo"}\n'
                     "__EXIT__=0"
                 ),
                 schema_check="ROLLBACK_CLASS: A\n__EXIT__=0",
@@ -1450,17 +1509,21 @@ def test_app_peer_remote_script_passes_db_url_and_valid_shell_syntax() -> None:
             return_value=("h", "u", "/tmp/k", 22),
         ),
         patch("common.observability.canary_verify._ssh_cmd", side_effect=fake_ssh),
+        patch(
+            "common.observability.canary_verify._probe_public_summary_sso",
+            return_value=(True, 302),
+        ),
         patch("common.observability.canary_verify.urllib.request.urlopen") as mock_open,
     ):
         resp = MagicMock()
         resp.status = 200
-        resp.read.return_value = json.dumps({"ok": True}).encode()
+        resp.read.return_value = json.dumps({"ok": True, "version": "abc1234"}).encode()
         resp.__enter__.return_value = resp
         resp.__exit__.return_value = False
         mock_open.return_value = resp
         report = verify_canary(
             "staging",
-            expected_sdk="4.6.0",
+            expected_sdk="4.9.1",
             now=FIXED_NOW,
             require_app_peer=True,
         )
@@ -1468,15 +1531,95 @@ def test_app_peer_remote_script_passes_db_url_and_valid_shell_syntax() -> None:
     assert report.all_ok is True
     assert len(captured) == 1
     script = captured[0]
+    assert "http://127.0.0.1:8000/readyz" in script
     assert "--app-path /app" in script
     assert "--metadata canary_schema:METADATA" in script
     assert '--db-url "$DATABASE_URL"' in script
     assert "--label platform/todo" in script
+    assert "service.version" in script and "'abc1234'" in script
     for shell in ("sh", "bash"):
         res = subprocess.run(
             [shell, "-n", "-c", script], capture_output=True, text=True
         )
         assert res.returncode == 0, f"{shell} syntax error: {res.stderr}"
+
+
+def test_canary_verify_hardening_gates_feishu_metrics_ledger_day_and_platform_deps() -> None:
+    """Verify hardened Phase 2 gates fail closed under single mutations."""
+    fresh = _relative_ts(60, now=FIXED_NOW)
+    # 1. Feishu bridge degraded fails alerts pillar.
+    bad_feishu, _ = _verify_with_canned_ssh(
+        "staging",
+        _canned_stdout(
+            traces=f"500\t{fresh}",
+            logs=f"100\t{fresh}",
+            environment="staging",
+            feishu='{"status": "unreachable", "detail": "feishu host TCP 443"}',
+        ),
+    )
+    assert bad_feishu.alerts.ok is False
+    assert bad_feishu.all_ok is False
+    assert "Feishu unhealthy" in bad_feishu.alerts.summary
+
+    # 2. Missing canary metrics fails monitoring pillar.
+    bad_metrics, _ = _verify_with_canned_ssh(
+        "staging",
+        _canned_stdout(
+            traces=f"500\t{fresh}",
+            logs=f"100\t{fresh}",
+            environment="staging",
+            canary_metrics="0\t0\t1970-01-01 00:00:00",
+        ),
+    )
+    assert bad_metrics.monitoring.ok is False
+    assert "canary metrics" in bad_metrics.monitoring.summary
+
+    # 3. Yesterday's ledger day fails at 12:00Z.
+    stale_day, _ = _verify_with_canned_ssh(
+        "staging",
+        _canned_stdout(
+            traces=f"500\t{fresh}",
+            logs=f"100\t{fresh}",
+            environment="staging",
+            ledger='{"day": "2026-10-11", "runs": 10, "signal": {"ok": 10, "fail": 0}}',
+        ),
+    )
+    assert stale_day.monitoring.ok is False
+    assert "stale ledger day" in stale_day.monitoring.summary
+
+    # 4. --require-platform-deps fails when any dep is unconfigured.
+    unconfigured_dep, _ = _verify_with_canned_ssh(
+        "staging",
+        _canned_stdout(
+            traces=f"500\t{fresh}",
+            logs=f"100\t{fresh}",
+            environment="staging",
+            status=json.dumps(
+                {
+                    "ok": True,
+                    "failed": [],
+                    "unconfigured": ["s3"],
+                    "gating": ["postgres", "redis", "s3"],
+                    "informational": ["signoz"],
+                    "checks": {"postgres": {"status": "pass"}, "redis": {"status": "pass"}, "s3": {"status": "unconfigured"}},
+                }
+            ),
+        ),
+        require_platform_deps=True,
+    )
+    assert unconfigured_dep.monitoring.ok is False
+    assert "unconfigured=['s3']" in unconfigured_dep.monitoring.summary
+
+    # 5. canary_metrics_query contract includes both custom canary metrics and optional version.
+    cm_sql = signoz_queries.canary_metrics_query(
+        service_name="platform-todo",
+        environment="staging",
+        window_seconds=1800,
+        version="v3.2.10",
+    )
+    assert "canary.probe.duration_ms" in cm_sql
+    assert "canary.probe.outcomes" in cm_sql
+    assert "resource_attrs['service.version'] = 'v3.2.10'" in cm_sql
 
 
 def test_require_app_peer_cli_flag_forwards_to_verify_canary() -> None:

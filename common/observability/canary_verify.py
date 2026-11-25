@@ -27,12 +27,13 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import shlex
 import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ from common.deploy.vps_ssh import resolve_ssh_credentials as _resolve_ssh_creden
 from common.deploy.vps_ssh import ssh_cmd as _ssh_cmd
 from common.observability.signoz_queries import (
     DEFAULT_WINDOW_SECONDS,
+    canary_metrics_query,
     gen_ai_metrics_query,
     gen_ai_spans_query,
     logs_query,
@@ -234,6 +236,24 @@ def _evaluate_llm_pillar(
             f"cost_spans={cost_cnt}, metrics ok, SSO protected)"
         ),
         details=details,
+    )
+
+
+def _feishu_probe_command(bridge_container: str) -> str:
+    script = (
+        "import json, urllib.error, urllib.request\n"
+        "try:\n"
+        "    resp = urllib.request.urlopen('http://127.0.0.1:8080/health/feishu', timeout=10)\n"
+        "    print(resp.read().decode())\n"
+        "except urllib.error.HTTPError as err:\n"
+        "    print(err.read().decode(errors='replace'))\n"
+        "except Exception as err:\n"
+        "    print(json.dumps({'status': 'error', 'detail': str(err)}))\n"
+    )
+    script_b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    return (
+        f"docker exec {bridge_container} python3 -c "
+        f"\"import base64; exec(base64.b64decode('{script_b64}').decode())\""
     )
 
 
@@ -465,11 +485,39 @@ def _parse_container_started_at(raw: str | None) -> int | None:
     return int(dt.timestamp())
 
 
+def _evaluate_ledger_day(
+    ledger_day: object,
+    now_utc: datetime,
+    *,
+    last_ok_epoch: int | None,
+    window_seconds: int,
+) -> tuple[bool, str]:
+    """Require the ledger entry to match today's UTC date (or immediate UTC midnight rollover)."""
+    expected_day = now_utc.strftime("%Y-%m-%d")
+    day_str = str(ledger_day).strip() if isinstance(ledger_day, str) else ""
+    if not day_str:
+        return False, f"ledger day missing (expected {expected_day})"
+    if day_str == expected_day:
+        return True, ""
+    yesterday = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+    if (
+        day_str == yesterday
+        and now_utc.hour == 0
+        and now_utc.minute < 5
+        and last_ok_epoch is not None
+        and -CLOCK_SKEW_TOLERANCE_SECONDS <= (now_utc.timestamp() - last_ok_epoch) <= window_seconds
+    ):
+        return True, ""
+    return False, f"stale ledger day {day_str!r} != {expected_day}"
+
+
 def _evaluate_ledger_signal(
     signal: object,
     now: datetime,
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
     container_started_at: int | None = None,
+    *,
+    ledger_day: object = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     """Fail-closed judgement of one ledger signal (#1223, #1720).
 
@@ -487,6 +535,19 @@ def _evaluate_ledger_signal(
     details: dict[str, Any] = {"window_seconds": window_seconds}
     if container_started_at is not None:
         details["container_started_at"] = container_started_at
+    if ledger_day is not None:
+        details["ledger_day"] = ledger_day
+        last_ok_for_day = (
+            _ledger_count(signal.get("lastOkAt")) if isinstance(signal, dict) else None
+        )
+        day_ok, day_msg = _evaluate_ledger_day(
+            ledger_day,
+            _as_utc(now),
+            last_ok_epoch=last_ok_for_day,
+            window_seconds=window_seconds,
+        )
+        if not day_ok:
+            return False, day_msg, details
     if not isinstance(signal, dict):
         return False, "entry missing for the signal today", details
     ok_count = _ledger_count(signal.get("ok"))
@@ -578,6 +639,38 @@ def _split_exit_section(raw: str) -> tuple[int | None, str]:
     return None, (raw or "").strip()
 
 
+def _evaluate_canary_metrics_pillar(
+    section_text: str,
+    max_age_seconds: int,
+    now: datetime | None,
+) -> tuple[bool, str, dict[str, Any]]:
+    raw = section_text.strip()
+    if not raw:
+        return False, "canary metrics section missing", {}
+    parts = [p.strip() for p in raw.splitlines()[-1].split("\t")]
+    dur_cnt = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+    out_cnt = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    latest = parts[2] if len(parts) > 2 else ""
+    fresh_ok, fresh_summary, details = _evaluate_freshness(
+        dur_cnt + out_cnt,
+        latest,
+        pillar_name="canary metrics",
+        max_age_seconds=max_age_seconds,
+        now=now,
+    )
+    details["duration_samples"] = dur_cnt
+    details["outcomes_samples"] = out_cnt
+    if dur_cnt < 1 or out_cnt < 1:
+        return (
+            False,
+            f"canary metrics incomplete (duration={dur_cnt}, outcomes={out_cnt})",
+            details,
+        )
+    if not fresh_ok:
+        return False, fresh_summary, details
+    return True, f"pass ({dur_cnt}+{out_cnt} samples)", details
+
+
 def _evaluate_app_peer_pillar(
     *,
     sections: dict[str, str],
@@ -599,8 +692,8 @@ def _evaluate_app_peer_pillar(
         "worker_output": worker_body,
         "schema_exit": schema_rc,
         "schema_output": schema_body,
+        "installed_sdk": installed_sdk,
     }
-    expect_app_peer = require_app_peer or _version_at_least(installed_sdk, (4, 6, 0))
     worker_objs: list[dict[str, Any]] = []
     for line in worker_body.splitlines():
         text = line.strip()
@@ -616,16 +709,10 @@ def _evaluate_app_peer_pillar(
         obj.get("status") == "unsupported" for obj in worker_objs
     )
     schema_unsupported = schema_rc == 0 and schema_body.strip() == "UNSUPPORTED"
-    if expect_app_peer and (worker_unsupported or schema_unsupported):
+    if worker_unsupported or schema_unsupported:
         return PillarResult(
             ok=False,
-            summary="App-peer checks missing on SDK >= 4.6.0",
-            details=details,
-        )
-    if worker_unsupported and schema_unsupported:
-        return PillarResult(
-            ok=True,
-            summary="App-peer checks unsupported on pre-4.6.0 image",
+            summary="App-peer checks missing or unsupported",
             details=details,
         )
 
@@ -647,7 +734,7 @@ def _evaluate_app_peer_pillar(
         worker_result is None
         or worker_result.get("ok") is not True
         or worker_result.get("status_code") != 200
-        or worker_result.get("service") != "platform/todo"
+        or worker_result.get("service") not in {"platform/todo", "platform-todo"}
     ):
         problems.append("worker health result missing or failed")
 
@@ -665,6 +752,35 @@ def _evaluate_app_peer_pillar(
     )
 
 
+_SAFE_VERSION_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _evaluate_platform_deps(
+    canary_status: dict[str, Any], *, require_platform_deps: bool
+) -> tuple[bool, str]:
+    unconfigured = canary_status.get("unconfigured") or []
+    failed = canary_status.get("failed") or []
+    if canary_status.get("ok") is not True or len(failed) > 0:
+        return False, "fail"
+    if not require_platform_deps:
+        return True, "pass"
+    if unconfigured:
+        return False, f"unconfigured={unconfigured!r}"
+    checks = canary_status.get("checks")
+    if not isinstance(checks, dict):
+        return False, "checks missing"
+    gating = canary_status.get("gating") or ("postgres", "redis", "s3")
+    for dep in gating:
+        entry = checks.get(dep)
+        if not isinstance(entry, dict) or entry.get("status") != "pass":
+            return False, f"gating {dep} not pass"
+    for dep in canary_status.get("informational") or ():
+        entry = checks.get(dep)
+        if not isinstance(entry, dict) or entry.get("status") == "unconfigured":
+            return False, f"informational {dep} unconfigured"
+    return True, "pass"
+
+
 def verify_canary(
     environment: str = "production",
     expected_sdk: str | None = None,
@@ -672,8 +788,10 @@ def verify_canary(
     max_age_seconds: int = DEFAULT_WINDOW_SECONDS,
     now: datetime | None = None,
     repo_root: Path | None = None,
-    require_llm: bool = False,
-    require_app_peer: bool = False,
+    require_llm: bool = True,
+    require_app_peer: bool = True,
+    require_platform_deps: bool = False,
+    expected_version: str | None = None,
 ) -> CanaryRealityReport:
     if expected_sdk is None:
         expected_sdk = _resolve_locked_sdk_version(
@@ -689,40 +807,11 @@ def verify_canary(
         f"/var/lib/infra2-availability-ledger{suffix}/availability-ledger.json"
     )
     signal_id = f"{environment}:todo-canary-status"
-    # The same environment and the same window scope both telemetry queries.
-    # shlex.quote protects the SQL at the remote shell boundary.
-    traces_sql = shlex.quote(
-        traces_query(
-            service_name=TELEMETRY_SERVICE_NAME,
-            environment=environment,
-            window_seconds=max_age_seconds,
-        )
-    )
-    logs_sql = shlex.quote(
-        logs_query(
-            service_name=TELEMETRY_SERVICE_NAME,
-            environment=environment,
-            window_seconds=max_age_seconds,
-        )
-    )
-    gen_ai_spans_sql = shlex.quote(
-        gen_ai_spans_query(
-            service_name=TELEMETRY_SERVICE_NAME,
-            environment=environment,
-            window_seconds=max_age_seconds,
-        )
-    )
-    gen_ai_metrics_sql = shlex.quote(
-        gen_ai_metrics_query(
-            service_name=TELEMETRY_SERVICE_NAME,
-            environment=environment,
-            window_seconds=max_age_seconds,
-        )
-    )
 
-    # 1. Public Health Check
+    # 1. Public Health Check (runs before ClickHouse SQL construction so observed
+    # `service.version` can scope telemetry queries when expected_version is omitted).
     health_ok = False
-    health_data = {}
+    health_data: dict[str, Any] = {}
     try:
         req = urllib.request.Request(
             f"https://{domain}/api/health",
@@ -735,9 +824,70 @@ def verify_canary(
     except Exception as err:
         health_data = {"error": str(err)}
 
+    observed_version = health_data.get("version")
+    telemetry_version: str | None = None
+    if expected_version and _SAFE_VERSION_RE.fullmatch(expected_version.strip()):
+        telemetry_version = expected_version.strip()
+    elif (
+        health_ok
+        and isinstance(observed_version, str)
+        and observed_version.strip()
+        and observed_version.strip() != "unknown"
+        and _SAFE_VERSION_RE.fullmatch(observed_version.strip())
+    ):
+        telemetry_version = observed_version.strip()
+
+    if expected_version and health_ok and isinstance(observed_version, str):
+        if observed_version.strip() != expected_version.strip():
+            health_ok = False
+
+    # The same environment, version and window scope the ClickHouse telemetry queries.
+    # shlex.quote protects the SQL at the remote shell boundary.
+    traces_sql = shlex.quote(
+        traces_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+            version=telemetry_version,
+        )
+    )
+    logs_sql = shlex.quote(
+        logs_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+            version=telemetry_version,
+        )
+    )
+    canary_metrics_sql = shlex.quote(
+        canary_metrics_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+            version=telemetry_version,
+        )
+    )
+    gen_ai_spans_sql = shlex.quote(
+        gen_ai_spans_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+            version=telemetry_version,
+        )
+    )
+    gen_ai_metrics_sql = shlex.quote(
+        gen_ai_metrics_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+            version=telemetry_version,
+        )
+    )
+
     # 2. In-container Canary Status & Installed SDK via SSH
     llm_non_stream_cmd = _summary_probe_command(container, stream=False)
     llm_stream_cmd = _summary_probe_command(container, stream=True)
+    feishu_cmd = _feishu_probe_command(bridge_container)
     remote_script = (
         f'echo "=== STATUS ===" && '
         f"docker exec {container} python3 -c \"import urllib.request, json; print(json.dumps(json.loads(urllib.request.urlopen('http://localhost:8000/api/canary/status').read())))\" && "
@@ -748,11 +898,15 @@ def verify_canary(
         f'echo "=== LOGS ===" && '
         f"docker exec platform-clickhouse clickhouse-client --query {logs_sql} && "
         f'echo "=== LEDGER ===" && '
-        f'jq -c ".days | to_entries[-1] | {{day: .key, runs: .value.runs, signal: .value.signals[\\"{signal_id}\\"]}}" {ledger_path} && '
+        f'jq -c ".days | to_entries | sort_by(.key) | last | {{day: .key, runs: .value.runs, signal: .value.signals[\\"{signal_id}\\"]}}" {ledger_path} && '
+        f'echo "=== CANARY_METRICS ===" && '
+        f"docker exec platform-clickhouse clickhouse-client --query {canary_metrics_sql} && "
         f'echo "=== CONTAINER_STARTED_AT ===" && '
         f"docker inspect -f '{{{{.State.StartedAt}}}}' {container} && "
         f'echo "=== ALERT_BRIDGE ===" && '
         f"docker exec {bridge_container} python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\" && "
+        f'echo "=== ALERT_BRIDGE_FEISHU ===" && '
+        f"{feishu_cmd} && "
         f'echo "=== LLM_SUMMARY ===" && '
         f"llm_out=$({llm_non_stream_cmd}) && "
         f'printf "%s\\n" "$llm_out" && '
@@ -769,7 +923,7 @@ def verify_canary(
         f'for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do set -- $gen_ai_metrics_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 5; gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}); done ;; esac && '
         f'printf "%s\\n" "$gen_ai_metrics_out" && '
         f'echo "=== WORKER ===" && '
-        f'{{ worker_out=$(docker exec {container} sh -c \'if [ -f /app/worker.py ]; then python3 /app/worker.py --once --health-url http://127.0.0.1:8000/api/health --service-name platform-todo-worker; else printf "{{\\"status\\":\\"unsupported\\"}}\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$worker_out" $?; }} && '
+        f'{{ worker_out=$(docker exec {container} sh -c \'if [ -f /app/worker.py ]; then python3 /app/worker.py --once --health-url http://127.0.0.1:8000/readyz --service-name platform-todo-worker; else printf "{{\\"status\\":\\"unsupported\\"}}\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$worker_out" $?; }} && '
         f'echo "=== SCHEMA_CHECK ===" && '
         f'{{ schema_out=$(docker exec {container} sh -c \'if [ -f /app/canary_schema.py ]; then [ -f /secrets/.env ] && {{ set -a; . /secrets/.env; set +a; }}; python3 -m infra2_sdk.runtime.schema_check --app-path /app --metadata canary_schema:METADATA --db-url "$DATABASE_URL" --label platform/todo; else printf "UNSUPPORTED\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$schema_out" $?; }}'
     )
@@ -801,14 +955,16 @@ def verify_canary(
             sections[current_sec] = (sections[current_sec] + "\n" + line).strip()
 
     # Parse Status & Checks
-    canary_status = {}
+    canary_status: dict[str, Any] = {}
     gating_ok = False
+    gating_detail = "fail"
     try:
-        canary_status = json.loads(sections.get("STATUS", "{}"))
-        gating_ok = (
-            canary_status.get("ok") is True
-            and len(canary_status.get("failed", [])) == 0
-        )
+        parsed_status = json.loads(sections.get("STATUS", "{}"))
+        if isinstance(parsed_status, dict):
+            canary_status = parsed_status
+            gating_ok, gating_detail = _evaluate_platform_deps(
+                canary_status, require_platform_deps=require_platform_deps
+            )
     except Exception:
         pass
 
@@ -829,6 +985,11 @@ def verify_canary(
         environment,
         now,
     )
+    metrics_ok, metrics_summary, metrics_details = _evaluate_canary_metrics_pillar(
+        sections.get("CANARY_METRICS", ""),
+        max_age_seconds,
+        now,
+    )
 
     # Parse Monitoring (Ledger)
     ledger_data: dict[str, Any] = {}
@@ -846,25 +1007,28 @@ def verify_canary(
         _as_utc(now),
         window_seconds=max_age_seconds,
         container_started_at=container_started_at,
+        ledger_day=ledger_data.get("day", ""),
     )
-    monitoring_ok = ledger_ok and gating_ok and health_ok
+    monitoring_ok = ledger_ok and gating_ok and health_ok and metrics_ok
 
     monitoring_pillar = PillarResult(
         ok=monitoring_ok,
         summary=(
             f"Ledger {ledger_summary}, "
             f"public_health={'pass' if health_ok else 'fail'}, "
-            f"internal_status={'pass' if gating_ok else 'fail'}"
+            f"internal_status={gating_detail}, "
+            f"metrics={'pass' if metrics_ok else metrics_summary}"
         ),
         details={
             "ledger": ledger_data,
             "ledger_check": ledger_check,
             "health": health_data,
             "canary_status": canary_status,
+            "canary_metrics": metrics_details,
         },
     )
 
-    # Parse Alert Bridge
+    # Parse Alert Bridge + /health/feishu
     bridge_ok = False
     bridge_status = "missing"
     bridge_summary = "Bridge response is not valid JSON"
@@ -881,12 +1045,32 @@ def verify_canary(
             bridge_summary = "Bridge response is not a JSON object"
     except ValueError:
         pass
+
+    feishu_ok = False
+    feishu_status = "missing"
+    feishu_data: dict[str, Any] = {}
+    feishu_raw = sections.get("ALERT_BRIDGE_FEISHU", "").strip()
+    if feishu_raw:
+        try:
+            parsed_feishu = json.loads(feishu_raw)
+            if isinstance(parsed_feishu, dict):
+                feishu_data = parsed_feishu
+                feishu_status = str(feishu_data.get("status", "missing"))
+                feishu_ok = (
+                    feishu_status == "ok" and feishu_data.get("reachable") is True
+                )
+        except ValueError:
+            feishu_status = "invalid JSON"
+    if bridge_ok and not feishu_ok:
+        bridge_summary = f"Bridge Feishu unhealthy: status={feishu_status}"
     alerts_pillar = PillarResult(
-        ok=bridge_ok,
+        ok=bridge_ok and feishu_ok,
         summary=bridge_summary,
         details={
             "bridge_response": sections.get("ALERT_BRIDGE", ""),
             "status": bridge_status,
+            "feishu": feishu_data,
+            "feishu_status": feishu_status,
         },
     )
 
@@ -984,13 +1168,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--require-llm",
-        action="store_true",
-        help="Fail verification if LLM summary is unconfigured or unverified",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fail verification if LLM summary is unconfigured or unverified (default: true)",
     )
     parser.add_argument(
         "--require-app-peer",
-        action="store_true",
-        help="Fail verification if worker tick or schema_check is missing or fails",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fail verification if worker tick or schema_check is missing or fails (default: true)",
+    )
+    parser.add_argument(
+        "--require-platform-deps",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Fail verification if any gating dependency is unconfigured or not passing",
+    )
+    parser.add_argument(
+        "--expected-version",
+        default=None,
+        help="Expected service.version emitted to SigNoz telemetry",
     )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -1002,6 +1199,8 @@ def main(argv: list[str] | None = None) -> int:
         max_age_seconds=args.max_age_seconds,
         require_llm=args.require_llm,
         require_app_peer=args.require_app_peer,
+        require_platform_deps=args.require_platform_deps,
+        expected_version=args.expected_version,
     )
 
     if args.json:
