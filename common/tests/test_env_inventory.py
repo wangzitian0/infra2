@@ -1310,7 +1310,7 @@ def test_g1_reads_the_rendered_vault_template_of_an_x_infra2_stack(repo_scan):
         for o in inv_.occ
         if o.repo == "infra2" and o.path == TODO_COMPOSE and o.layer == "vault-template"
     }
-    assert {"DATABASE_URL", "REDIS_URL", "S3_ACCESS_KEY"} <= rendered, rendered
+    assert {"DATABASE_URL", "REDIS_PASSWORD", "S3_ACCESS_KEY"} <= rendered, rendered
     source = (envinv.REPO_ROOT / TODO_COMPOSE).read_text(encoding="utf-8").split("\n")
     origin = source.index("x-infra2:") + 1
     template = [
