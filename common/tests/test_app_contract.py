@@ -616,9 +616,7 @@ def test_fetch_and_execute_app_hook_slot(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
-def test_unmet_rejects_unmigrated_legacy_primary_names_and_attribute_mismatch() -> (
-    None
-):
+def test_unmet_rejects_unmigrated_legacy_primary_names_and_attribute_mismatch() -> None:
     provided = [
         app_contract.parse_contract(
             _manifest(

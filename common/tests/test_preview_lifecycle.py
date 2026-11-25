@@ -730,7 +730,9 @@ def test_down_ignores_legacy_bare_pr_compose_in_test_env():
     fake = LegacyTestEnvDokploy(existing=None)
     result = pl.down("pr", 2656, domain="zitian.party", client=fake)
 
-    assert fake.found == [("finance-report-preview-pr-2656", "finance_report", "preview")]
+    assert fake.found == [
+        ("finance-report-preview-pr-2656", "finance_report", "preview")
+    ]
     assert fake.deleted == []
     assert result.compose_id is None
     assert result.alias == "pr-2656"
