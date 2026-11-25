@@ -25,10 +25,10 @@ uv run python -m tools.harness status --fetch --online
 
 - Batch at most 4 PRs on `main` ahead of Staging. This keeps fault localization within 4 PRs.
 - With fewer than 4 pending PRs and another sub-goal, return to `init`.
-- With 4 pending PRs, cut the latest `vX.Y.Z` tag on `origin/main`, then dispatch the train:
-  `gh workflow run reconcile-iac-inputs.yml -f sync_app_releases=true`.
+- With 4 pending PRs, push the release tag `vX.Y.Z` on `origin/main`. The tag push runs the staging train.
+  A dispatch with `after=vX.Y.Z` only replays the same tag.
 - Wait for that run and its health and log checks before you start a fifth PR.
-- Before `close`, always dispatch the train for 1 to 4 unpromoted PRs.
+- Before `close`, always push the release tag for 1 to 4 unpromoted PRs.
 - Verify Staging logs, `output_invariants`, alert and report completeness, and VPS resource health.
 
 ## 3. Failure
