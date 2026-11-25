@@ -94,6 +94,7 @@ services:
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       ENV_SUFFIX: ${ENV_SUFFIX:-}
       # secrets.ctmpl builds DATABASE_URL with this port. `env "X"` inside the template
       # reads the agent's own environment, so every variable the template names must be

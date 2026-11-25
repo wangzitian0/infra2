@@ -33,6 +33,7 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     healthcheck:
       test:
@@ -108,8 +109,10 @@ services:
         exec python /app/app.py
     environment:
       PORT: "8080"
-      # The SDK resolves the environment tier from ENV when it configures telemetry.
+      # The SDK reads the environment tier from ENVIRONMENT when it configures telemetry.
+      # ENV stays until the SDK retires its ENV alias (infra2#1823 N1).
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # The deploy issues the full infra2 SHA as INFRA_IAC_REF.
       GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
@@ -179,6 +182,7 @@ services:
       # #903). Only that allowlist reports: `prod` pages. A typo or a missing ENV
       # stops the runner with EX_CONFIG (#1208).
       ENV: ${ENV}
+      ENVIRONMENT: ${ENV}
       # The deploy issues the full infra2 SHA as INFRA_IAC_REF. The round-trip probe
       # reports it as `service.version` and `infra.iac.ref` on its canary log (#1452).
       # Empty when the deploy issues none: the probe then reports `unknown`.
