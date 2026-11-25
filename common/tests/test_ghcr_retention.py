@@ -185,13 +185,24 @@ def test_a_registry_error_on_a_kept_index_stops_the_plan() -> None:
 
 
 def test_recent_commits_reads_short_shas_and_refuses_an_empty_history() -> None:
+    seen: list[tuple[list[str], dict]] = []
+
     def runner(argv, **kwargs):
+        seen.append((argv, kwargs))
         out = "abc1234deadbeef\n0011223aabbcc\n" if argv[1] == "-C" else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     assert r.recent_commits("truealpha", NOW, runner=runner) == frozenset(
         {"abc1234", "0011223"}
     )
+    clone, clone_kwargs = seen[0]
+    assert clone[:2] == ["git", "clone"]
+    assert clone[clone.index("--branch") + 1] == "main"
+    assert "--shallow-since=2026-11-25T06:00:00Z" in clone
+    assert "https://github.com/wangzitian0/truealpha.git" in clone
+    assert clone_kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert "--since=2026-11-25T06:00:00Z" in seen[1][0]
+    assert seen[1][0][-1] == "main"
 
     def empty(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
@@ -244,8 +255,23 @@ def test_each_batch_is_planned_again_from_a_fresh_list() -> None:
         calls.append(version_id)
         return 4000
 
-    assert r.apply_package(lambda: next(plans), delete, remaining=4000, batch=2) == (
+    assert r.apply_package(lambda: next(plans), delete, lambda: 4000, batch=2) == (
         2,
         True,
     )
     assert calls == [1, 2]
+
+
+def test_apply_package_stops_unfinished_when_a_plan_leaves_too_few_calls() -> None:
+    left = iter([2600, 1900])
+
+    def delete(package: str, version_id: int) -> int:
+        return 2500
+
+    def plan() -> r.Plan:
+        return r.Plan("p", delete=[v(1, "a"), v(2, "b")])
+
+    result = r.apply_package(
+        plan, delete, lambda: next(left), reserved_calls=2000, batch=1
+    )
+    assert result == (1, False)

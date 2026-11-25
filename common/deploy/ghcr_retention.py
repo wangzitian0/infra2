@@ -225,7 +225,11 @@ def recent_commits(
     owner: str = OWNER,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> frozenset[str]:
-    """Short SHAs of the commits on `main` of `repo` since `since`. Uses git, not the REST API."""
+    """Short SHAs of the commits on `main` of `repo` since `since`. Uses git, not the REST API.
+
+    Git filters by committer date. A caller passes a window wider than `KEEP_DAYS`, so an old
+    commit that reached `main` late is still in the set."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     with tempfile.TemporaryDirectory() as tmp:
         url = f"https://github.com/{owner}/{repo}.git"
         stamp = since.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -247,6 +251,7 @@ def recent_commits(
             capture_output=True,
             text=True,
             timeout=300,
+            env=env,
         )
         log = runner(
             ["git", "-C", tmp, "log", "--format=%H", f"--since={stamp}", "main"],
@@ -325,19 +330,22 @@ def apply_plan(
 def apply_package(
     plan_for: Callable[[], Plan],
     delete: Callable[[str, int], int],
-    remaining: int,
+    remaining_calls: Callable[[], int],
     reserved_calls: int = RESERVED_CALLS,
     batch: int = BATCH,
 ) -> tuple[int, bool]:
-    """Plan from a fresh list, delete one batch, repeat. Return (deleted, finished)."""
+    """Plan from a fresh list, delete one batch, repeat. Return (deleted, finished).
+
+    The call count is read again after each plan, so the list calls of a plan count too."""
     total = 0
     while True:
         plan = plan_for()
         if not plan.delete:
             return total, True
+        remaining = remaining_calls()
         if remaining < reserved_calls:
             return total, False
-        deleted, remaining = apply_plan(plan, delete, remaining, reserved_calls, batch)
+        deleted, _ = apply_plan(plan, delete, remaining, reserved_calls, batch)
         total += deleted
 
 

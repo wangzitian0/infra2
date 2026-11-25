@@ -43,7 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     ghcr = Ghcr(token_from_env())
     now = datetime.now(UTC)
-    since = now - timedelta(days=args.keep_days)
+    # Twice the window: git filters by committer date, not by the date a commit reached main.
+    since = now - timedelta(days=2 * args.keep_days)
     packages = args.package or list(PACKAGES)
     commits = {
         repo: recent_commits(repo, since)
@@ -68,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         total += len(plan.delete)
         if args.apply:
             deleted, finished = apply_package(
-                plan_for, ghcr.delete, ghcr.remaining_calls()
+                plan_for, ghcr.delete, ghcr.remaining_calls
             )
             print(f"{package}: deleted {deleted}")
             if not finished:
