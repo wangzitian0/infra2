@@ -254,8 +254,8 @@ def test_each_dagster_service_runs_the_entrypoint_after_the_vault_wait():
     """#1822 Slice 3 step A: each Dagster service has the compiled x-vault shape.
 
     The SDK wait script exports /secrets/.env and runs `command`. The command runs
-    dagster-entrypoint.sh at its image path. The bind mount puts the infra2 copy at the
-    same path until the pinned truealpha release carries the script (truealpha#1866).
+    dagster-entrypoint.sh at its image path. The image carries the script since
+    truealpha v0.2.144 (truealpha#1866), so no service mounts it from the checkout.
     """
     from infra2_sdk.rules import compile_compose
 
@@ -273,9 +273,27 @@ def test_each_dagster_service_runs_the_entrypoint_after_the_vault_wait():
         assert service["entrypoint"] == sdk_entrypoint, name
         assert service["command"][:2] == ["/bin/sh", IMAGE_ENTRYPOINT], name
         assert service["command"][2].startswith("dagster"), name
-        assert f"./dagster-entrypoint.sh:{IMAGE_ENTRYPOINT}:ro" in service["volumes"], (
-            name
-        )
+        mounted = [str(volume).split(":")[1] for volume in service["volumes"]]
+        assert IMAGE_ENTRYPOINT not in mounted, name
+
+
+# The first truealpha release whose data-engine image carries /app/dagster-entrypoint.sh
+# (truealpha#1866). An older pinned release has no script at that path.
+FIRST_RELEASE_WITH_IMAGE_ENTRYPOINT = (0, 2, 144)
+
+
+def test_the_pinned_truealpha_release_carries_the_image_entrypoint():
+    """The compose runs /app/dagster-entrypoint.sh from the image, with no bind mount.
+
+    A pin below v0.2.144 would start each Dagster role on a missing script.
+    """
+    repos = yaml.safe_load((ROOT / "harness/repos.yaml").read_text(encoding="utf-8"))
+    (tag,) = [r["release_tag"] for r in repos["repositories"] if r["id"] == "truealpha"]
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+    assert match, tag
+    assert tuple(int(part) for part in match.groups()) >= (
+        FIRST_RELEASE_WITH_IMAGE_ENTRYPOINT
+    ), tag
 
 
 def test_vault_agent_is_recreated_when_its_templates_change():
