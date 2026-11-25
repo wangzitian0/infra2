@@ -3658,6 +3658,95 @@ def assert_runner_sdk_covers_ref(
     return f"runner infra2-sdk {runner_version} >= {after} locked {ref_version}"
 
 
+def _expected_canary_sdk_at_ref(after: str, repo_root: Path) -> str:
+    """Resolve the Canary image SDK version pinned at ``after``."""
+    try:
+        shown = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "show",
+                f"{after}:platform/30.todo/compose.yaml",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if shown.returncode == 0:
+            from common.deploy.canary_pin import canary_image_from_compose_text
+
+            return canary_image_from_compose_text(shown.stdout)[1]
+    except Exception:  # noqa: BLE001
+        pass
+    return canary_sdk_version(repo_root)
+
+
+def run_canary_reality_gate(
+    *,
+    target_env: str,
+    after: str,
+    repo_root: Path,
+    sleep_fn=time.sleep,
+) -> tuple[bool, str]:
+    """Run ``tools.canary_verify`` reality checks after a ``platform/todo`` deploy."""
+    from common.observability.canary_verify import verify_canary
+
+    env_name = "production" if target_env in ("prod", "production") else "staging"
+    expected_sdk = _expected_canary_sdk_at_ref(after, repo_root)
+    expected_sha = ""
+    shown = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", f"{after}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown.returncode == 0:
+        expected_sha = shown.stdout.strip().lower()
+
+    max_attempts = 4
+    report = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            report = verify_canary(
+                environment=env_name,
+                expected_sdk=expected_sdk or None,
+                repo_root=repo_root,
+                require_llm=True,
+                require_app_peer=True,
+                require_platform_deps=True,
+                expected_version=expected_sha or None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return False, f"canary_verify failed closed: {exc}"
+        if report.all_ok:
+            return (
+                True,
+                f"canary_verify passed ({env_name}, sdk={report.installed_sdk})",
+            )
+        hard_fail = not (
+            report.sdk.ok and report.alerts.ok and report.llm.ok and report.app_peer.ok
+        )
+        if hard_fail or attempt == max_attempts:
+            break
+        sleep_fn(20)
+
+    assert report is not None
+    pillars = (
+        ("sdk", report.sdk),
+        ("tracking", report.tracking),
+        ("logs", report.logs),
+        ("monitoring", report.monitoring),
+        ("alerts", report.alerts),
+        ("llm", report.llm),
+        ("app_peer", report.app_peer),
+    )
+    failures = [
+        f"{name}: {pillar.summary}" for name, pillar in pillars if not pillar.ok
+    ]
+    return False, f"canary_verify failed ({env_name}): " + "; ".join(failures)
+
+
 def run_operation(
     args: argparse.Namespace,
     repo_root: Path,
@@ -3750,6 +3839,46 @@ def run_operation(
             slot=operation_slots,
         )
     hooks_failed = any(item.get("status") != "pass" for item in hook_results)
+    canary_verify_checks: list[CheckVerdict] = []
+    if (
+        train.applied
+        and not args.dry_run
+        and not deploy_failed
+        and not hooks_failed
+        and any(
+            "platform/todo" in {s.strip() for s in cmd.service.split(",")}
+            for cmd in train.applied
+        )
+    ):
+        cv_began = time.monotonic()
+        cv_ok, cv_detail = run_canary_reality_gate(
+            target_env=target_env,
+            after=args.after,
+            repo_root=repo_root,
+        )
+        cv_duration = round(time.monotonic() - cv_began, 3)
+        canary_verify_checks.append(
+            CheckVerdict(
+                "canary_verify",
+                cv_ok,
+                cv_detail[:300],
+                seconds=cv_duration,
+            )
+        )
+        if not cv_ok:
+            hooks_failed = True
+            hook_results.append(
+                {
+                    "service": "platform/todo",
+                    "slot": "canary_verify",
+                    "environment": "production" if promote_prod else "staging",
+                    "version_ref": args.after,
+                    "status": "fail",
+                    "ok": False,
+                    "duration_seconds": cv_duration,
+                    "summary": cv_detail,
+                }
+            )
     production_marker = ""
     marker_pending = ""
     marker_error: BaseException | None = None
@@ -3786,6 +3915,7 @@ def run_operation(
             *checks,
             *operation_checks(results, dry_run=args.dry_run),
             *(post_checks(hook_results) if hook_results else []),
+            *canary_verify_checks,
             *marker_checks,
         ],
     )

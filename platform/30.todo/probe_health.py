@@ -169,7 +169,12 @@ def main(
             max_attempts=args.attempts,
             interval_seconds=args.retry_interval,
         )
-        payload = json.loads(response.body)
+        try:
+            payload = json.loads(response.body)
+        except (ValueError, TypeError) as exc:
+            raise AssertionError(f"invalid JSON from {url}: {response.body!r}") from exc
+        if not isinstance(payload, dict):
+            raise AssertionError(f"expected JSON object from {url}: {payload!r}")
         canary = payload.get("canary")
         # Gate mode waits for a verdict, not for a pass: a red verdict ends the wait.
         pending = (
@@ -211,13 +216,15 @@ def main(
         if not isinstance(canary, dict) or canary.get("ok") is not True:
             raise AssertionError(f"canary verdict is not ok: {canary!r}")
         age = _verdict_age_seconds(canary.get("checked_at"))
-        if age is None or age > GATE_MAX_VERDICT_AGE_SECONDS:
+        if age is None or age < -60 or age > GATE_MAX_VERDICT_AGE_SECONDS:
             raise AssertionError(f"canary verdict is stale or unreadable: {canary!r}")
         if payload.get("git_sha") != expected:
             raise AssertionError(f"git_sha {payload.get('git_sha')!r} != {expected}")
         # The train records sdk:X from the pin; the container must run X (infra2-sdk#247).
         pinned = (pin_reader or pinned_canary_sdk)(args.gate)
-        if pinned and payload.get("sdk_version") != pinned:
+        if not pinned:
+            raise AssertionError(f"no Canary SDK pin found for {args.gate!r}")
+        if payload.get("sdk_version") != pinned:
             raise AssertionError(
                 f"sdk_version {payload.get('sdk_version')!r} != pinned Canary SDK {pinned}"
             )

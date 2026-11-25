@@ -13,7 +13,7 @@ services:
     # Built and published by infra2-sdk release.yml from canary/todo at the same tag, so the
     # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
     # is the one reader of this line.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.9.0@sha256:a32bbe7db41e2d8752c5e0c10ff9cd949b0c87043f1e28ca7ed10d102a98e892
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.9.1@sha256:947dcca3a33903162acd90354a1cf6833ea7e5c43ac3a4a3c010711e1c83e546
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
     cpu_shares: 512
@@ -33,11 +33,9 @@ services:
     environment:
       PORT: "8000"
       ENVIRONMENT: ${ENV}
-      # The Canary image has no default hosts: /api/canary/status turns red without each
-      # of REDIS_HOST, S3_ENDPOINT, SIGNOZ_OTEL_COLLECTOR, OPENPANEL_HEALTH_URL and
+      # The Canary image has no default hosts: /api/canary/status turns red without REDIS_URL
+      # (from Vault) and each of S3_ENDPOINT, SIGNOZ_OTEL_COLLECTOR, OPENPANEL_HEALTH_URL and
       # AUTHENTIK_ENDPOINT (common/tests/test_todo_canary_depth.py pins the values).
-      REDIS_HOST: platform-redis${ENV_SUFFIX}
-      REDIS_PORT: "6379"
       S3_BUCKET: platform-canary
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_HEALTH_URL: http://platform-openpanel-api:3000/healthcheck
@@ -51,9 +49,9 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_SMALL_MODEL: ${LLM_SMALL_MODEL:-}
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=8).read()\""]
       interval: 15s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 10s
     x-routes:
