@@ -71,7 +71,6 @@ class PromoteOptions:
     branch: str | None = None
     wait: bool = False
     timeout: int = 600
-    verify_vault: bool = False
     verify_config: bool = False
     verify_smoke: bool = True
     verify_ingestion: bool = False

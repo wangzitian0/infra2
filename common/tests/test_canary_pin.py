@@ -96,8 +96,8 @@ def test_an_unreadable_pin_gives_sdk_unknown(tmp_path, capsys) -> None:
 @pytest.mark.parametrize(
     ("version", "inside"),
     [
-        ("4.2.9", False),
-        ("4.3.0", True),
+        ("4.4.9", False),
+        ("4.5.0", True),
         ("4.6.0", True),
         ("4.9.9", True),
         ("5.0.0", False),
@@ -110,13 +110,13 @@ def test_the_app_sdk_range(version: str, inside: bool) -> None:
 
 def test_a_verified_sdk_outside_the_range_is_still_held(monkeypatch) -> None:
     monkeypatch.setattr(
-        reconcile, "locked_sdk_version_for_app_ref", lambda *a, **k: "4.2.0"
+        reconcile, "locked_sdk_version_for_app_ref", lambda *a, **k: "4.4.0"
     )
     with pytest.raises(
         reconcile.UnverifiedSdkError, match="outside the accepted app range"
     ):
         reconcile.assert_app_sdk_version_verified(
-            "finance_report/app", "v0.0.1", verified_versions={"4.2.0"}
+            "finance_report/app", "v0.0.1", verified_versions={"4.4.0"}
         )
 
 
@@ -126,7 +126,7 @@ def test_an_sdk_inside_the_range_still_needs_the_canary(monkeypatch) -> None:
     )
     with pytest.raises(reconcile.UnverifiedSdkError, match="has not passed"):
         reconcile.assert_app_sdk_version_verified(
-            "finance_report/app", "v0.0.1", verified_versions={"4.3.0"}
+            "finance_report/app", "v0.0.1", verified_versions={"4.5.0"}
         )
     assert (
         reconcile.assert_app_sdk_version_verified(
