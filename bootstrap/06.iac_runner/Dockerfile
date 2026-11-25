@@ -37,6 +37,9 @@ COPY bootstrap/06.iac_runner/requirements.txt .
 COPY uv.lock tools/sdk_requirement.py /tmp/sdk/
 RUN sdk="$(python /tmp/sdk/sdk_requirement.py /tmp/sdk/uv.lock)" \
     && pip install --no-cache-dir -r requirements.txt "$sdk"
+# Each deploy task runs in a venv that `uv sync --locked` builds from the uv.lock of its
+# ref, so it imports the SDK that the ref locks, not the SDK above (#1822).
+RUN pip install --no-cache-dir "uv==0.9.18" && uv --version
 
 COPY bootstrap/06.iac_runner/webhook_server.py .
 COPY bootstrap/06.iac_runner/sync_runner.py .
