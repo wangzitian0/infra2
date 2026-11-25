@@ -75,6 +75,32 @@ def _default_summary_sso_probe(summary_url: str, timeout: float) -> int:
         return int(err.code)
 
 
+def summary_sso_status(
+    probe,
+    summary_url: str,
+    timeout: float,
+    *,
+    attempts: int = HEALTH_POLL_MAX_ATTEMPTS,
+    interval_seconds: float = HEALTH_POLL_RETRY_SECONDS,
+) -> int:
+    """The status of the SSO probe; a network timeout or reset gets another try.
+
+    Staging v3.2.9 (run 45585889631) failed on one read timeout of this POST; the next
+    three POSTs from a laptop got 302 in 0.1 s. An HTTP status (any code) is an answer
+    and never gets another try. The last network error is raised.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return probe(summary_url, timeout)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            if attempt == attempts:
+                raise RuntimeError(
+                    f"POST {summary_url} got no HTTP answer after {attempts} attempts: {exc!r}"
+                ) from exc
+            time.sleep(interval_seconds)
+    raise AssertionError("unreachable")
+
+
 def _verdict_age_seconds(checked_at: object) -> float | None:
     try:
         stamp = calendar.timegm(time.strptime(str(checked_at), "%Y-%m-%dT%H:%M:%SZ"))
@@ -163,7 +189,13 @@ def main(
     if args.verify_summary_sso:
         probe = summary_probe or _default_summary_sso_probe
         summary_url = f"{args.base_url.rstrip('/')}/api/todos/summary"
-        status_code = probe(summary_url, float(args.timeout))
+        status_code = summary_sso_status(
+            probe,
+            summary_url,
+            float(args.timeout),
+            attempts=args.attempts,
+            interval_seconds=args.retry_interval,
+        )
         if status_code not in SSO_PROTECTED_STATUSES:
             raise AssertionError(
                 f"unauthenticated POST {summary_url} returned {status_code}; expected SSO redirect/deny"
