@@ -2207,24 +2207,50 @@ def run_post_deploy_app_hooks(
     return hook_results
 
 
+# Statuses that do not prove the app answers, although they are below 500 (#1708).
+# 403: the Cloudflare edge refuses a client with 403 before the origin sees the request
+# (measured 2026-11-25: urllib gets ``403 error code: 1010``). No staging App answers
+# ``/health`` with 403. 429: the Cloudflare edge also sends its rate limit.
+_STAGING_HEALTH_EDGE_STATUSES = frozenset({403, 429})
+# Traefik sends the Go ``http.NotFound`` body when no router matches the host. This
+# occurs while the App container restarts, so this 404 is not the App.
+_STAGING_HEALTH_NO_ROUTE_BODY = "404 page not found"
+
+
+def _staging_health_answered(response: httpx.Response) -> bool:
+    """True when the App itself answered ``/health`` (#1708).
+
+    A 2xx, 3xx, 401 or 404 counts: the App or its auth layer answered. Measured
+    2026-11-25: finance_report and truealpha answer ``/health`` with a Next.js 404 page,
+    todo with a 302 to SSO. A 5xx, a 403 or 429 from the Cloudflare edge, and the
+    Traefik no-route 404 do not count; the wait continues until its timeout.
+    """
+    status = response.status_code
+    if status >= 500 or status in _STAGING_HEALTH_EDGE_STATUSES:
+        return False
+    if status == 404 and response.text.strip() == _STAGING_HEALTH_NO_ROUTE_BODY:
+        return False
+    return True
+
+
 def _wait_for_staging_app_ready(
     app_url: str,
     *,
     timeout_seconds: float = 90.0,
 ) -> None:
-    """Poll staging ``/health`` until HTTP < 500 or timeout elapses (#1708)."""
+    """Poll staging ``/health`` until the App answers or timeout elapses (#1708).
+
+    The wait keeps ``scheduled_audit`` off an App container that restarts. It reads with
+    httpx, not urllib: Cloudflare refuses the urllib User-Agent with 403, so urllib
+    never sees the App (#1988).
+    """
     health_url = f"{app_url.rstrip('/')}/health"
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     while True:
         try:
-            with urllib.request.urlopen(health_url, timeout=5) as response:
-                status = getattr(response, "status", 200)
-                if status < 500:
-                    return
-        except urllib.error.HTTPError as exc:
-            if exc.code < 500:
+            if _staging_health_answered(httpx.get(health_url, timeout=5.0)):
                 return
-        except OSError:
+        except httpx.HTTPError:
             pass
         if time.monotonic() >= deadline:
             return
