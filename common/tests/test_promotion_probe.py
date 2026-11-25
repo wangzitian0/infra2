@@ -175,7 +175,10 @@ def test_each_watched_path_exists_and_triggers_the_probe(path) -> None:
 def test_workflows_run_the_probe_on_guard_prs_and_on_a_report_only_schedule() -> None:
     ci = yaml.safe_load((ROOT / CI).read_text())["jobs"]["promotion-probe"]
     run = next(s["run"] for s in ci["steps"] if "promotion_probe" in s.get("run", ""))
-    assert "--only-if-changed" in run and "--report-only" not in run
+    # Report-only on pull requests too: the inventory gives this job blocks_merge: false.
+    # A red probe on a pull request blocked the forward fix of a failed staging tag
+    # (v3.1.177, #1988), because the refusal came from that staging failure, not the PR.
+    assert "--only-if-changed" in run and "--report-only" in run
     assert ci["permissions"]["actions"] == "read"
     ops = yaml.safe_load((ROOT / ".github/workflows/ops-checks.yml").read_text())
     step = next(
