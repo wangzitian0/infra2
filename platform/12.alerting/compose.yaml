@@ -121,7 +121,6 @@ services:
       # ENV stays until the SDK retires its ENV alias (infra2#1823 N1).
       ENV: ${ENV}
       ENVIRONMENT: ${ENV}
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # The deploy issues the full infra2 SHA as INFRA_IAC_REF.
       GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
       # Telemetry (#1209). The endpoint turns export on. Both identity variables come
