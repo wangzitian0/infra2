@@ -152,6 +152,19 @@ class Ghcr:
         }
         self._registry_tokens: dict[str, str] = {}
 
+    def _get(self, url: str, **kwargs) -> httpx.Response:
+        """GET with 3 attempts on a timeout, a connection error or a 5xx. A read changes nothing."""
+        for attempt in range(3):
+            try:
+                reply = self.client.get(url, **kwargs)
+            except (httpx.TimeoutException, httpx.TransportError):
+                if attempt == 2:
+                    raise
+                continue
+            if reply.status_code < 500 or attempt == 2:
+                return reply
+        raise AssertionError("unreachable")
+
     def versions(self, package: str, attempts: int = 3) -> list[Version]:
         """List twice and require the same ids. A deletion during a paged list skips a version."""
         for _ in range(attempts):
@@ -164,9 +177,7 @@ class Ghcr:
         )
 
     def remaining_calls(self) -> int:
-        reply = self.client.get(
-            "https://api.github.com/rate_limit", headers=self.api_headers
-        )
+        reply = self._get("https://api.github.com/rate_limit", headers=self.api_headers)
         reply.raise_for_status()
         return int(reply.json()["resources"]["core"]["remaining"])
 
@@ -175,7 +186,7 @@ class Ghcr:
         url = f"https://api.github.com/users/{self.owner}/packages/container/{package}/versions"
         params: dict[str, int] = {"per_page": 100, "page": 1}
         while True:
-            reply = self.client.get(url, headers=self.api_headers, params=params)
+            reply = self._get(url, headers=self.api_headers, params=params)
             reply.raise_for_status()
             page = reply.json()
             rows.extend(page)
@@ -185,7 +196,7 @@ class Ghcr:
 
     def _registry_token(self, package: str) -> str:
         if package not in self._registry_tokens:
-            reply = self.client.get(
+            reply = self._get(
                 "https://ghcr.io/token",
                 params={
                     "service": "ghcr.io",
@@ -197,7 +208,7 @@ class Ghcr:
         return self._registry_tokens[package]
 
     def children(self, package: str, digest: str) -> list[str]:
-        reply = self.client.get(
+        reply = self._get(
             f"https://ghcr.io/v2/{self.owner}/{package}/manifests/{digest}",
             headers={
                 "Authorization": f"Bearer {self._registry_token(package)}",

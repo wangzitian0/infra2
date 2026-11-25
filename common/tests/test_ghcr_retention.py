@@ -275,3 +275,22 @@ def test_apply_package_stops_unfinished_when_a_plan_leaves_too_few_calls() -> No
         plan, delete, lambda: next(left), reserved_calls=2000, batch=1
     )
     assert result == (1, False)
+
+
+def test_a_read_timeout_is_retried_and_a_third_one_stops_the_plan() -> None:
+    attempts: list[int] = []
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json=[])
+
+    assert ghcr_with(flaky)._get("https://api.github.com/x").status_code == 200
+    assert len(attempts) == 3
+
+    def dead(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    with pytest.raises(httpx.ReadTimeout):
+        ghcr_with(dead)._get("https://api.github.com/x")
