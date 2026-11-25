@@ -209,20 +209,8 @@ def _find_compose(client, project: str, name: str):
 
 
 def _find_compose_for_down(client: Any, project: str, alias: Any) -> dict | None:
-    """Locate a preview compose for teardown, including legacy bare alias names."""
-    found = _find_compose(client, project, alias.compose_name)
-    if found is not None:
-        return found
-    envs = (
-        (PREVIEW_ENVIRONMENT, "test")
-        if alias.alias.startswith("pr-")
-        else (PREVIEW_ENVIRONMENT,)
-    )
-    for env_name in envs:
-        found = client.find_compose_by_name(alias.alias, project, env_name=env_name)
-        if found is not None:
-            return found
-    return None
+    """Locate a preview compose for teardown."""
+    return _find_compose(client, project, alias.compose_name)
 
 
 def _ensure_preview_compose(

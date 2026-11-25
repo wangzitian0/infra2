@@ -616,7 +616,7 @@ def test_fetch_and_execute_app_hook_slot(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
-def test_unmet_accepts_pre_migration_alias_names_and_rejects_attribute_mismatch() -> (
+def test_unmet_rejects_unmigrated_legacy_primary_names_and_attribute_mismatch() -> (
     None
 ):
     provided = [
@@ -624,12 +624,6 @@ def test_unmet_accepts_pre_migration_alias_names_and_rejects_attribute_mismatch(
             _manifest(
                 _field("LLM_PROVIDER", "code", injected=True, aliases=("AI_PROVIDER",)),
                 _field("ENVIRONMENT", "code", injected=True, aliases=("APP_ENV",)),
-                _field(
-                    "CAPTURE_APPROVED_BY",
-                    "decision",
-                    injected=True,
-                    aliases=("TRUEALPHA_CAPTURE_APPROVED_BY",),
-                ),
             ),
             label="infra2",
         )
@@ -638,27 +632,24 @@ def test_unmet_accepts_pre_migration_alias_names_and_rejects_attribute_mismatch(
         _manifest(
             _field("AI_PROVIDER", "code", injected=True),
             _field("APP_ENV", "code", injected=True),
-            _field(
-                "TRUEALPHA_CAPTURE_APPROVED_BY",
-                "decision",
-                injected=True,
-                aliases=("CAPTURE_APPROVED_BY",),
-            ),
         ),
         label="old-release",
     )
-    assert app_contract.unmet(pre_migration, provided) == []
+    assert [g.env for g in app_contract.unmet(pre_migration, provided)] == [
+        "AI_PROVIDER",
+        "APP_ENV",
+    ]
 
     mismatched_source = app_contract.parse_contract(
-        _manifest(_field("AI_PROVIDER", "human", injected=True)),
+        _manifest(_field("LLM_PROVIDER", "human", injected=True)),
         label="bad-release",
     )
     assert [g.env for g in app_contract.unmet(mismatched_source, provided)] == [
-        "AI_PROVIDER"
+        "LLM_PROVIDER"
     ]
 
 
-def test_render_release_template_supersedes_overlapping_alias() -> None:
+def test_render_release_template_renders_canonical_release_field() -> None:
     stack_manifest = EnvironmentManifest(
         source="infra2/finance_report/app",
         fields=(
@@ -666,22 +657,10 @@ def test_render_release_template_supersedes_overlapping_alias() -> None:
             _field(
                 "LLM_API_KEY",
                 "human",
-                aliases=("AI_API_KEY", "ZAI_API_KEY"),
-                store_key="ZAI_API_KEY",
+                store_key="LLM_API_KEY",
                 empty_ok=True,
                 sensitive=True,
             ),
-        ),
-    )
-    pre_migration = _manifest(
-        DATABASE,
-        _field(
-            "AI_API_KEY",
-            "human",
-            aliases=("ZAI_API_KEY",),
-            store_key="ZAI_API_KEY",
-            empty_ok=True,
-            sensitive=True,
         ),
     )
     post_migration = _manifest(
@@ -689,17 +668,10 @@ def test_render_release_template_supersedes_overlapping_alias() -> None:
         _field(
             "LLM_API_KEY",
             "human",
-            aliases=("AI_API_KEY", "ZAI_API_KEY"),
-            store_key="ZAI_API_KEY",
+            store_key="LLM_API_KEY",
             empty_ok=True,
             sensitive=True,
         ),
-    )
-    pre_tpl, _ = app_contract.render_release_template(
-        "finance_report/app",
-        [("fr-pre", pre_migration)],
-        stack_manifest_body=stack_manifest,
-        committed_policy=FR_POLICY,
     )
     post_tpl, _ = app_contract.render_release_template(
         "finance_report/app",
@@ -707,7 +679,5 @@ def test_render_release_template_supersedes_overlapping_alias() -> None:
         stack_manifest_body=stack_manifest,
         committed_policy=FR_POLICY,
     )
-    assert "AI_API_KEY=" in pre_tpl
-    assert "LLM_API_KEY=" not in pre_tpl
     assert "LLM_API_KEY=" in post_tpl
     assert "AI_API_KEY=" not in post_tpl

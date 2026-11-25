@@ -240,7 +240,13 @@ def test_run_schema_gate_docker_command_runs_the_sdk_check_with_the_spec_options
         "--metadata",
         "src.database:Base.metadata",
         "--import",
+        "src.counter.extension.sql",
+        "--import",
+        "src.identity.extension.sql",
+        "--import",
         "src.orm_registry",
+        "--import",
+        "src.platform.extension.sql",
         "--label",
         "finance_report/app",
     ]
@@ -473,7 +479,7 @@ def _stub_sdk(root: Path, schema_check_source: str | None) -> Path:
 
 
 def test_launcher_maps_an_image_without_schema_check_to_not_evaluated(tmp_path):
-    """A finance_report image before v0.2.92 has infra2-sdk 3.x: no schema_check."""
+    """An image without infra2_sdk.runtime.schema_check exits EXIT_NOT_EVALUATED."""
     stub = _stub_sdk(tmp_path, schema_check_source=None)
     result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
     assert result.returncode == sg.EXIT_NOT_EVALUATED == 3
@@ -579,7 +585,12 @@ def test_schema_check_specs_name_a_registered_backend_image():
     spec = sg._SCHEMA_CHECK_SPECS["finance_report/app"]
     assert spec.image_repository == "ghcr.io/wangzitian0/finance_report-backend"
     assert spec.metadata == "src.database:Base.metadata"
-    assert spec.imports == ("src.orm_registry",)
+    assert spec.imports == (
+        "src.counter.extension.sql",
+        "src.identity.extension.sql",
+        "src.orm_registry",
+        "src.platform.extension.sql",
+    )
 
 
 def test_schema_check_argv_lists_each_import_in_order():

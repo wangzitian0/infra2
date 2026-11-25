@@ -27,12 +27,10 @@ finance_report/
 │   ├── vault-policy.hcl   # Vault policy
 │   └── README.md
 └── 10.app/
-    ├── compose.yaml       # Backend + Frontend with vault-agent
+    ├── compose.yaml       # Backend + Frontend; x-infra2 adds the vault-agent sidecar
     ├── deploy.py          # AppDeployer
-    ├── shared_tasks.py    # status() check
-    ├── vault-agent.hcl    # Vault agent config
+    ├── env.manifest.json  # Projected release environment manifest
     ├── vault-policy.hcl   # Vault policy
-    ├── secrets.ctmpl      # Secrets template
     └── README.md
 ```
 

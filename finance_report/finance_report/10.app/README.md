@@ -21,7 +21,7 @@ Single domain with path-based routing:
 
 Secrets are read from multiple Vault paths:
 
-### Dynamic Construction (via secrets.ctmpl)
+### Dynamic Construction (via `x-infra2` compiled vault-agent sidecar)
 
 `DATABASE_URL` and `REDIS_URL` are constructed dynamically using ENV_SUFFIX pattern:
 
@@ -31,7 +31,7 @@ Secrets are read from multiple Vault paths:
 
 ### Application Secrets
 
-Stored at: `secret/data/finance_report/<env>/app`. The one source for the keys is `secrets.ctmpl`: `LLM_API_KEY`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_ACCESS_KEY`, `S3_PUBLIC_SECRET_KEY`, `SECRET_KEY`.
+Stored at: `secret/data/finance_report/<env>/app`. The `env.manifest.json` + `compose.yaml` `x-infra2` block compile the vault-agent template for `LLM_API_KEY`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_ACCESS_KEY`, `S3_PUBLIC_SECRET_KEY`, `SECRET_KEY`.
 
 Not in Vault. `compose.yaml` or the application default sets each one; `env.manifest.json` names its source:
 
@@ -53,10 +53,10 @@ Not in Vault. `compose.yaml` or the application default sets each one; `env.mani
 
 ## Rate-limit capacity
 
-`secrets.ctmpl` keeps Vault values authoritative. When
-`API_RATE_LIMIT_REQUESTS` is absent, the fixed staging environment renders
-`2000` because its parallel E2E workers share one runner IP; production and
-unknown environments retain the conservative application baseline of `300`.
+When `API_RATE_LIMIT_REQUESTS` is absent, `deploy.py` / `compose.yaml` render
+`2000` for fixed staging because its parallel E2E workers share one runner IP;
+production and unknown environments retain the conservative application baseline
+of `300`.
 This is a capacity distinction, not a test-tenant exemption, and the production
 limit is unchanged.
 
@@ -68,10 +68,9 @@ is hand-set per env — it is injected as config-as-code at deploy time. The sha
 image stays environment-agnostic (promote-not-rebuild): FE OTLP and OpenPanel values
 are runtime env, not build-time baked.
 
-### Backend OTEL_* — rendered by `secrets.ctmpl` (`10.app/` and `preview/`)
+### Backend OTEL_* — injected by `promote.py` / `compose.yaml` (`10.app/` and `preview/`)
 
-Templated deterministically from the deploy context (a Vault value at
-`secret/data/finance_report/<env>/app`, if set, still wins as an escape hatch):
+Templated deterministically from the deploy context (`promote.py` + `compose.yaml`, never Vault):
 
 | Var | Rendered default |
 |-----|------------------|
@@ -79,10 +78,10 @@ Templated deterministically from the deploy context (a Vault value at
 | `OTEL_SERVICE_NAME` | `finance-report-backend` |
 | `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment=<alias>,service.version=<git sha>` |
 
-`<git sha>` comes from `GIT_COMMIT_SHA` passed into the vault-agent container by the
-deploy primitive (`unknown` fallback). For `preview/`, `<alias>` is the per-alias ENV
-(`main` / `pr-<N>` / `commit-<sha7>`), not the secrets-source env — preview spans stay
-filterable by environment while still sourcing app secrets from the fixed `staging` path the generated preview template reads.
+`<git sha>` comes from `GIT_COMMIT_SHA` passed by the deploy primitive (`unknown`
+fallback). For `preview/`, `<alias>` is the per-alias environment
+(`main` / `pr-<N>`), not the secrets-source env — preview spans stay
+filterable by environment while still sourcing app secrets from `staging`.
 
 ### Frontend NEXT_PUBLIC_OTEL_* — runtime env in `compose.yaml` (`10.app/` and `preview/`)
 
@@ -91,7 +90,7 @@ single public ingest domain (see SigNoz / `ops.observability.md`):
 
 | Var | Value |
 |-----|-------|
-| `NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT` | `https://otel.${INTERNAL_DOMAIN}/v1/traces` (CORS-restricted + static bearer token, rate-limited at Traefik) |
+| `NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT` | `https://otel.${INTERNAL_DOMAIN}/v1/traces` (CORS-restricted, no bearer token, rate-limited at Traefik) |
 | `NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT` | `${ENV}` (mirrors the backend `deployment.environment` so FE/BE spans correlate) |
 | `NEXT_PUBLIC_GIT_SHA` | `${GIT_COMMIT_SHA}` |
 
@@ -110,7 +109,7 @@ CLI with `secret/platform/<env>/openpanel/api_key`.
 python -m tools.deploy_v2 --service finance_report/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
-invoke finance_report.app.status
+invoke fr-app.shared.status
 
 # Access
 open https://report.${INTERNAL_DOMAIN}
