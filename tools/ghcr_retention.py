@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,10 +19,12 @@ if str(ROOT) not in sys.path:
 
 from common.deploy.ghcr_retention import (  # noqa: E402
     KEEP_DAYS,
+    PACKAGE_REPOS,
     PACKAGES,
     Ghcr,
-    apply_plan,
+    apply_package,
     build_plan,
+    recent_commits,
     token_from_env,
 )
 
@@ -41,24 +43,35 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     ghcr = Ghcr(token_from_env())
     now = datetime.now(UTC)
+    since = now - timedelta(days=args.keep_days)
+    packages = args.package or list(PACKAGES)
+    commits = {
+        repo: recent_commits(repo, since)
+        for repo in {PACKAGE_REPOS[p] for p in packages}
+    }
     total = 0
-    for package in args.package or PACKAGES:
-        plan = build_plan(ghcr, package, now, args.keep_days)
+    for package in packages:
+        recent = commits[PACKAGE_REPOS[package]]
+
+        def plan_for(package: str = package, recent: frozenset[str] = recent):
+            return build_plan(ghcr, package, now, args.keep_days, recent)
+
+        plan = plan_for()
         oldest = min((v.created_at for v in plan.delete), default=None)
         newest = max((v.created_at for v in plan.delete), default=None)
-        print(
-            f"{package}: keep {len(plan.keep)}, delete {len(plan.delete)}"
-            + (
-                f" (created {oldest:%Y-%m-%d} to {newest:%Y-%m-%d} UTC)"
-                if oldest and newest
-                else ""
-            )
+        span = (
+            f" (created {oldest:%Y-%m-%d} to {newest:%Y-%m-%d} UTC)"
+            if oldest and newest
+            else ""
         )
+        print(f"{package}: keep {len(plan.keep)}, delete {len(plan.delete)}{span}")
         total += len(plan.delete)
         if args.apply:
-            deleted = apply_plan(plan, ghcr.delete)
-            print(f"{package}: deleted {deleted} of {len(plan.delete)}")
-            if deleted < len(plan.delete):
+            deleted, finished = apply_package(
+                plan_for, ghcr.delete, ghcr.remaining_calls()
+            )
+            print(f"{package}: deleted {deleted}")
+            if not finished:
                 print(
                     "stopped at the API call reserve; run again after the hourly reset"
                 )

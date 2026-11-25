@@ -3,7 +3,10 @@
 A version is a root when one of these is true:
 
 1. a tag is a release tag `vX.Y.Z` or `latest`;
-2. GHCR created it in the last `KEEP_DAYS` days.
+2. GHCR created it in the last `KEEP_DAYS` days;
+3. a tag names a commit that reached the App's `main` in the last `KEEP_DAYS` days. A cached
+   build pushes the same digest again: GHCR adds the new tag to the old version and keeps
+   its old `created_at`.
 
 The plan keeps every root and every manifest that a kept index names (platform images,
 attestations). It deletes every other version. Without `--apply` the tool deletes nothing.
@@ -13,6 +16,8 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -23,17 +28,22 @@ import httpx
 OWNER = "wangzitian0"
 # The App packages that publish one version set per commit. Small packages
 # (infra2-canary-todo, infra2-s3) are not listed: each version there is a release.
-PACKAGES = (
-    "truealpha-app-web",
-    "truealpha-data-engine",
-    "truealpha-llm-service",
-    "finance_report-backend",
-    "finance_report-frontend",
-)
+PACKAGE_REPOS = {
+    "truealpha-app-web": "truealpha",
+    "truealpha-data-engine": "truealpha",
+    "truealpha-llm-service": "truealpha",
+    "finance_report-backend": "finance_report",
+    "finance_report-frontend": "finance_report",
+}
+PACKAGES = tuple(PACKAGE_REPOS)
 KEEP_DAYS = 30
 # Several sessions and the release train share one GitHub login (5,000 REST calls per
 # hour). A deletion run stops when fewer calls than this are left; the next run resumes.
 RESERVED_CALLS = 2000
+# A deletion batch is planned from a fresh list, so a tag added during the run reaches
+# the plan within one batch.
+BATCH = 500
+SHORT_SHA = re.compile(r"^(?:sha-)?([0-9a-f]{7})$")
 RELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 INDEX_TYPES = frozenset(
     {
@@ -65,9 +75,18 @@ class Plan:
     delete: list[Version] = field(default_factory=list)
 
 
-def is_root(version: Version, now: datetime, keep_days: int = KEEP_DAYS) -> bool:
-    if any(RELEASE_TAG.match(tag) or tag == "latest" for tag in version.tags):
-        return True
+def is_root(
+    version: Version,
+    now: datetime,
+    keep_days: int = KEEP_DAYS,
+    recent_commits: frozenset[str] = frozenset(),
+) -> bool:
+    for tag in version.tags:
+        if RELEASE_TAG.match(tag) or tag == "latest":
+            return True
+        short = SHORT_SHA.match(tag)
+        if short and short.group(1) in recent_commits:
+            return True
     return version.created_at >= now - timedelta(days=keep_days)
 
 
@@ -77,11 +96,12 @@ def plan_package(
     children_of: Callable[[str], Iterable[str]],
     now: datetime,
     keep_days: int = KEEP_DAYS,
+    recent_commits: frozenset[str] = frozenset(),
 ) -> Plan:
     """Split versions into keep and delete. `children_of(digest)` names an index's manifests."""
     versions = list(versions)
     keep_digests: set[str] = set()
-    pending = [v.digest for v in versions if is_root(v, now, keep_days)]
+    pending = [v.digest for v in versions if is_root(v, now, keep_days, recent_commits)]
     while pending:
         digest = pending.pop()
         if digest in keep_digests:
@@ -132,7 +152,25 @@ class Ghcr:
         }
         self._registry_tokens: dict[str, str] = {}
 
-    def versions(self, package: str) -> list[Version]:
+    def versions(self, package: str, attempts: int = 3) -> list[Version]:
+        """List twice and require the same ids. A deletion during a paged list skips a version."""
+        for _ in range(attempts):
+            first = self._list(package)
+            second = self._list(package)
+            if {v.id for v in first} == {v.id for v in second}:
+                return second
+        raise RuntimeError(
+            f"{package}: two version lists differ {attempts} times; stop"
+        )
+
+    def remaining_calls(self) -> int:
+        reply = self.client.get(
+            "https://api.github.com/rate_limit", headers=self.api_headers
+        )
+        reply.raise_for_status()
+        return int(reply.json()["resources"]["core"]["remaining"])
+
+    def _list(self, package: str) -> list[Version]:
         rows: list[Mapping] = []
         url = f"https://api.github.com/users/{self.owner}/packages/container/{package}/versions"
         params: dict[str, int] = {"per_page": 100, "page": 1}
@@ -181,8 +219,56 @@ class Ghcr:
         return int(reply.headers.get("x-ratelimit-remaining", "0"))
 
 
+def recent_commits(
+    repo: str,
+    since: datetime,
+    owner: str = OWNER,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> frozenset[str]:
+    """Short SHAs of the commits on `main` of `repo` since `since`. Uses git, not the REST API."""
+    with tempfile.TemporaryDirectory() as tmp:
+        url = f"https://github.com/{owner}/{repo}.git"
+        stamp = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        runner(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--bare",
+                "--filter=blob:none",
+                "--single-branch",
+                "--branch",
+                "main",
+                f"--shallow-since={stamp}",
+                url,
+                tmp,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        log = runner(
+            ["git", "-C", tmp, "log", "--format=%H", f"--since={stamp}", "main"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    shas = frozenset(line[:7] for line in log.stdout.split() if line)
+    if not shas:
+        raise RuntimeError(
+            f"{repo}: no main commit since {stamp}; refuse to plan without them"
+        )
+    return shas
+
+
 def build_plan(
-    ghcr: Ghcr, package: str, now: datetime, keep_days: int = KEEP_DAYS
+    ghcr: Ghcr,
+    package: str,
+    now: datetime,
+    keep_days: int = KEEP_DAYS,
+    recent: frozenset[str] = frozenset(),
 ) -> Plan:
     versions = ghcr.versions(package)
     gone: set[str] = set()
@@ -194,7 +280,7 @@ def build_plan(
             gone.add(digest)
             return None
 
-    roots = [v.digest for v in versions if is_root(v, now, keep_days)]
+    roots = [v.digest for v in versions if is_root(v, now, keep_days, recent)]
     with ThreadPoolExecutor(8) as pool:
         cache = dict(zip(roots, pool.map(read, roots)))
 
@@ -203,7 +289,7 @@ def build_plan(
             cache[digest] = read(digest)
         return cache[digest] or []
 
-    plan = plan_package(package, versions, children_of, now, keep_days)
+    plan = plan_package(package, versions, children_of, now, keep_days, recent)
     if gone:
         # A push can replace a version between the list and the read. Accept a missing
         # manifest only when a fresh list also lacks it; else stop before any deletion.
@@ -220,16 +306,39 @@ def build_plan(
 def apply_plan(
     plan: Plan,
     delete: Callable[[str, int], int],
+    remaining: int,
     reserved_calls: int = RESERVED_CALLS,
-) -> int:
-    """Delete the planned versions, oldest first. Stop at the call reserve. Return the count."""
+    batch: int = BATCH,
+) -> tuple[int, int]:
+    """Delete up to `batch` planned versions, oldest first, above the call reserve.
+
+    Return (deleted, calls left)."""
     deleted = 0
-    for version in sorted(plan.delete, key=lambda v: v.created_at):
-        remaining = delete(plan.package, version.id)
-        deleted += 1
+    for version in sorted(plan.delete, key=lambda v: v.created_at)[:batch]:
         if remaining < reserved_calls:
             break
-    return deleted
+        remaining = delete(plan.package, version.id)
+        deleted += 1
+    return deleted, remaining
+
+
+def apply_package(
+    plan_for: Callable[[], Plan],
+    delete: Callable[[str, int], int],
+    remaining: int,
+    reserved_calls: int = RESERVED_CALLS,
+    batch: int = BATCH,
+) -> tuple[int, bool]:
+    """Plan from a fresh list, delete one batch, repeat. Return (deleted, finished)."""
+    total = 0
+    while True:
+        plan = plan_for()
+        if not plan.delete:
+            return total, True
+        if remaining < reserved_calls:
+            return total, False
+        deleted, remaining = apply_plan(plan, delete, remaining, reserved_calls, batch)
+        total += deleted
 
 
 def token_from_env() -> str:
