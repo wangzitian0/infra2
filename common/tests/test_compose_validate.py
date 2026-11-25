@@ -39,8 +39,8 @@ def test_every_plain_file_keeps_the_source_command(tmp_path):
         for p in _tracked_compose_files()
         if not has_x_infra2((ROOT / p).read_text(encoding="utf-8"))
     ]
-    # 17 plain files on 2026-11-24, after #1822 Slice 3 moved five stacks to x-infra2.
-    assert len(plain) >= 17
+    # 16 plain files on 2026-11-25, after #1822 Slice 3 moved six stacks to x-infra2.
+    assert len(plain) >= 16
     for rel in plain:
         assert config_command(rel, tmp_path) == [
             "docker",

@@ -1,12 +1,22 @@
-# TrueAlpha data engine (Dagster): hand-written file in the compiled x-infra2 shape
-# (#1822 Slice 3, step A). Deploy: deploy_v2(service="truealpha/data_engine").
-# Each Dagster service equals its compiled x-vault service: the SDK wait entrypoint
-# exports /secrets/.env, then runs `command`. The command runs dagster-entrypoint.sh,
-# which sets DAGSTER_POSTGRES_URL, validates the boot environment, and runs the role.
-# The image carries the script at /app/dagster-entrypoint.sh since truealpha v0.2.144
-# (truealpha#1866), so the stack mounts no file from the checkout for it.
-# The vault-agent sidecar keeps its mounted config and template; the deploy can set
-# VAULT_SECRETS_TEMPLATE (base64 of the release template), which the entrypoint decodes.
+# TrueAlpha data engine (Dagster). Deploy: deploy_v2(service="truealpha/data_engine").
+#
+# The deploy compiles this file with infra2-sdk `compile_compose` (#1822 Slice 3) and
+# uploads the compiled text as Dokploy sourceType=raw. To read the compiled text:
+#   python -m tools.compose_compile print truealpha/truealpha/20.data_engine/compose.yaml
+# Each Dagster service has `x-vault`: the compiled wait entrypoint exports /secrets/.env,
+# then runs `command`. The command runs /app/dagster-entrypoint.sh from the image
+# (truealpha#1866, v0.2.144), which sets DAGSTER_POSTGRES_URL, validates the boot
+# environment, and runs the role.
+x-infra2:
+  # One vault-agent sidecar, container truealpha-data-engine-vault-agent${ENV_SUFFIX}.
+  # Its template is rendered from env.manifest.json (common.security.secrets_render).
+  vault:
+    name: truealpha-data-engine
+    # The template builds DATABASE_URL with `env "TA_POSTGRES_PORT"`. `env "X"` reads the
+    # sidecar's own environment, so the sidecar gets this name (x-infra2.vault.env); the
+    # compile stops when the template reads a name that the sidecar does not get.
+    env: [TA_POSTGRES_PORT]
+
 # Fail closed when IMAGE_DIGEST, RELEASE_ID, CONFIGURATION_SHA256, or CAPTURE_APPROVED_BY is unset.
 x-dagster-service: &dagster-service
   image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:?IMAGE_DIGEST is required}
@@ -59,85 +69,6 @@ x-dagster-service: &dagster-service
     - "traefik.enable=false"
 
 services:
-  vault-agent:
-    init: true
-    image: hashicorp/vault:1.15
-    container_name: truealpha-data-engine-vault-agent${ENV_SUFFIX}
-    restart: always
-    mem_limit: 128m
-    cpu_shares: 256
-    entrypoint:
-      - sh
-      - -c
-      - |
-        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
-        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
-          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
-          exit 1
-        fi
-        if [ -z "$$VAULT_ADDR" ]; then
-          echo "VAULT_ADDR is required"
-          exit 1
-        fi
-        echo "$$VAULT_ROLE_ID" > /vault/role_id
-        echo "$$VAULT_SECRET_ID" > /vault/secret_id
-        if [ -n "$$VAULT_SECRETS_TEMPLATE" ]; then
-          printf '%s' "$$VAULT_SECRETS_TEMPLATE" | base64 -d > /vault/secrets.ctmpl && [ -s /vault/secrets.ctmpl ] || { echo "CRITICAL: invalid VAULT_SECRETS_TEMPLATE"; exit 1; }
-          sed 's|/etc/vault/secrets.ctmpl|/vault/secrets.ctmpl|g' /etc/vault/vault-agent.hcl > /vault/vault-agent.hcl
-          exec vault agent -config=/vault/vault-agent.hcl
-        fi
-        exec vault agent -config=/etc/vault/vault-agent.hcl
-    environment:
-      VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
-      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
-      ENV: ${ENV}
-      ENVIRONMENT: ${ENV}
-      ENV_SUFFIX: ${ENV_SUFFIX:-}
-      # secrets.ctmpl builds DATABASE_URL with this port. `env "X"` inside the template
-      # reads the agent's own environment, so every variable the template names must be
-      # forwarded here; test_vault_agent_forwards_every_template_env pins it. The SDK
-      # sidecar (x-infra2.vault) cannot forward it yet, so step B waits for that option.
-      TA_POSTGRES_PORT: ${TA_POSTGRES_PORT}
-      # Cache-bust (mirrors 10.app's vault-agent): secrets.ctmpl is a single-file
-      # bind mount, so a checkout that rewrites it leaves this container holding the
-      # old inode, and Compose only recreates the agent when its resolved config
-      # changes. Without this, #604's endpoint line and #626's LLM_* lines stayed
-      # unrendered on running staging/prod for weeks. CONFIGURATION_SHA256 covers
-      # compose.yaml + secrets.ctmpl + vault-agent.hcl + vault-policy.hcl + public env.
-      # The Dagster services still stop on an unset value (`:?`).
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          # local checks every cycle (fast): secrets rendered + no unresolved template.
-          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
-          # vault token lookup THROTTLED to ~5min (token TTL is hours) so N vault-agents
-          # do not hammer Vault every 30s (#292). The local checks above still fail fast.
-          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
-            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
-            touch /tmp/.vault_hc
-          fi
-      interval: 30s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-    volumes:
-      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
-      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
-      - secrets:/vault/secrets
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
-    labels:
-      - "traefik.enable=false"
-
   # Persistent code-server role: webserver/daemon point at this
   # long-lived process via --grpc-socket instead of each spawning + heartbeat-
   # managing (20s TTL) their own local code-server subprocess, which was self-
@@ -148,28 +79,8 @@ services:
   dagster-code-server:
     <<: *dagster-service
     container_name: truealpha-dagster-code-server${ENV_SUFFIX}
-    # The compiled x-vault wait entrypoint: export /secrets/.env, then exec `command`.
-    entrypoint: &vault-wait
-      - sh
-      - -c
-      - |
-        set -e
-        waited=0
-        max_wait="300"
-        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
-          echo "Waiting for secrets file..."
-          sleep 2
-          waited=$$((waited + 2))
-        done
-        if [ ! -s /secrets/.env ]; then
-          echo "ERROR: /secrets/.env is missing or empty"
-          exit 1
-        fi
-        set -a
-        . /secrets/.env
-        set +a
-        exec "$$@"
-      - --
+    # x-vault waits for /secrets/.env, exports it, then runs this command.
+    x-vault: {}
     command:
       - /bin/sh
       - /app/dagster-entrypoint.sh
@@ -213,7 +124,7 @@ services:
         condition: service_healthy
       dagster-code-server:
         condition: service_healthy
-    entrypoint: *vault-wait
+    x-vault: {}
     command:
       - /bin/sh
       - /app/dagster-entrypoint.sh
@@ -246,7 +157,7 @@ services:
         condition: service_healthy
       dagster-code-server:
         condition: service_healthy
-    entrypoint: *vault-wait
+    x-vault: {}
     command: ["/bin/sh", "/app/dagster-entrypoint.sh", "dagster-daemon", "run", "--grpc-socket", "/var/lib/dagster/code-server.sock"]
     healthcheck:
       # `dagster-daemon liveness-check` is a full CLI cold start — under host load
