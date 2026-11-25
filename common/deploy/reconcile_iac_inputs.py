@@ -43,6 +43,7 @@ from common.core.constants import (
     load_app_sdk_locks,
 )
 from common.core.sdk_usage_census import sdk_requirement
+from common.core.sdk_usage_census import sdk_version as lock_sdk_version
 from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     ACCEPTED_HOOK_SCHEMA_VERSIONS,
@@ -3377,6 +3378,108 @@ def emit_post_record(
     )
 
 
+RUNNER_HEALTH_ATTEMPTS = 3
+
+
+def _sdk_version_key(version: str) -> tuple[int, ...]:
+    """``X.Y.Z`` as a tuple of ints, so ``4.10.0`` sorts after ``4.7.0``."""
+    parts = version.strip().split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        raise ValueError(f"infra2-sdk version {version!r} is not X.Y.Z")
+    return tuple(int(part) for part in parts)
+
+
+def locked_sdk_version_at_ref(ref: str, repo_root: Path) -> str:
+    """The infra2-sdk version that ``<ref>:uv.lock`` of this repository locks."""
+    res = subprocess.run(
+        ["git", "show", f"{ref}:uv.lock"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if res.returncode != 0:
+        raise ValueError(f"cannot read {ref}:uv.lock: {res.stderr.strip()}")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        lock_copy = Path(tmp_dir) / "uv.lock"
+        lock_copy.write_text(res.stdout, encoding="utf-8")
+        return lock_sdk_version(lock_copy)
+
+
+def _read_runner_health(runner_url: str) -> dict[str, object]:
+    """The JSON body of ``<runner_url>/health``. A 503 (degraded) body is still read."""
+    url = f"{runner_url.rstrip('/')}/health"
+    last_error = ""
+    for attempt in range(1, RUNNER_HEALTH_ATTEMPTS + 1):
+        try:
+            try:
+                with urllib.request.urlopen(url, timeout=10) as response:
+                    raw = response.read()
+            except urllib.error.HTTPError as exc:
+                raw = exc.read()
+            body = json.loads(raw.decode("utf-8", "replace"))
+            if isinstance(body, dict):
+                return body
+            last_error = f"body is {type(body).__name__}, not an object"
+        except (OSError, ValueError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        if attempt < RUNNER_HEALTH_ATTEMPTS:
+            time.sleep(5)
+    raise RuntimeError(f"cannot read {url}: {last_error}")
+
+
+def assert_runner_sdk_covers_ref(
+    after: str,
+    repo_root: Path,
+    *,
+    runner_url: str | None = None,
+    read_health: Callable[[str], Mapping[str, object]] | None = None,
+    locked_version: Callable[[str, Path], str] | None = None,
+) -> str:
+    """Stop before any deploy unit when ``after`` locks a newer infra2-sdk than the runner.
+
+    The IaC runner compiles the x-infra2 composes of ``after`` with its own installed SDK.
+    An older SDK rejects keys that a newer one added, so the deploy fails midway (#1822).
+    The runner image is rebuilt only in a production promotion, before this check runs.
+    A runner that does not report ``sdk_version`` (or reports ``unknown``) gives a warning
+    and passes. Its ``git_sha`` is the workspace HEAD, not the image build commit, so it
+    cannot give the SDK of the image. Returns the verdict detail.
+    """
+    url = (runner_url or os.environ.get("IAC_RUNNER_URL", "")).strip()
+    if not url:
+        raise SystemExit(
+            "::error::IAC_RUNNER_URL is not set: the reconcile cannot read the "
+            "infra2-sdk version of the IaC runner"
+        )
+    try:
+        ref_version = (locked_version or locked_sdk_version_at_ref)(after, repo_root)
+        health = (read_health or _read_runner_health)(url)
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise SystemExit(f"::error::runner SDK check failed: {exc}") from exc
+    runner_version = str(health.get("sdk_version") or "").strip()
+    if runner_version in ("", "unknown"):
+        detail = (
+            f"runner SDK unknown: {url}/health reports no sdk_version (git_sha="
+            f"{health.get('git_sha', 'unknown')}); {after} locks infra2-sdk "
+            f"{ref_version}. The check starts after the next runner rebuild."
+        )
+        print(f"::warning::{detail}")
+        return detail
+    try:
+        runner_older = _sdk_version_key(runner_version) < _sdk_version_key(ref_version)
+    except ValueError as exc:
+        raise SystemExit(f"::error::runner SDK check failed: {exc}") from exc
+    if runner_older:
+        raise SystemExit(
+            f"::error::{after} locks infra2-sdk {ref_version} in uv.lock, but the IaC "
+            f"runner has infra2-sdk {runner_version}. The runner compiles the composes "
+            "with its own SDK, so the deploy would fail midway. The runner is rebuilt "
+            "only in a production promotion (the bootstrap step of "
+            "reconcile-iac-inputs.yml). Keep the old SDK pin until the runner is rebuilt."
+        )
+    return f"runner infra2-sdk {runner_version} >= {after} locked {ref_version}"
+
+
 def run_operation(
     args: argparse.Namespace,
     repo_root: Path,
@@ -3425,6 +3528,25 @@ def run_operation(
                         "::error::app hook env check failed: "
                         + "; ".join(map(str, errors))
                     )
+            # Before any deploy unit: the runner SDK must compile the composes of the ref.
+            # The green verdict keeps its detail, so a "runner SDK unknown" warning shows.
+            sdk_began = time.monotonic()
+            sdk_ok, sdk_detail = False, ""
+            try:
+                sdk_detail = assert_runner_sdk_covers_ref(args.after, repo_root)
+                sdk_ok = True
+            except BaseException as exc:
+                sdk_detail = str(exc) or type(exc).__name__
+                raise
+            finally:
+                checks.append(
+                    CheckVerdict(
+                        "runner_sdk",
+                        sdk_ok,
+                        sdk_detail[:300],
+                        seconds=round(time.monotonic() - sdk_began, 3),
+                    )
+                )
         except BaseException:
             stage.emit("operation", started, checks)
             _write_payload(

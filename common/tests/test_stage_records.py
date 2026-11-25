@@ -105,11 +105,13 @@ def test_writer_emits_three_valid_records(monkeypatch, tmp_path) -> None:
         "app_pins",
     ]
     # `hook_env` needs the secret values, which only the `operation` job holds (#1646)
-    assert [(c.name, c.seconds) for c in loaded["operation"].checks][1:] == [
+    assert [(c.name, c.seconds) for c in loaded["operation"].checks][2:] == [
         ("staging:platform/alerting", 12.5),
         ("platform/alerting:smoke", 3.0),
     ]
     assert loaded["operation"].checks[0].name == "hook_env"
+    # the runner SDK check runs before the first deploy unit (#1822)
+    assert loaded["operation"].checks[1].name == "runner_sdk"
     assert [(c.name, c.seconds) for c in loaded["post"].checks] == [
         ("platform/alerting:staging_gate", 3.0)
     ]

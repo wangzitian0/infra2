@@ -751,6 +751,38 @@ def test_health_git_sha_falls_back_to_env_when_workspace_git_fails(
     assert res_unknown.json()["git_sha"] == "unknown"
 
 
+def test_health_reports_installed_sdk_version(monkeypatch, tmp_path) -> None:
+    """/health reports the infra2-sdk version that the image installed (#1822).
+
+    ### Mutation evidence
+    - Removing `sdk_version` from the `/health` body fails the `"sdk_version" in body` check.
+    - Reading the version from `uv.lock` of the workspace instead of the installed package
+      fails the equality with `importlib.metadata.version("infra2-sdk")`.
+    """
+    import importlib.metadata
+
+    from starlette.testclient import TestClient
+
+    webhook_server = _load_module(
+        "webhook_server_health_sdk_version_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    _configure_healthy_runner(webhook_server, monkeypatch, tmp_path)
+    body = TestClient(webhook_server.app).get("/health").json()
+
+    assert "sdk_version" in body
+    assert body["sdk_version"] == importlib.metadata.version("infra2-sdk")
+
+    def absent(_name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError("infra2-sdk")
+
+    monkeypatch.setattr(webhook_server.importlib.metadata, "version", absent)
+    assert TestClient(webhook_server.app).get("/health").json()["sdk_version"] == (
+        "unknown"
+    )
+
+
 def test_vault_audit_task_import_does_not_require_pyyaml() -> None:
     """Infra-011.7: optional audit inventory parsing cannot break invoke startup."""
     script = """

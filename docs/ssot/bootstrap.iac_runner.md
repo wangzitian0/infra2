@@ -228,10 +228,18 @@ curl https://iac.{domain}/health
 ```json
 {
   "status": "healthy",
-  "version": "1.0.0",
-  "uptime": 3600
+  "checks": {"http": true, "vault_secrets": true, "git_workspace": true},
+  "in_flight_deploys": 0,
+  "git_sha": "52bb8bb",
+  "sdk_version": "4.7.0"
 }
 ```
+
+- `git_sha` is the HEAD of the workspace checkout. It is not the commit that built the image.
+- `sdk_version` is the infra2-sdk version installed in the image (`unknown` when absent).
+- Before the first deploy unit, the reconcile compares `sdk_version` with the infra2-sdk that `<tag>:uv.lock` locks (check `runner_sdk`, #1822).
+- An older runner SDK stops the run. Only a production promotion rebuilds the runner.
+- A runner without `sdk_version` gives the warning `runner SDK unknown`, and the run continues.
 
 ### 4.3 `/webhook` - GitHub Webhook（验签后 `ignored`）
 

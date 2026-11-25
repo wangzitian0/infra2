@@ -128,3 +128,20 @@ def fake_iac_ref_reads_the_working_tree(monkeypatch):
         return {p: (root / p).read_bytes() for p in paths if (root / p).is_file()}
 
     monkeypatch.setattr(config_drift, "contents_at_ref", contents_at_ref)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_runner_sdk_check(request, monkeypatch):
+    """A reconcile test does not read the live IaC runner ``/health`` (#1822).
+
+    ``common/tests/test_reconcile_runner_sdk.py`` tests the real check; a test whose
+    name contains ``runner_sdk`` keeps it."""
+    if "runner_sdk" in request.node.name or "runner_sdk" in request.path.name:
+        return
+    import common.deploy.reconcile_iac_inputs as reconcile
+
+    monkeypatch.setattr(
+        reconcile,
+        "assert_runner_sdk_covers_ref",
+        lambda *_a, **_k: "runner SDK check stubbed in unit tests",
+    )
