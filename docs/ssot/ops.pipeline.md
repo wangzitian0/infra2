@@ -853,6 +853,21 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ---
 
+## 13. GHCR image retention
+
+`common/deploy/ghcr_retention.py` owns the policy; `tools/ghcr_retention.py` runs it.
+
+| Rule | Value |
+|---|---|
+| Packages | `PACKAGES` in the module: the five App images that publish one version set per commit. |
+| Root (kept) | A tag `vX.Y.Z` or `latest`, or created in the last `KEEP_DAYS` (30) days. |
+| Closure (kept) | Every manifest that a kept index names: platform images and attestations. |
+| Deleted | Every other version. Deletion runs oldest first. |
+| Fail closed | A kept index that GHCR cannot read stops the plan. A manifest that a second list also lacks was replaced during the run and is skipped. |
+| Call budget | A run stops when fewer than `RESERVED_CALLS` (2000) REST calls remain for the shared login. The next run resumes. |
+
+Without `--apply` the tool prints the plan and deletes nothing. A deletion is permanent, so a person confirms the dry-run counts before the first `--apply`.
+
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
