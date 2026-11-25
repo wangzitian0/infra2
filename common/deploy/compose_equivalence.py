@@ -18,8 +18,6 @@ Normalizations (the intended differences, from the infra2-sdk#238 design):
   the healthcheck script by code lines. It drops the base env entry
   ``VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}`` (the release template that the
   app promote path injects); the promote path compares that template with the compiled one.
-  It drops the base env entry ``ENVIRONMENT: ${ENV}`` when both sidecars set
-  ``ENV: ${ENV}``; the SDK compile proves that the template does not need it.
 - An ``x-vault`` service: the hand entrypoint ends in ``exec <command>``; the compiled
   one runs ``exec "$@"`` with ``command``. The check proves both run the same process,
   then drops ``entrypoint`` and ``command``.
@@ -47,8 +45,6 @@ _SIDECAR = "vault-agent"
 _SIDECAR_DROPPED = ("volumes", "labels", "entrypoint")
 _SIDECAR_ENV_DROPPED = ("VAULT_AGENT_HCL", "VAULT_SECRETS_TEMPLATE")
 _RELEASE_TEMPLATE_INJECTION = "${VAULT_SECRETS_TEMPLATE:-}"
-_ENVIRONMENT = "ENVIRONMENT"
-_ENV_REF = "${ENV}"
 
 
 def _yaml():
@@ -187,18 +183,6 @@ def _normalize_sidecar(pair: _Pair, base_files: dict[str, str | None]) -> None:
         and hand_env.get("VAULT_SECRETS_TEMPLATE") == _RELEASE_TEMPLATE_INJECTION
     ):
         hand_env.pop("VAULT_SECRETS_TEMPLATE")
-    # A hand sidecar sets ENVIRONMENT next to ENV (#1823 N1). The compiled sidecar sets
-    # ENV only, and the SDK compile fails when the template reads an env name
-    # that the sidecar lacks. So the compiled template reads ENVIRONMENT only through
-    # `or (env "ENVIRONMENT") (env "ENV")`, which renders the same tier from ENV.
-    if (
-        isinstance(hand_env, dict)
-        and hand_env.get(_ENVIRONMENT) == _ENV_REF
-        and hand_env.get("ENV") == _ENV_REF
-        and env.get("ENV") == _ENV_REF
-        and _ENVIRONMENT not in env
-    ):
-        hand_env.pop(_ENVIRONMENT)
 
 
 def _normalize_x_vault(pair: _Pair, name: str) -> None:
