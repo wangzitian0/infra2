@@ -3,8 +3,8 @@
 # Each Dagster service equals its compiled x-vault service: the SDK wait entrypoint
 # exports /secrets/.env, then runs `command`. The command runs dagster-entrypoint.sh,
 # which sets DAGSTER_POSTGRES_URL, validates the boot environment, and runs the role.
-# The script is bind-mounted at its image path /app/dagster-entrypoint.sh until the
-# pinned truealpha release carries it (truealpha#1866, v0.2.144).
+# The image carries the script at /app/dagster-entrypoint.sh since truealpha v0.2.144
+# (truealpha#1866), so the stack mounts no file from the checkout for it.
 # The vault-agent sidecar keeps its mounted config and template; the deploy can set
 # VAULT_SECRETS_TEMPLATE (base64 of the release template), which the entrypoint decodes.
 # Fail closed when IMAGE_DIGEST, RELEASE_ID, CONFIGURATION_SHA256, or CAPTURE_APPROVED_BY is unset.
@@ -45,7 +45,6 @@ x-dagster-service: &dagster-service
     OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
     OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
   volumes:
-    - ./dagster-entrypoint.sh:/app/dagster-entrypoint.sh:ro
     - secrets:/secrets:ro
     - ${DATA_PATH}:/var/lib/dagster
   # OpenD deliberately listens only on host 127.0.0.1. Host networking reaches
