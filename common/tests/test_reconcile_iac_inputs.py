@@ -12,6 +12,7 @@ import urllib.error
 from email.message import Message
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 
@@ -5609,21 +5610,15 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
     events: list[tuple[str, object]] = []
     attempts = {"count": 0}
 
-    class _HealthResp:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_a):
-            return False
-
-    def _fake_urlopen(req_or_url, timeout=5):
+    def _fake_get(url, timeout=5.0):
         attempts["count"] += 1
         events.append(("health", attempts["count"]))
         if attempts["count"] < 3:
-            raise OSError("restarting")
-        return _HealthResp()
+            raise httpx.ConnectError("restarting")
+        return httpx.Response(200, json={"status": "ok"})
+
+    def _no_urlopen(*_a, **_k):
+        raise AssertionError("the staging health wait must not use urllib (#1988)")
 
     def _fake_exec(manifest, slot, *, app_url, environment, version_ref, cwd, **_kw):
         events.append(("hook", (manifest.service, app_url, environment)))
@@ -5639,7 +5634,8 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
         )
 
     monkeypatch.setenv("WAIT_FOR_STAGING_READY", "1")
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", _no_urlopen)
+    monkeypatch.setattr(reconcile.httpx, "get", _fake_get)
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
     monkeypatch.setattr(reconcile.time, "sleep", lambda _s: None)
 
@@ -5657,6 +5653,94 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
         ("health", 3),
         ("hook", ("platform/todo", "https://todo-staging.zitian.party", "staging")),
     ]
+
+
+# The Cloudflare edge body for a refused client (measured 2026-11-25 with urllib).
+_CLOUDFLARE_403 = httpx.Response(
+    403, text="error code: 1010", headers={"server": "cloudflare"}
+)
+_CLOUDFLARE_403_HTML = httpx.Response(
+    403,
+    text="<!DOCTYPE html><html><title>Attention Required! | Cloudflare</title></html>",
+    headers={"content-type": "text/html", "server": "cloudflare"},
+)
+
+
+@pytest.mark.parametrize(
+    ("response", "answered"),
+    [
+        (httpx.Response(200, json={"status": "ok"}), True),
+        (httpx.Response(302, headers={"location": "https://sso-staging.x/"}), True),
+        (httpx.Response(401, text="unauthorized"), True),
+        (httpx.Response(404, text="<!DOCTYPE html><html>Next.js 404</html>"), True),
+        (_CLOUDFLARE_403, False),
+        (_CLOUDFLARE_403_HTML, False),
+        (httpx.Response(429, text="error code: 1015"), False),
+        (httpx.Response(404, text="404 page not found\n"), False),
+        (httpx.Response(502, text="Bad Gateway"), False),
+        (httpx.Response(503, json={"status": "starting"}), False),
+    ],
+)
+def test_staging_health_answered_verdict(
+    response: httpx.Response, answered: bool
+) -> None:
+    """#1708: only an answer from the App counts; a Cloudflare 403 page does not."""
+    assert reconcile._staging_health_answered(response) is answered
+
+
+def _drive_staging_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    replies: list[httpx.Response],
+    *,
+    timeout_seconds: float = 90.0,
+) -> list[str]:
+    """Run the wait against ``replies``; return the URLs it read."""
+    calls: list[str] = []
+    clock = {"now": 0.0}
+
+    def _fake_get(url, timeout=5.0):
+        calls.append(url)
+        return replies[min(len(calls), len(replies)) - 1]
+
+    def _no_urlopen(*_a, **_k):
+        raise AssertionError("the staging health wait must not use urllib (#1988)")
+
+    def _sleep(seconds):
+        clock["now"] += seconds
+
+    monkeypatch.setattr("urllib.request.urlopen", _no_urlopen)
+    monkeypatch.setattr(reconcile.httpx, "get", _fake_get)
+    monkeypatch.setattr(reconcile.time, "sleep", _sleep)
+    monkeypatch.setattr(reconcile.time, "monotonic", lambda: clock["now"])
+    reconcile._wait_for_staging_app_ready(
+        "https://todo-staging.zitian.party/", timeout_seconds=timeout_seconds
+    )
+    return calls
+
+
+def test_staging_wait_does_not_count_cloudflare_403_as_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1708: a Cloudflare 403 page and a Traefik no-route 404 keep the wait polling."""
+    calls = _drive_staging_wait(
+        monkeypatch,
+        [
+            _CLOUDFLARE_403_HTML,
+            _CLOUDFLARE_403,
+            httpx.Response(404, text="404 page not found\n"),
+            httpx.Response(503, text="starting"),
+            httpx.Response(200, json={"status": "ok"}),
+        ],
+    )
+    assert calls == ["https://todo-staging.zitian.party/health"] * 5
+
+
+def test_staging_wait_stops_at_timeout_when_cloudflare_always_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1708: a refusal that never ends returns at the timeout: 10 s / 2 s gives 6 reads."""
+    calls = _drive_staging_wait(monkeypatch, [_CLOUDFLARE_403], timeout_seconds=10.0)
+    assert len(calls) == 6
 
 
 def test_preview_gate_passes_infra2_touched_files_from_compare(
