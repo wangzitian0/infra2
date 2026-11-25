@@ -650,7 +650,6 @@ _IMAGE_REF = re.compile(r"(?<![\w./-])(?:docker\.io/)?(?:library/)?python:([\w.@
 _SCANNED_SUFFIXES = (".py", ".sh", ".yml", ".yaml", ".toml")
 _SKIPPED_PREFIXES = (
     "repos/",
-    "oh-my-code-agent/",
     "common/tests/",
     "docs/project/archive/",
 )

@@ -201,54 +201,26 @@ class SyncPipeline:
         return None
 
     def step_vault_preflight(self) -> SyncResult | None:
-        """Verify Vault token health and ensure runtime secrets readiness."""
+        """Ensure runtime secrets readiness and apply secret supply."""
         deployer = self.ctx.deployer
         c = self.ctx.context
         e = self.ctx.env
         log = self.ctx.logger
 
-        try:
-            token_status = deployer.verify_vault_app_token()
-            if not token_status["valid"]:
-                details = (
-                    f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
-                    "This is a legacy static token; remove it from the service's Dokploy "
-                    "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
-                )
-                log.log_error(f"Error: {details}")
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details=details,
-                )
-            if token_status.get("ttl_hours", 999) < 48:
-                details = (
-                    f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
-                    "It is a legacy static token; remove it from the Dokploy env "
-                    "(AppRole services don't use it)."
-                )
-                log.log_error(f"Error: {details}")
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details=details,
-                )
-        except Exception as exc:  # noqa: BLE001
-            details = f"Could not verify VAULT_APP_TOKEN: {exc}"
+        if not deployer.ensure_runtime_secrets(c):
+            details = f"Failed to ensure runtime secrets for {deployer.service}"
             log.log_error(f"Error: {details}")
             return SyncResult(
                 action=SyncAction.FAILED,
                 details=details,
             )
 
-        if not deployer.ensure_runtime_secrets(c):
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Failed to ensure runtime secrets for {deployer.service}",
-            )
-
         if not deployer.apply_secret_supply(c, env=e.get("ENV")):
+            details = "secret supply left required values missing"
+            log.log_error(f"Error: {details}")
             return SyncResult(
                 action=SyncAction.FAILED,
-                details="secret supply left required values missing",
+                details=details,
             )
 
         return None

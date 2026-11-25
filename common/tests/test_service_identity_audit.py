@@ -8,7 +8,4 @@ def test_cross_plane_service_identity_contract_is_complete() -> None:
 def test_alert_catalog_discovery_excludes_tool_worktrees_and_nested_repos() -> None:
     relatives = [path.relative_to(ROOT) for path in _owned_alert_catalogs()]
     assert relatives
-    assert all(
-        relative.parts[0] not in {".claude", "repos", "oh-my-code-agent"}
-        for relative in relatives
-    )
+    assert all(relative.parts[0] not in {".claude", "repos"} for relative in relatives)

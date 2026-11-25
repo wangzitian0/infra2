@@ -8,8 +8,6 @@ their ownership models.
 - `infra2` is the infrastructure implementation and deployment control plane.
 - `infra2-sdk` owns versioned contracts and explicitly invoked protocol adapters;
   importing it remains free of network and global-provider side effects.
-- `oh-my-code-agent` owns coding-agent observation, profiles and isolated runtimes,
-  independently of application deployment and task scheduling.
 - Workspace guides record shared preferences for GitHub, coordination, and software
   design.
 - `finance_report` and `truealpha` are autonomous application repositories. Their
@@ -42,7 +40,6 @@ navigation pointers to local authority, not a second copy of its policy.
 |---|---|---|
 | infra2 | `init.md`, `AGENTS.md`, `docs/ssot/` | `uv run python -m tools.harness check`; `pytest -n0 --no-cov -o addopts= <file>::<test> -x`; relevant SSOT's The Proof |
 | infra2-sdk | `init.md`, `AGENTS.md`, `README.md`, `pyproject.toml`, module contracts | `uv run --extra dev pytest <file>::<test> -x`; `uv run ruff check .` |
-| OMCA | `init.md`, `docs/README.md`, `docs/project/roadmap.md` | `make build`, `make test`, `make standalone`; host/version-specific qualification |
 | Finance Report | `vision.md`, `common/<pkg>/contract.py`, `docs/agents/orchestration.md` | `tools/preflight.py --tier=static --pytest-changed` through its documented Python environment |
 | TrueAlpha | `vision.md`, `init.md`, issue-owned acceptance checks | `tools/prepush.sh` with Bash 4+; scoped runtime/module tests |
 
@@ -58,15 +55,13 @@ the requirement. Neither App imports SDK source from the workspace checkout.
 | Environment tiers, runtime identity, dependency validation, HTTP/S3/Postgres/OTel adapters | Install a released `infra2-sdk` artifact; start from its standalone readiness example |
 | Business dependency names, required tiers, domain rules, routes and models | Define them in the app's own contracts and tests |
 | Infrastructure provisioning, secret delivery, deployment and promotion | Use infra2's published deployment interfaces and onboarding paths |
-| Coding-agent profiles, Skills/MCP selection and isolated launch | Use the independently built OMCA CLI; follow its host-version qualification procedure |
+| Coding-agent rules, Skills and MCP specs | Edit the `dev_env` source; `ws-apply` and `ws-publish` render it into each host and checkout |
 
 Reuse a released contract where it removes duplicate semantics. Keep compatibility
 wrappers when an app's public API differs, and prove their behavior before replacement.
 Do not move app policy into a common package merely to make directory trees look alike.
-The SDK's installed-wheel smoke is an executable consumer example; OMCA's safe automatic
-qualification does not replace its human TUI/restart/model proof. Its installed
-executable embeds reviewed Knowledge Packs and ontology; installation proof must
-run outside the build checkout, including after that checkout is removed.
+The SDK's installed-wheel smoke is an executable consumer example. Installation proof
+must run outside the build checkout, including after that checkout is removed.
 
 Reviewed snapshot and acceptance evidence live in
 [Infra-019 (Archived)](../docs/project/archive/README.md#infra-019).
@@ -107,7 +102,7 @@ is unfollowable everywhere else). That guard is a floor, not a proof — it has 
 extended only after a human reviewer found what it missed.
 
 The boundary this sits under, and why a committed copy does not break one-way flow, is
-[Harness Control Plane SSOT §5.1](../docs/ssot/core.harness.md#51-harness-三方边界2026-09-23-owner-裁定).
+[Harness Control Plane SSOT §5.1](../docs/ssot/core.harness.md#51-harness-边界2026-09-23-owner-裁定).
 
 ## Ownership Boundary
 

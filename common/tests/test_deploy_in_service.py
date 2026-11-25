@@ -310,9 +310,6 @@ def test_sync_reports_failed_when_the_stack_is_not_in_service(monkeypatch):
             return "no container for postgres"
 
     monkeypatch.setattr(
-        NotInService, "verify_vault_app_token", classmethod(lambda cls: {"valid": True})
-    )
-    monkeypatch.setattr(
         NotInService, "ensure_runtime_secrets", classmethod(lambda cls, c: True)
     )
     monkeypatch.setattr(
@@ -494,10 +491,6 @@ def _redis_sync(
                 "VPS_HOST": "vps",
                 "INTERNAL_DOMAIN": "x.test",
             }
-
-        @classmethod
-        def verify_vault_app_token(cls):
-            return {"valid": True}
 
         @classmethod
         def ensure_runtime_secrets(cls, c):

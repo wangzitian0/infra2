@@ -13,9 +13,8 @@ domain semantics and may impose stronger constraints.
   instances and implementation policy.
 - Keep human workflow preferences out of `infra2-sdk`. They belong in this harness or
   the owning repository, not in runtime wire contracts.
-- Keep coding-agent discovery, profiles, activation, and isolated runtime management in
-  `oh-my-code-agent`; repository-specific commands, scheduling, and product policy stay
-  with the owning repository. OMCA's charter does not define a general task orchestrator.
+- Keep coding-agent rules, skills and MCP specs in `dev_env`; repository-specific
+  commands, scheduling, and product policy stay with the owning repository.
 - Never make workspace submodules package, runtime, deployment, or configuration-hash
   dependencies.
 

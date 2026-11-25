@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+import httpx
 import yaml
 
 from common.core.constants import (
@@ -43,6 +46,7 @@ from common.core.constants import (
     load_app_sdk_locks,
 )
 from common.core.sdk_usage_census import sdk_requirement
+from common.core.sdk_usage_census import sdk_version as lock_sdk_version
 from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     ACCEPTED_HOOK_SCHEMA_VERSIONS,
@@ -78,7 +82,7 @@ from common.deploy.env_config import (
     preview_service_config,
 )
 from common.deploy.github_api import API as GITHUB_API, github_headers
-from common.deploy.stage_record import utc_now, write_stage_record
+from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
 from common.deploy.canary_pin import (
     APP_SDK_RANGE,
     CANARY_COMPOSE_RELS,
@@ -2204,28 +2208,86 @@ def run_post_deploy_app_hooks(
     return hook_results
 
 
+# Statuses that do not prove the app answers, although they are below 500 (#1708).
+# 403: the Cloudflare edge refuses a client with 403 before the origin sees the request
+# (measured 2026-11-25: urllib gets ``403 error code: 1010``). No staging App answers
+# ``/health`` with 403. 429: the Cloudflare edge also sends its rate limit.
+_STAGING_HEALTH_EDGE_STATUSES = frozenset({403, 429})
+# Traefik sends the Go ``http.NotFound`` body when no router matches the host. This
+# occurs while the App container restarts, so this 404 is not the App.
+_STAGING_HEALTH_NO_ROUTE_BODY = "404 page not found"
+
+
+def _staging_health_answered(response: httpx.Response) -> bool:
+    """True when the App itself answered ``/health`` (#1708).
+
+    A 2xx, 3xx, 401 or 404 counts: the App or its auth layer answered. Measured
+    2026-11-25: finance_report and truealpha answer ``/health`` with a Next.js 404 page,
+    todo with a 302 to SSO. A 5xx, a 403 or 429 from the Cloudflare edge, and the
+    Traefik no-route 404 do not count; the wait continues until its timeout.
+    """
+    status = response.status_code
+    if status >= 500 or status in _STAGING_HEALTH_EDGE_STATUSES:
+        return False
+    if status == 404 and response.text.strip() == _STAGING_HEALTH_NO_ROUTE_BODY:
+        return False
+    return True
+
+
 def _wait_for_staging_app_ready(
     app_url: str,
     *,
     timeout_seconds: float = 90.0,
 ) -> None:
-    """Poll staging ``/health`` until HTTP < 500 or timeout elapses (#1708)."""
+    """Poll staging ``/health`` until the App answers or timeout elapses (#1708).
+
+    The wait keeps ``scheduled_audit`` off an App container that restarts. It reads with
+    httpx, not urllib: Cloudflare refuses the urllib User-Agent with 403, so urllib
+    never sees the App (#1988).
+    """
     health_url = f"{app_url.rstrip('/')}/health"
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     while True:
         try:
-            with urllib.request.urlopen(health_url, timeout=5) as response:
-                status = getattr(response, "status", 200)
-                if status < 500:
-                    return
-        except urllib.error.HTTPError as exc:
-            if exc.code < 500:
+            if _staging_health_answered(httpx.get(health_url, timeout=5.0)):
                 return
-        except OSError:
+        except httpx.HTTPError:
             pass
         if time.monotonic() >= deadline:
             return
         time.sleep(2.0)
+
+
+def _copy_hook_artifacts(
+    hook_cwd: Path,
+    manifest: RuntimeHooksManifest,
+    service: str,
+    artifacts_dir: Path | None,
+) -> dict[str, object]:
+    """Read `*summary*.json` from hook artifacts and persist the directory before cleanup."""
+    artifacts_rel = str(
+        getattr(manifest, "artifacts_dir", ".artifacts/hooks") or ".artifacts/hooks"
+    )
+    src_dir = (
+        (hook_cwd / artifacts_rel)
+        if not Path(artifacts_rel).is_absolute()
+        else Path(artifacts_rel)
+    )
+    if not src_dir.is_dir():
+        return {}
+    summaries: dict[str, object] = {}
+    for summary_file in sorted(src_dir.glob("*summary*.json")):
+        try:
+            summaries[summary_file.stem] = json.loads(
+                summary_file.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+    if artifacts_dir is not None:
+        dest_dir = Path(artifacts_dir) / service.replace("/", "_")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_dir, dest_dir, dirs_exist_ok=True)
+    return summaries
 
 
 def run_scheduled_app_audits(
@@ -2242,6 +2304,7 @@ def run_scheduled_app_audits(
     verdict_cache_path: Path | None = None,
     force_replay: bool | None = None,
     heartbeat_seconds: float = _HOOK_HEARTBEAT_SECONDS,
+    artifacts_dir: Path | None = None,
 ) -> list[dict[str, object]]:
     """Execute a scheduled runtime hook slot across registered Apps and local services (#1493, #1521)."""
     if slot not in HOOK_SLOTS:
@@ -2300,43 +2363,43 @@ def run_scheduled_app_audits(
         rel_local = local_manifests.get(service) or LOCAL_SERVICE_HOOK_MANIFESTS.get(
             service
         )
-        if service not in APP_SOURCES and rel_local:
-            local_path = Path(repo_root) / rel_local
-            if not local_path.is_file():
-                local_path = REPO_ROOT / rel_local
-            manifest = load_hooks_manifest(local_path)
-            # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
-            version_ref = "main"
-            source_sha = "local"
-            app_url = _local_service_app_url(service, target_env, effective_domain)
-            hook_cwd = local_path.parent
-            tmp_checkout = None
-        else:
-            repo_slug = APP_SOURCES.get(service)
-            if not repo_slug:
-                raise ValueError(f"unknown app service {service!r}")
-            version_ref, source_sha, app_url = resolve_app_hook_coordinates(
-                service,
-                repo_root=repo_root,
-                after=pinned_tags.get(service, ""),
-                target_env=target_env,
-                domain=effective_domain,
-                runner=runner,
-            )
-            manifest = fetch_hooks_manifest(
-                service,
-                source_sha,
-                manifest_fetcher=manifest_fetcher,
-            )
-            # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
-            hook_cwd, tmp_checkout = resolve_app_hook_cwd(
-                service,
-                source_sha,
-                release_ref=_slot_release_ref(manifest, (slot,), version_ref),
-                repo_root=repo_root,
-                runner=runner,
-            )
+        tmp_checkout = None
         try:
+            if service not in APP_SOURCES and rel_local:
+                local_path = Path(repo_root) / rel_local
+                if not local_path.is_file():
+                    local_path = REPO_ROOT / rel_local
+                manifest = load_hooks_manifest(local_path)
+                # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
+                version_ref = "main"
+                source_sha = "local"
+                app_url = _local_service_app_url(service, target_env, effective_domain)
+                hook_cwd = local_path.parent
+            else:
+                repo_slug = APP_SOURCES.get(service)
+                if not repo_slug:
+                    raise ValueError(f"unknown app service {service!r}")
+                version_ref, source_sha, app_url = resolve_app_hook_coordinates(
+                    service,
+                    repo_root=repo_root,
+                    after=pinned_tags.get(service, ""),
+                    target_env=target_env,
+                    domain=effective_domain,
+                    runner=runner,
+                )
+                manifest = fetch_hooks_manifest(
+                    service,
+                    source_sha,
+                    manifest_fetcher=manifest_fetcher,
+                )
+                # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
+                hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+                    service,
+                    source_sha,
+                    release_ref=_slot_release_ref(manifest, (slot,), version_ref),
+                    repo_root=repo_root,
+                    runner=runner,
+                )
             if (
                 effective_ambient.get("WAIT_FOR_STAGING_READY") == "1"
                 and hook_env_name == "staging"
@@ -2358,6 +2421,26 @@ def run_scheduled_app_audits(
                 ambient_env=effective_ambient,
                 runner=runner,
             )
+            summaries = _copy_hook_artifacts(hook_cwd, manifest, service, artifacts_dir)
+            if summaries:
+                entry["oracle_summaries"] = summaries
+        except Exception as exc:  # noqa: BLE001 - isolate service audit failure so sibling services still run
+            msg = f"{type(exc).__name__}: {exc}"
+            entry = {
+                "service": service,
+                "service_id": service,
+                "slot": slot,
+                "environment": hook_env_name,
+                "version_ref": pinned_tags.get(service) or "main",
+                "app_url": _app_url_for(service, target_env, effective_domain)
+                if service in APP_SOURCES
+                else "",
+                "status": "fail",
+                "ok": False,
+                "summary": msg,
+                "error_message": msg,
+                "checks": [],
+            }
         finally:
             if tmp_checkout is not None:
                 tmp_checkout.cleanup()
@@ -3069,6 +3152,97 @@ def post_checks(hook_results: Sequence[dict]) -> list[CheckVerdict]:
     ]
 
 
+def _scheduled_audit_stage_checks(
+    hook_results: Sequence[Mapping[str, Any]],
+) -> list[CheckVerdict]:
+    """Expand per-service `scheduled_audit` sub-checks into unique StageRecord verdicts."""
+    if not hook_results:
+        return [
+            CheckVerdict("scheduled_audit", False, "no scheduled_audit service ran")
+        ]
+    checks: list[CheckVerdict] = []
+    seen: set[str] = set()
+    for item in hook_results:
+        service = str(item.get("service") or "unknown")
+        slot = str(item.get("slot") or "scheduled_audit")
+        sub_checks = item.get("checks") or ()
+        if not sub_checks:
+            base_name = f"{service}:{slot}"
+            name = base_name if base_name not in seen else f"{base_name}#{len(seen)}"
+            seen.add(name)
+            checks.append(
+                CheckVerdict(
+                    name=name,
+                    ok=(item.get("status") == "pass"),
+                    detail=str(item.get("summary") or item.get("error_message") or "")[
+                        :300
+                    ],
+                    seconds=max(0.0, float(item.get("duration_seconds") or 0.0)),
+                )
+            )
+            continue
+        for sub in sub_checks:
+            sub_name = str(sub.get("name") or "check")
+            base_name = f"{service}:{sub_name}"
+            name = base_name if base_name not in seen else f"{base_name}#{len(seen)}"
+            seen.add(name)
+            skipped = bool(sub.get("skipped"))
+            ok = False if skipped else bool(sub.get("ok"))
+            checks.append(
+                CheckVerdict(
+                    name=name,
+                    ok=ok,
+                    detail=str(sub.get("detail") or "")[:300],
+                    seconds=max(0.0, float(sub.get("seconds") or 0.0)),
+                    skipped=skipped,
+                )
+            )
+    return checks
+
+
+def _emit_scheduled_audit_stage_record(
+    hook_results: Sequence[Mapping[str, Any]],
+    *,
+    repo_root: Path,
+    started_at: str,
+) -> StageRecord | None:
+    """Emit the `staging.provider_regression` post record for `scheduled_audit` runs."""
+    try:
+        sha = (os.environ.get("GITHUB_SHA") or "").strip()
+        if not sha:
+            sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        github_event = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
+        event = {"push": "tag", "schedule": "schedule"}.get(github_event, "dispatch")
+        ref = os.environ.get("GITHUB_REF") or "refs/heads/main"
+        persist = bool(
+            os.environ.get("GITHUB_ACTIONS") or os.environ.get("STAGE_RECORD_DIR")
+        )
+        return write_stage_record(
+            env="staging.provider_regression",
+            phase="post",
+            subject=f"sha:{sha}",
+            ref=ref,
+            event=event,
+            run_url=github_run_url(os.environ),
+            started_at=started_at,
+            checks=_scheduled_audit_stage_checks(hook_results),
+            units=(sdk_unit(),),
+            persist=persist,
+        )
+    except Exception as exc:  # noqa: BLE001 - stage record failure must not crash scheduled audit
+        print(
+            f"::warning::scheduled_audit stage record not written: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _cell(text: str) -> str:
     """One Markdown table cell: no pipe and no line break."""
     return " ".join(text.replace("|", "\\|").split())[:400]
@@ -3377,6 +3551,113 @@ def emit_post_record(
     )
 
 
+RUNNER_HEALTH_ATTEMPTS = 3
+# The /health ``task_sdk`` value of a runner that runs each deploy task under the
+# uv.lock of its ref (bootstrap/06.iac_runner/sync_runner.py ``prepare_ref_env``).
+RUNNER_TASK_SDK_REF_LOCK = "ref_lock"
+
+
+def _sdk_version_key(version: str) -> tuple[int, ...]:
+    """``X.Y.Z`` as a tuple of ints, so ``4.10.0`` sorts after ``4.7.0``."""
+    parts = version.strip().split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        raise ValueError(f"infra2-sdk version {version!r} is not X.Y.Z")
+    return tuple(int(part) for part in parts)
+
+
+def locked_sdk_version_at_ref(ref: str, repo_root: Path) -> str:
+    """The infra2-sdk version that ``<ref>:uv.lock`` of this repository locks."""
+    res = subprocess.run(
+        ["git", "show", f"{ref}:uv.lock"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if res.returncode != 0:
+        raise ValueError(f"cannot read {ref}:uv.lock: {res.stderr.strip()}")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        lock_copy = Path(tmp_dir) / "uv.lock"
+        lock_copy.write_text(res.stdout, encoding="utf-8")
+        return lock_sdk_version(lock_copy)
+
+
+def _read_runner_health(runner_url: str) -> dict[str, object]:
+    """The JSON body of ``<runner_url>/health``. A 503 (degraded) body is still read."""
+    url = f"{runner_url.rstrip('/')}/health"
+    last_error = ""
+    for attempt in range(1, RUNNER_HEALTH_ATTEMPTS + 1):
+        try:
+            # httpx, not urllib: Cloudflare answers 403 with an HTML page to the urllib
+            # User-Agent, so the body is not JSON (staging v3.1.177). A 503 body is read.
+            response = httpx.get(url, timeout=10.0)
+            body = json.loads(response.content.decode("utf-8", "replace"))
+            if isinstance(body, dict):
+                return body
+            last_error = f"body is {type(body).__name__}, not an object"
+        except (OSError, ValueError, httpx.HTTPError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        if attempt < RUNNER_HEALTH_ATTEMPTS:
+            time.sleep(5)
+    raise RuntimeError(f"cannot read {url}: {last_error}")
+
+
+def assert_runner_sdk_covers_ref(
+    after: str,
+    repo_root: Path,
+    *,
+    runner_url: str | None = None,
+    read_health: Callable[[str], Mapping[str, object]] | None = None,
+    locked_version: Callable[[str, Path], str] | None = None,
+) -> str:
+    """Stop before any deploy unit when the runner task SDK is older than ``after`` locks.
+
+    An old runner compiles the x-infra2 composes of ``after`` with its image SDK. An older
+    SDK rejects keys that a newer one added, so the deploy fails midway (#1822). A runner
+    that reports ``task_sdk=ref_lock`` runs each task under ``<after>:uv.lock`` and passes.
+    Otherwise the check compares ``sdk_version`` (the image SDK). A runner without
+    ``sdk_version`` gives a warning and passes: its ``git_sha`` is the workspace HEAD, not
+    the image build commit, so it cannot give the SDK. Returns the verdict detail.
+    """
+    url = (runner_url or os.environ.get("IAC_RUNNER_URL", "")).strip()
+    if not url:
+        raise SystemExit(
+            "::error::IAC_RUNNER_URL is not set: the reconcile cannot read the "
+            "infra2-sdk version of the IaC runner"
+        )
+    try:
+        ref_version = (locked_version or locked_sdk_version_at_ref)(after, repo_root)
+        health = (read_health or _read_runner_health)(url)
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise SystemExit(f"::error::runner SDK check failed: {exc}") from exc
+    if health.get("task_sdk") == RUNNER_TASK_SDK_REF_LOCK:
+        # The runner builds a venv from <after>:uv.lock for each deploy and fails the
+        # deploy when that sync fails, so the task imports ref_version (#1822).
+        return f"runner task SDK = {after} uv.lock (infra2-sdk {ref_version})"
+    runner_version = str(health.get("sdk_version") or "").strip()
+    if runner_version in ("", "unknown"):
+        detail = (
+            f"runner SDK unknown: {url}/health reports no sdk_version (git_sha="
+            f"{health.get('git_sha', 'unknown')}); {after} locks infra2-sdk "
+            f"{ref_version}. The check starts after the next runner rebuild."
+        )
+        print(f"::warning::{detail}")
+        return detail
+    try:
+        runner_older = _sdk_version_key(runner_version) < _sdk_version_key(ref_version)
+    except ValueError as exc:
+        raise SystemExit(f"::error::runner SDK check failed: {exc}") from exc
+    if runner_older:
+        raise SystemExit(
+            f"::error::{after} locks infra2-sdk {ref_version} in uv.lock, but the IaC "
+            f"runner has infra2-sdk {runner_version}. The runner compiles the composes "
+            "with its own SDK, so the deploy would fail midway. The runner is rebuilt "
+            "only in a production promotion (the bootstrap step of "
+            "reconcile-iac-inputs.yml). Keep the old SDK pin until the runner is rebuilt."
+        )
+    return f"runner infra2-sdk {runner_version} >= {after} locked {ref_version}"
+
+
 def run_operation(
     args: argparse.Namespace,
     repo_root: Path,
@@ -3425,6 +3706,25 @@ def run_operation(
                         "::error::app hook env check failed: "
                         + "; ".join(map(str, errors))
                     )
+            # Before any deploy unit: the runner SDK must compile the composes of the ref.
+            # The green verdict keeps its detail, so a "runner SDK unknown" warning shows.
+            sdk_began = time.monotonic()
+            sdk_ok, sdk_detail = False, ""
+            try:
+                sdk_detail = assert_runner_sdk_covers_ref(args.after, repo_root)
+                sdk_ok = True
+            except BaseException as exc:
+                sdk_detail = str(exc) or type(exc).__name__
+                raise
+            finally:
+                checks.append(
+                    CheckVerdict(
+                        "runner_sdk",
+                        sdk_ok,
+                        sdk_detail[:300],
+                        seconds=round(time.monotonic() - sdk_began, 3),
+                    )
+                )
         except BaseException:
             stage.emit("operation", started, checks)
             _write_payload(
@@ -3806,18 +4106,25 @@ def main(argv: list[str] | None = None) -> int:
         help="validate 5-slot schema v2 runtime-hooks.manifest.json contracts for registered Apps (#1608)",
     )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
+    parser.add_argument(
+        "--artifacts-dir",
+        default="",
+        help="optional persistent directory for --run-scheduled-audit hook artifacts",
+    )
     args = parser.parse_args(argv)
     promote_prod = bool(args.promote_prod or args.target_env in ("prod", "production"))
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
     if args.run_scheduled_audit:
+        started_at = utc_now()
         hook_results = run_scheduled_app_audits(
             repo_root,
             target_env=target_env,
             slot="scheduled_audit",
             base_domain=args.domain,
             services=args.sync_service or None,
+            artifacts_dir=Path(args.artifacts_dir) if args.artifacts_dir else None,
         )
         out_payload = {"scheduled_audit_results": hook_results}
         print(json.dumps(out_payload, sort_keys=True))
@@ -3825,6 +4132,9 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.output_json).write_text(
                 json.dumps(out_payload, indent=2), encoding="utf-8"
             )
+        _emit_scheduled_audit_stage_record(
+            hook_results, repo_root=repo_root, started_at=started_at
+        )
         return 1 if any(item.get("status") != "pass" for item in hook_results) else 0
     if args.audit_app_hooks:
         audit_res = audit_app_hooks(

@@ -228,10 +228,32 @@ curl https://iac.{domain}/health
 ```json
 {
   "status": "healthy",
-  "version": "1.0.0",
-  "uptime": 3600
+  "checks": {"http": true, "vault_secrets": true, "git_workspace": true},
+  "in_flight_deploys": 0,
+  "git_sha": "52bb8bb",
+  "sdk_version": "<image SDK>",
+  "task_sdk": "ref_lock"
 }
 ```
+
+- `git_sha` is the HEAD of the workspace checkout. It is not the commit that built the image.
+- `sdk_version` is the infra2-sdk version installed in the image (`unknown` when absent).
+- `task_sdk=ref_lock`: each deploy task runs under the `uv.lock` of its ref (§4.2.1).
+- Before the first deploy unit, the reconcile runs the check `runner_sdk` (#1822).
+- A runner with `task_sdk=ref_lock` passes the check.
+- For a runner without `task_sdk`, the check compares `sdk_version` with `<tag>:uv.lock`. An older SDK stops the run.
+- A runner without `sdk_version` gives the warning `runner SDK unknown`, and the run continues.
+
+#### 4.2.1 Deploy task environment (ref lock)
+
+- After the checkout, `sync_runner.prepare_ref_env` runs `uv sync --locked --no-dev --no-install-project`.
+- The venv is `/workspace/.ref-envs/<uv.lock sha256[:16]>`. The uv cache is `/workspace/.uv-cache`. Both are on the workspace volume.
+- A venv with the marker `.infra2-synced` is used again. A venv without the marker is removed and built again.
+- The runner keeps the 3 newest venvs (about 92 MB each).
+- The sync timeout is `REF_ENV_SYNC_TIMEOUT` (600 s).
+- The deploy result `ref_env` records `sdk_version`, `lock_sha256`, `seconds` and `reused`.
+- A failed sync fails the deploy with `ref venv (uv sync --locked) failed: ...`. No task falls back to the image SDK.
+- The runner process itself still imports the checkout `common/` with the image SDK (task discovery and fan-out).
 
 ### 4.3 `/webhook` - GitHub Webhook（验签后 `ignored`）
 

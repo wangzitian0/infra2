@@ -42,23 +42,6 @@ repositories:
       - README.md
       - pyproject.toml
 
-  - id: oh-my-code-agent
-    path: oh-my-code-agent
-    checkout: submodule
-    role: workspace-tooling
-    governance: coordinated
-    contract: snapshot
-    source: https://github.com/wangzitian0/oh-my-code-agent
-    release_identity: tool-release-or-pinned-commit
-    # Not every workspace checkout needs TUI tooling day one — an uninitialized
-    # checkout here is a real, accepted state, not drift (#506).
-    optional: true
-    authority:
-      - AGENTS.md
-      - init.md
-      - README.md
-      - docs/README.md
-
   - id: finance-report
     path: repos/finance_report
     checkout: submodule
@@ -88,7 +71,7 @@ repositories:
     contract: snapshot
     source: https://github.com/wangzitian0/truealpha
     release_identity: app-image-ref-or-digest
-    release_tag: v0.2.144
+    release_tag: v0.3.2
     sdk_lock: uv.lock
     # The production host is the bare product domain (Deployer.domain of truealpha/app).
     health:

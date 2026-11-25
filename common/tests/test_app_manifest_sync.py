@@ -273,3 +273,17 @@ def test_the_stack_supplies_every_contract_field_of_the_generated_copy(service) 
     assert contract, f"{service.id}: the copy declares no contract field"
     unsupplied = sorted(set(contract) - _supplied_names(ROOT / service.directory))
     assert unsupplied == []
+
+
+def test_canary_todo_manifest_conforms_to_shared_env_and_supplies_contract() -> None:
+    """platform/30.todo/env.manifest.json conforms to shared_env and stack supply."""
+    from infra2_sdk.runtime.environment import check_shared_env_conformance
+
+    directory = ROOT / "platform/30.todo"
+    copy = (directory / "env.manifest.json").read_text(encoding="utf-8")
+    manifest = EnvironmentManifest.from_dict(json.loads(copy))
+    assert manifest.validate_offline() == []
+    assert check_shared_env_conformance([f.env for f in manifest.fields]) == []
+    vault_backed = {f.env for f in manifest.fields if f.source != "code"}
+    assert vault_backed
+    assert sorted(vault_backed - _supplied_names(directory)) == []

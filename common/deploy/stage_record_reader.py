@@ -57,6 +57,10 @@ WRITERS: dict[str, tuple[str, frozenset[str]]] = {
         _RECONCILE,
         frozenset({"push", "workflow_dispatch"}),
     ),
+    "staging.provider_regression": (
+        ".github/workflows/ops-checks.yml",
+        frozenset({"schedule", "workflow_dispatch"}),
+    ),
     "prod.release_integrity": (_RECONCILE, frozenset({"push", "workflow_dispatch"})),
     "github_ci.merge_authority": (
         ".github/workflows/infra-ci.yml",
