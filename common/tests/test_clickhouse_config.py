@@ -58,7 +58,7 @@ def test_platform_clickhouse_users_async_insert() -> None:
 
 
 def test_openpanel_clickhouse_bounds() -> None:
-    config_path = ROOT / "platform/24.openpanel/clickhouse/clickhouse-config.xml"
+    config_path = ROOT / "platform/24.openpanel/clickhouse-config.xml"
     assert config_path.exists()
     cfg_root = ET.fromstring(config_path.read_text(encoding="utf-8"))
 
@@ -66,7 +66,7 @@ def test_openpanel_clickhouse_bounds() -> None:
     assert pool_elem is not None
     assert int(pool_elem.text) <= 64
 
-    user_path = ROOT / "platform/24.openpanel/clickhouse/clickhouse-user-config.xml"
+    user_path = ROOT / "platform/24.openpanel/clickhouse-user-config.xml"
     assert user_path.exists()
     usr_root = ET.fromstring(user_path.read_text(encoding="utf-8"))
 

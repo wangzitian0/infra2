@@ -1,7 +1,11 @@
 """OpenPanel deployment with vault-init"""
 
 import sys
+from pathlib import Path
+
+from common.deploy.config_hash import prepare_delivered_mounts
 from common.deploy.deployer import Deployer, make_tasks
+from common.deploy.host_files import deliver_host_files
 from common.core.environ import with_env_suffix
 from common.security.store import get_secrets, vault_token
 from common.console import success, warning, info, error
@@ -188,6 +192,36 @@ class OpenPanelDeployer(Deployer):
 
         return True
 
+    # The op-ch container reads these files (#1822). A raw compose has no checkout, so
+    # composing() writes each one to ${DATA_PATH}/<name> and the compose mounts that.
+    CLICKHOUSE_FILES = {
+        "clickhouse-config.xml": "0644",
+        "clickhouse-user-config.xml": "0644",
+        "clickhouse-init-db.sh": "0755",
+    }
+
+    @classmethod
+    def composing(cls, c, env_vars):
+        """Deliver the op-ch files to the host, then deploy (`sync` skips pre_compose)."""
+        e = cls.env()
+        here = Path(__file__).parent
+        data_path = cls.data_path_for_env(e)
+        contents = {name: (here / name).read_bytes() for name in cls.CLICKHOUSE_FILES}
+        files = {
+            f"{data_path}/{name}": (contents[name], mode)
+            for name, mode in cls.CLICKHOUSE_FILES.items()
+        }
+        env_vars.update(
+            prepare_delivered_mounts(
+                delivered=deliver_host_files(cls._on_host(c, e), files),
+                error_message=f"Failed to deliver the op-ch files to {data_path}",
+                rendered=contents,
+                service=cls.service,
+                template_dir=here,
+            )
+        )
+        return super().composing(c, env_vars)
+
     @classmethod
     def pre_compose(cls, c):
         """Prepare directories, check dependencies, ensure secrets exist in Vault."""
@@ -249,7 +283,7 @@ class OpenPanelDeployer(Deployer):
         # ClickHouse (op-ch in compose.yaml) because the shared
         # platform-clickhouse is pinned to 25.5 by SigNoz while OpenPanel v2
         # requires 25.10. The op-ch container self-creates the `openpanel`
-        # database via clickhouse/init-db.sh, so no provisioning is needed here.
+        # database via clickhouse-init-db.sh, so no provisioning is needed here.
         #
         # op-ch data lives on a durable host bind mount (${DATA_PATH}/op-ch) rather
         # than a Dokploy named volume, which gets recreated with a new hash on

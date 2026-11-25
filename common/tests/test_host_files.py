@@ -26,6 +26,15 @@ DELIVERED = {
         "token-init",
         {"init-token.sh": "0755"},
     ),
+    "platform/24.openpanel": (
+        "OpenPanelDeployer",
+        "op-ch",
+        {
+            "clickhouse-config.xml": "0644",
+            "clickhouse-user-config.xml": "0644",
+            "clickhouse-init-db.sh": "0755",
+        },
+    ),
 }
 
 

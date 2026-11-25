@@ -34,7 +34,7 @@ def test_every_clickhouse_service_has_a_compose_mem_limit():
 
 
 def test_op_ch_has_an_absolute_server_memory_cap():
-    cfg = (ROOT / "platform/24.openpanel/clickhouse/clickhouse-config.xml").read_text(
+    cfg = (ROOT / "platform/24.openpanel/clickhouse-config.xml").read_text(
         encoding="utf-8"
     )
     assert "<max_server_memory_usage>" in cfg, (
