@@ -39,6 +39,7 @@ __all__ = [
     "COMPILED_FILES",
     "check",
     "committed_files",
+    "escape_composed_url_secrets",
     "load_manifest",
     "manifest_file",
     "merged_manifest",
@@ -100,7 +101,7 @@ _COMPOSED_URL_LINE_RE = re.compile(
 _SECRET_DATA_KEY_RE = re.compile(r"(?<!\(urlquery )\.Data\.data\.([A-Za-z0-9_]+)")
 
 
-def _escape_composed_url_secrets(template: str) -> str:
+def escape_composed_url_secrets(template: str) -> str:
     """Percent-encode Vault secret values interpolated into ``composed_from`` URLs."""
 
     def _rewrite_line(match: re.Match[str]) -> str:
@@ -128,7 +129,7 @@ def render(service: Service, *, root: Path | None = None) -> dict[str, str]:
         "source_env": service.source_env,
     }
     outputs = {
-        "secrets.ctmpl": _escape_composed_url_secrets(
+        "secrets.ctmpl": escape_composed_url_secrets(
             render_agent_template(
                 manifest, exclude_groups=service.exclude_groups, **kwargs
             )

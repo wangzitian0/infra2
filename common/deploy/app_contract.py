@@ -54,6 +54,8 @@ from infra2_sdk.runtime import merge_manifests
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
+from common.security.secrets_render import escape_composed_url_secrets
+
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.fetch_app_manifests import http_get
 from common.core.registry import ServiceMeta, domain_for_service, service_attrs
@@ -355,12 +357,14 @@ def render_release_template(
         source=service.id,
         fields=tuple(merged_fields.values()),
     )
-    template = render_agent_template(
-        merged,
-        project=service.project,
-        service=service.service,
-        source_env=service.source_env,
-        exclude_groups=service.exclude_groups,
+    template = escape_composed_url_secrets(
+        render_agent_template(
+            merged,
+            project=service.project,
+            service=service.service,
+            source_env=service.source_env,
+            exclude_groups=service.exclude_groups,
+        )
     )
     policy = render_agent_policy(
         merged,
