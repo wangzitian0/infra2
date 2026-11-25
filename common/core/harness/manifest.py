@@ -19,7 +19,6 @@ ALLOWED_CHECKOUTS = {"root", "submodule"}
 ALLOWED_ROLES = {
     "infrastructure-control-plane",
     "cross-repository-contract",
-    "workspace-tooling",
     "external-application",
 }
 ALLOWED_GOVERNANCE = {"local", "coordinated", "autonomous"}
@@ -352,7 +351,6 @@ def _validate_repository_entry(
     expected_gov = {
         "infrastructure-control-plane": "local",
         "cross-repository-contract": "coordinated",
-        "workspace-tooling": "coordinated",
         "external-application": "autonomous",
     }.get(role)
     if expected_gov is not None and governance != expected_gov:

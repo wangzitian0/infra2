@@ -22,10 +22,7 @@ only) and takes `OTEL_SERVICE_NAME` (`truealpha-app`) and `OTEL_RESOURCE_ATTRIBU
 from the deployment, never from Vault or a compose default. web gets none of it (Node, no
 OTel SDK). Contract: `docs/ssot/ops.observability.md` 4.2.
 
-The data engine (`../20.data_engine/`) is issued no telemetry: its Dagster roles run with
-`network_mode: host`, where the collector's Docker DNS name does not resolve, and the
-collector port is never published. With no endpoint the application-side exporter stays
-off, so no identity is issued either; it needs a host-reachable ingest first.
+The data engine (`../20.data_engine/`) exports OTLP HTTP to `127.0.0.1:14318` as `truealpha-data-engine` (`../20.data_engine/compose.yaml`).
 
 ## Deploy model
 
@@ -41,5 +38,5 @@ export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/bootstrap/vault/Root Token/Root T
 DEPLOY_ENV=<env> invoke vault.setup-approle --project=truealpha --service=app
 python -m tools.deploy_v2 --service truealpha/app --type staging --iac-ref vX.Y.Z --domain zitian.party
 invoke ta-app.shared.status
-curl https://truealpha-staging.zitian.party/api/health
+curl https://truealpha-staging.truealpha.club/api/health
 ```

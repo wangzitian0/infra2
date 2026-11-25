@@ -12,12 +12,10 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import Any
 
 import httpx
 from infra2_sdk.ci import parse_github_time
 from infra2_sdk.refs import ReleaseError, assert_after_on_main, resolve_image_digest
-from infra2_sdk.secrets import vault_token_status
 
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.deploy.contract import (
@@ -44,25 +42,6 @@ def parse_env_var(env_text: str | None, key: str) -> str | None:
     return val or None
 
 
-def extract_vault_token_from_env(env_text: str | None) -> tuple[bool, str | None]:
-    """Parse Dokploy compose env string for legacy VAULT_APP_TOKEN.
-
-    Returns:
-        (is_approle, token_or_none)
-    """
-    if not env_text:
-        return False, None
-
-    # AppRole services authenticate via VAULT_ROLE_ID/VAULT_SECRET_ID.
-    if parse_env_var(env_text, "VAULT_ROLE_ID") and parse_env_var(
-        env_text, "VAULT_SECRET_ID"
-    ):
-        return True, None
-
-    token = parse_env_var(env_text, "VAULT_APP_TOKEN")
-    return False, token
-
-
 def check_approle_creds(compose_text: str, env_text: str | None) -> list[str]:
     """Return missing AppRole credentials if the compose uses AppRole auth."""
     if "VAULT_ROLE_ID" not in compose_text and "VAULT_SECRET_ID" not in compose_text:
@@ -73,44 +52,6 @@ def check_approle_creds(compose_text: str, env_text: str | None) -> list[str]:
         for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID", "VAULT_ADDR")
         if not parse_env_var(env_text, key)
     ]
-
-
-def verify_token_status(
-    token: str,
-    vault_addr: str,
-    *,
-    min_ttl_hours: int = 24,
-    verifier: Any = None,
-) -> dict:
-    """Verify a Vault token via infra2-sdk vault_token_status.
-
-    Returns the contract dict expected by Deployer and promote:
-    valid, ttl_hours, renewable, error, details.
-    """
-    if verifier is not None:
-        res = verifier(token, addr=vault_addr, min_ttl_hours=min_ttl_hours)
-        if isinstance(res, dict):
-            return res
-        return {
-            "valid": bool(res),
-            "ttl_hours": getattr(res, "ttl_hours", -1),
-            "renewable": bool(getattr(res, "renewable", False)),
-            "error": getattr(res, "error", None),
-            "details": getattr(res, "details", ""),
-        }
-
-    status = vault_token_status(vault_addr, token, min_ttl_seconds=min_ttl_hours * 3600)
-    is_valid = bool(status.valid)
-    ttl_h = status.ttl_hours if status.ttl_seconds >= 0 else -1
-    err = None if is_valid else (status.error or "invalid token")
-    details = f"Token OK (TTL: {ttl_h}h)" if is_valid else f"Token invalid: {err}"
-    return {
-        "valid": is_valid,
-        "ttl_hours": ttl_h,
-        "renewable": bool(status.renewable),
-        "error": err,
-        "details": details,
-    }
 
 
 def _infra2_owner_name(repo: str) -> str:

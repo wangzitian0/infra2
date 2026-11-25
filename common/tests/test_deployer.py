@@ -754,90 +754,6 @@ class TestDeployerVaultTokenPreflight:
 
         return DummyDeployer
 
-    def test_sync_fails_when_vault_token_is_invalid(self, monkeypatch):
-        import common.deploy.deployer as deployer
-
-        dummy = self._deployer()
-        monkeypatch.setattr(deployer, "validate_env", lambda: [])
-        monkeypatch.setattr(
-            dummy,
-            "verify_vault_app_token",
-            classmethod(lambda cls: {"valid": False, "details": "Token invalid"}),
-        )
-
-        result = dummy.sync(MagicMock())
-
-        assert result["action"] == "failed"
-        assert "VAULT_APP_TOKEN issue" in result["details"]
-        assert "Token invalid" in result["details"]
-
-    def test_sync_fails_when_vault_token_ttl_is_low(self, monkeypatch):
-        import common.deploy.deployer as deployer
-
-        dummy = self._deployer()
-        monkeypatch.setattr(deployer, "validate_env", lambda: [])
-        monkeypatch.setattr(
-            dummy,
-            "verify_vault_app_token",
-            classmethod(lambda cls: {"valid": True, "ttl_hours": 12}),
-        )
-
-        result = dummy.sync(MagicMock())
-
-        assert result["action"] == "failed"
-        assert "expires in 12h" in result["details"]
-
-    def test_sync_fails_when_vault_token_cannot_be_verified(self, monkeypatch):
-        import common.deploy.deployer as deployer
-
-        dummy = self._deployer()
-        monkeypatch.setattr(deployer, "validate_env", lambda: [])
-
-        def raise_error():
-            raise RuntimeError("Vault unavailable")
-
-        monkeypatch.setattr(
-            dummy, "verify_vault_app_token", classmethod(lambda cls: raise_error())
-        )
-
-        result = dummy.sync(MagicMock())
-
-        assert result["action"] == "failed"
-        assert "Could not verify VAULT_APP_TOKEN" in result["details"]
-        assert "Vault unavailable" in result["details"]
-
-    def test_verify_vault_app_token_skips_for_approle_service(self, monkeypatch):
-        """#369: a vestigial VAULT_APP_TOKEN on an AppRole service must not gate deploys —
-        it would expire un-renewed and hard-block a redeploy that would clean it up."""
-        import common.deploy.deployer as deployer
-        import common.deploy.dokploy_client as dokploy
-
-        dummy = self._deployer()
-
-        class _Client:
-            def find_compose_by_name(self, *_a, **_k):
-                return {
-                    "env": "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_APP_TOKEN=hvs.stale"
-                }
-
-        monkeypatch.setattr(dokploy, "get_dokploy", lambda **_k: _Client())
-        monkeypatch.setattr(
-            dummy,
-            "env",
-            classmethod(
-                lambda cls: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"}
-            ),
-        )
-
-        def _boom(*_a, **_k):
-            raise AssertionError("AppRole service must not hit verify_vault_token")
-
-        monkeypatch.setattr(deployer, "verify_vault_token", _boom)
-
-        status = dummy.verify_vault_app_token()
-        assert status["valid"] is True
-        assert "AppRole" in status["details"]
-
 
 def test_s3_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
     """Infra-011: sync must ensure all S3 template fields, not only password."""
@@ -1750,7 +1666,29 @@ def test_sync_pipeline_logs_error_on_preflight_failures(monkeypatch) -> None:
     from common.deploy.deployer import Deployer
     from common.deploy.sync_pipeline import ConsoleLogger, SyncPipeline
 
-    class DummyDeployer(Deployer):
+    class MissingEnvDeployer(Deployer):
+        service = "dummy"
+        compose_path = "platform/07.alerting/compose.yaml"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "staging", "INTERNAL_DOMAIN": "zitian.party"}
+
+        @classmethod
+        def validate_preflight_env(cls):
+            return ["VPS_HOST"]
+
+    errors_env: list[str] = []
+    res_env = SyncPipeline(
+        deployer=MissingEnvDeployer,
+        context=MagicMock(),
+        force=False,
+        logger=ConsoleLogger(error=lambda msg, *_a: errors_env.append(msg)),
+    ).run()
+    assert res_env["action"] == "failed"
+    assert any("Error: Missing env: VPS_HOST" in e for e in errors_env)
+
+    class RuntimeSecretsFailDeployer(Deployer):
         service = "dummy"
         compose_path = "platform/07.alerting/compose.yaml"
 
@@ -1763,21 +1701,19 @@ def test_sync_pipeline_logs_error_on_preflight_failures(monkeypatch) -> None:
             return []
 
         @classmethod
-        def verify_vault_app_token(cls):
-            raise ImportError(
-                "cannot import name 'assert_after_on_main' from 'infra2_sdk.refs'"
-            )
+        def ensure_runtime_secrets(cls, c):
+            return False
 
-    errors: list[str] = []
-    logger = ConsoleLogger(error=lambda msg, *_a: errors.append(msg))
-    pipeline = SyncPipeline(
-        deployer=DummyDeployer, context=MagicMock(), force=False, logger=logger
-    )
-    res = pipeline.run()
-    assert res["action"] == "failed"
+    errors_vault: list[str] = []
+    res_vault = SyncPipeline(
+        deployer=RuntimeSecretsFailDeployer,
+        context=MagicMock(),
+        force=False,
+        logger=ConsoleLogger(error=lambda msg, *_a: errors_vault.append(msg)),
+    ).run()
+    assert res_vault["action"] == "failed"
     assert any(
-        "Error: Could not verify VAULT_APP_TOKEN:" in e and "assert_after_on_main" in e
-        for e in errors
+        "Error: Failed to ensure runtime secrets for dummy" in e for e in errors_vault
     )
 
 

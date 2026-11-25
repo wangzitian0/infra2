@@ -32,8 +32,8 @@ also use) and:
    argument list on the VPS.
 
 The image owns the check code: infra2 sends only metadata names. An image whose
-infra2-sdk has no ``runtime.schema_check`` (finance_report before v0.2.92; infra2-sdk#239)
-cannot evaluate. ``_LAUNCHER`` then exits ``EXIT_NOT_EVALUATED`` and the gate blocks.
+infra2-sdk lacks ``runtime.schema_check`` cannot evaluate. ``_LAUNCHER`` then exits
+``EXIT_NOT_EVALUATED`` and the gate blocks.
 
 Fail-closed: exit 0 with a ``ROLLBACK_CLASS`` line is the only pass. Exit 1 (blocked),
 exit 3 (not evaluated) and every other result -- an SSH or docker transport failure, a
@@ -86,7 +86,12 @@ _SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
     "finance_report/app": SchemaCheckSpec(
         image_repository="ghcr.io/wangzitian0/finance_report-backend",
         metadata="src.database:Base.metadata",
-        imports=("src.orm_registry",),
+        imports=(
+            "src.counter.extension.sql",
+            "src.identity.extension.sql",
+            "src.orm_registry",
+            "src.platform.extension.sql",
+        ),
     ),
 }
 

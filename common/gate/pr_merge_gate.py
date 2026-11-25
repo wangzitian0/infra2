@@ -233,11 +233,6 @@ def main(
         action="store_true",
         help="ask Copilot to review the head when no automated review of it exists",
     )
-    parser.add_argument(
-        "--audit",
-        action="store_true",
-        help="run OMCA fast audit and block merge on critical architectural or blindfold findings",
-    )
     parser.add_argument("--json", action="store_true", help="machine-readable verdict")
     args = parser.parse_args(argv)
 
@@ -401,38 +396,6 @@ def main(
             sleep(delay)
             continue
         break
-    if args.audit:
-        try:
-            from common.gate.omca_policy import evaluate_audit_report
-
-            audit_proc = subprocess.run(
-                ["omca", "audit", "--json", "--mode", "fast"],
-                capture_output=True,
-                text=True,
-                check=False,
-                stdin=subprocess.DEVNULL,
-                timeout=30.0,
-            )
-            if audit_proc.returncode != 0:
-                verdict.reasons.append(
-                    f"omca audit failed to run (rc={audit_proc.returncode}): {audit_proc.stderr.strip()[:100]}"
-                )
-                verdict.ready = False
-                verdict.unevaluable = True
-            else:
-                report = json.loads(audit_proc.stdout)
-                passed, blocking, _ = evaluate_audit_report(
-                    report, expect_sha=facts.head_sha
-                )
-                if not passed:
-                    for b in blocking:
-                        verdict.reasons.append(f"omca audit blocked: {b}")
-                    verdict.ready = False
-                    verdict.action_required = True
-        except Exception as exc:
-            verdict.reasons.append(f"omca audit execution error: {exc}")
-            verdict.ready = False
-            verdict.unevaluable = True
     if args.json:
         print(
             json.dumps(

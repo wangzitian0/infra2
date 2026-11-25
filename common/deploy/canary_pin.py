@@ -29,9 +29,9 @@ CANARY_COMPOSE_REL = "platform/30.todo/compose.yaml"
 CANARY_IMAGE_REPOSITORY = "ghcr.io/wangzitian0/infra2-canary-todo"
 CANARY_SERVICE = "todo"
 
-# Lower bound: the oldest SDK an app still pins (finance_report and truealpha, 3.32.0).
-# Upper bound: the next major after 4.x. Narrow the lower bound after every app moves.
-APP_SDK_RANGE: tuple[str, str] = ("3.32.0", "5.0.0")
+# Lower bound: the oldest SDK an app runs in staging or production (4.5.0).
+# Upper bound: the next major after 4.x. Narrow to 4.6.0 after apps promote 4.6.0.
+APP_SDK_RANGE: tuple[str, str] = ("4.5.0", "5.0.0")
 
 _PIN_RE = re.compile(
     rf"^{re.escape(CANARY_IMAGE_REPOSITORY)}:v(?P<version>\d+\.\d+\.\d+)"

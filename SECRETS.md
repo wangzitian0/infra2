@@ -1,7 +1,8 @@
 # Secrets — infra2's role
 
 infra2 is the **deployed-secret source of truth**: Vault KV v2 plus
-`secrets.ctmpl` templates, rendered into containers by the vault-agent sidecar
+`x-infra2` compiled sidecar templates (with legacy `secrets.ctmpl` on unmigrated
+stacks), rendered into containers by the vault-agent sidecar
 (no disk persistence; tmpfs). It supplies whatever a deployed app declares it
 requires, and is rigorous, IaC-style, and assumed always-on.
 

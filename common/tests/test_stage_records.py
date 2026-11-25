@@ -105,11 +105,13 @@ def test_writer_emits_three_valid_records(monkeypatch, tmp_path) -> None:
         "app_pins",
     ]
     # `hook_env` needs the secret values, which only the `operation` job holds (#1646)
-    assert [(c.name, c.seconds) for c in loaded["operation"].checks][1:] == [
+    assert [(c.name, c.seconds) for c in loaded["operation"].checks][2:] == [
         ("staging:platform/alerting", 12.5),
         ("platform/alerting:smoke", 3.0),
     ]
     assert loaded["operation"].checks[0].name == "hook_env"
+    # the runner SDK check runs before the first deploy unit (#1822)
+    assert loaded["operation"].checks[1].name == "runner_sdk"
     assert [(c.name, c.seconds) for c in loaded["post"].checks] == [
         ("platform/alerting:staging_gate", 3.0)
     ]
@@ -1255,3 +1257,94 @@ def test_hookless_production_promotion_writes_post_record_and_card_passes(
     assert len(post) == 1 and post[0].verdict == "pass"
     assert post[0].checks[0].name == "hooks" and post[0].checks[0].ok is True
     assert render_stage_card(loaded)["header"]["title"]["content"].endswith("Passed")
+
+
+def test_staging_provider_regression_writer_and_scheduled_audit_stage_record(
+    monkeypatch, tmp_path
+) -> None:
+    """scheduled_audit emits a valid staging.provider_regression StageRecord and WRITERS trusts ops-checks.yml."""
+    assert stage_records.WRITERS["staging.provider_regression"] == (
+        ".github/workflows/ops-checks.yml",
+        frozenset({"schedule", "workflow_dispatch"}),
+    )
+
+    empty_checks = reconcile._scheduled_audit_stage_checks([])
+    assert len(empty_checks) == 1
+    assert empty_checks[0].ok is False
+
+    expanded = reconcile._scheduled_audit_stage_checks(
+        [
+            {
+                "service": "finance_report/app",
+                "slot": "scheduled_audit",
+                "status": "fail",
+                "checks": [
+                    {
+                        "name": "audit_replay",
+                        "ok": False,
+                        "seconds": 12.0,
+                        "detail": "failed",
+                    },
+                    {
+                        "name": "audit_replay",
+                        "ok": True,
+                        "seconds": 1.0,
+                        "skipped": True,
+                        "detail": "skipped",
+                    },
+                ],
+            }
+        ]
+    )
+    assert [c.name for c in expanded] == [
+        "finance_report/app:audit_replay",
+        "finance_report/app:audit_replay#1",
+    ]
+    assert expanded[0].ok is False
+    assert expanded[1].skipped is True and expanded[1].ok is False
+
+    record_dir = tmp_path / "stage-records"
+    github_env = tmp_path / "github_env"
+    monkeypatch.setenv("STAGE_RECORD_DIR", str(record_dir))
+    monkeypatch.setenv("GITHUB_ENV", str(github_env))
+    monkeypatch.setenv("GITHUB_SHA", TAG_COMMIT)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "wangzitian0/infra2")
+    monkeypatch.setenv("GITHUB_RUN_ID", "888")
+    monkeypatch.setattr(reconcile, "sdk_unit", lambda: "sdk:4.6.0")
+
+    record = reconcile._emit_scheduled_audit_stage_record(
+        [
+            {
+                "service": "finance_report/app",
+                "slot": "scheduled_audit",
+                "status": "pass",
+                "checks": [
+                    {
+                        "name": "pdf_corpus_oracle",
+                        "ok": True,
+                        "seconds": 4.2,
+                        "detail": "ok",
+                    }
+                ],
+            }
+        ],
+        repo_root=tmp_path,
+        started_at="2026-11-25T02:37:00Z",
+    )
+    assert record is not None
+    expected_name = f"stage-staging.provider_regression-post-sha-{TAG_COMMIT}"
+    record_file = record_dir / f"{expected_name}.json"
+    assert record_file.is_file()
+    loaded = StageRecord.from_dict(json.loads(record_file.read_text(encoding="utf-8")))
+    assert loaded.env == "staging.provider_regression"
+    assert loaded.phase == "post"
+    assert loaded.event == "schedule"
+    assert loaded.subject == f"sha:{TAG_COMMIT}"
+    assert loaded.verdict == "pass"
+    assert [c.name for c in loaded.checks] == ["finance_report/app:pdf_corpus_oracle"]
+    assert f"STAGE_RECORD_POST={expected_name}" in github_env.read_text(
+        encoding="utf-8"
+    )

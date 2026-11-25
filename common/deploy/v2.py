@@ -118,7 +118,6 @@ class DeployOptions:
     force_promote: bool = False
     pause_rollback: bool = False
     max_rollback_attempts: int = 2
-    verify_vault: bool = True
     verify_config: bool = True
     verify_smoke: bool = True
     verify_ingestion: bool = False
@@ -779,7 +778,6 @@ def _deploy_fixed_v2(
                 force_promote=opt.force_promote,
                 pause_rollback=opt.pause_rollback,
                 max_rollback_attempts=opt.max_rollback_attempts,
-                verify_vault=opt.verify_vault,
                 verify_config=opt.verify_config,
                 verify_smoke=opt.verify_smoke,
                 verify_ingestion=opt.verify_ingestion,
@@ -1072,11 +1070,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="positive RL-DATA-1 signal — required for any prod-data deploy",
     )
     parser.add_argument(
-        "--skip-vault-check",
-        action="store_true",
-        help="skip the VAULT_APP_TOKEN TTL preflight (default: verify, fixed envs only)",
-    )
-    parser.add_argument(
         "--no-verify-config",
         action="store_true",
         help="skip the post-deploy effective CONFIGURATION_SHA256 check (default: verify)",
@@ -1217,7 +1210,6 @@ def main(argv: list[str] | None = None) -> int:
             force_promote=args.force_promote,
             pause_rollback=args.pause_rollback,
             max_rollback_attempts=args.max_rollback_attempts,
-            verify_vault=not args.skip_vault_check,
             verify_config=not args.no_verify_config,
             verify_smoke=not args.no_verify_smoke,
             verify_ingestion=args.verify_ingestion,
