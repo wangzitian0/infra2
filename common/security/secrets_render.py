@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import re
 import sys
 from pathlib import Path
 
@@ -38,6 +39,7 @@ __all__ = [
     "COMPILED_FILES",
     "check",
     "committed_files",
+    "escape_composed_url_secrets",
     "load_manifest",
     "manifest_file",
     "merged_manifest",
@@ -92,6 +94,22 @@ def render_agent_config() -> str:
     return VAULT_AGENT_HCL_TEMPLATE
 
 
+_COMPOSED_URL_LINE_RE = re.compile(
+    r'^[A-Z][A-Z0-9_]*=\{\{ printf "%q" \(printf "[^"]*://[^"]*" .*\)\s*\}\}$',
+    re.MULTILINE,
+)
+_SECRET_DATA_KEY_RE = re.compile(r"(?<!\(urlquery )\.Data\.data\.([A-Za-z0-9_]+)")
+
+
+def escape_composed_url_secrets(template: str) -> str:
+    """Percent-encode Vault secret values interpolated into ``composed_from`` URLs."""
+
+    def _rewrite_line(match: re.Match[str]) -> str:
+        return _SECRET_DATA_KEY_RE.sub(r"(urlquery .Data.data.\1)", match.group(0))
+
+    return _COMPOSED_URL_LINE_RE.sub(_rewrite_line, template)
+
+
 def render(service: Service, *, root: Path | None = None) -> dict[str, str]:
     """The files of ``service``. ``root`` holds the manifests; the default is ``ROOT``.
 
@@ -111,8 +129,10 @@ def render(service: Service, *, root: Path | None = None) -> dict[str, str]:
         "source_env": service.source_env,
     }
     outputs = {
-        "secrets.ctmpl": render_agent_template(
-            manifest, exclude_groups=service.exclude_groups, **kwargs
+        "secrets.ctmpl": escape_composed_url_secrets(
+            render_agent_template(
+                manifest, exclude_groups=service.exclude_groups, **kwargs
+            )
         ),
         "vault-agent.hcl": render_agent_config(),
     }

@@ -85,7 +85,7 @@ def test_todo_preview_render_holds_no_vault_path_no_approle_no_production_host()
     # Every data host of the slot carries the slot suffix: none is a production or
     # staging container.
     todo_env = services["todo"]["environment"]
-    for key in ("DATABASE_URL", "REDIS_HOST", "S3_ENDPOINT"):
+    for key in ("DATABASE_URL", "REDIS_URL", "S3_ENDPOINT"):
         assert "${ENV_SUFFIX}" in todo_env[key], (key, todo_env[key])
     assert client.created and client.created[0]["name"].endswith("-pr-5")
 
@@ -189,15 +189,15 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
         assert slot[field] == prod[field], field
     assert slot["healthcheck"]["test"] == prod["healthcheck"]["test"]
     shared = set(slot["environment"]) & set(prod["environment"])
-    assert len(shared) == 25
+    assert len(shared) == 23
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
     } == set()
     # The slot adds only the names that production renders from Vault in secrets.ctmpl.
     config = preview_service_config(SERVICE)
     added = set(slot["environment"]) - set(prod["environment"])
-    assert added == {"REDIS_PASSWORD", "S3_ACCESS_KEY", "S3_SECRET_KEY", "DATABASE_URL"}
-    assert added - {"DATABASE_URL"} < set(config.throwaway_secrets)
+    assert added == {"REDIS_URL", "S3_ACCESS_KEY", "S3_SECRET_KEY", "DATABASE_URL"}
+    assert added - {"DATABASE_URL", "REDIS_URL"} < set(config.throwaway_secrets)
     # Each throwaway secret has a reader in the slot compose file.
     text = (REPO_ROOT / "platform/30.todo/preview.compose.yaml").read_text()
     for name in config.throwaway_secrets:
@@ -251,6 +251,6 @@ def test_todo_template_composes_database_url_from_the_todo_password():
     assert (
         'DATABASE_URL={{ printf "%q" (printf '
         f'"postgresql://{role}:%s@{host.replace("${ENV_SUFFIX}", "%s")}:5432/postgres" '
-        '.Data.data.TODO_POSTGRES_PASSWORD (env "ENV_SUFFIX")) }}'
+        '(urlquery .Data.data.TODO_POSTGRES_PASSWORD) (env "ENV_SUFFIX")) }}'
     ) in template
     assert agent["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"

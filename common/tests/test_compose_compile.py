@@ -40,9 +40,8 @@ X_INFRA2_FILES = {
 
 
 # The Canary image has no default hosts: /api/canary/status turns red when the compiled
-# todo service lacks one of these.
+# todo service lacks one of these (REDIS_URL comes from Vault via _todo_template()).
 CANARY_HOSTS = {
-    "REDIS_HOST": "platform-redis${ENV_SUFFIX}",
     "S3_ENDPOINT": "http://platform-s3${ENV_SUFFIX}:9000",
     "SIGNOZ_OTEL_COLLECTOR": "http://platform-signoz-otel-collector:13133",
     "OPENPANEL_HEALTH_URL": "http://platform-openpanel-api:3000/healthcheck",
@@ -425,6 +424,7 @@ def test_the_compiled_todo_sets_each_canary_host() -> None:
     """The Canary image has no default hosts (#1822 Slice 2)."""
     env = yaml.safe_load(_todo_compiled())["services"]["todo"]["environment"]
     assert {name: env.get(name) for name in CANARY_HOSTS} == CANARY_HOSTS
+    assert "REDIS_URL=" in _todo_template()
 
 
 @pytest.mark.parametrize("name", sorted(CANARY_HOSTS))

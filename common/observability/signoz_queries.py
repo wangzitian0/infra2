@@ -65,6 +65,12 @@ def _version(version: str | None) -> str:
     return f" AND resources_string['service.version'] = {_literal(version, 'version')}"
 
 
+def _metric_version(version: str | None) -> str:
+    if version is None:
+        return ""
+    return f" AND resource_attrs['service.version'] = {_literal(version, 'version')}"
+
+
 def _signal_count_query(
     *,
     select_expr: str,
@@ -203,6 +209,7 @@ def gen_ai_spans_query(
     environment: str,
     call_site: str = "todo.summary",
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    version: str | None = None,
 ) -> str:
     """Build GenAI span counts, aligned attrs, privacy leak, and cost checks."""
     service = _literal(service_name, "service_name")
@@ -228,7 +235,7 @@ def gen_ai_spans_query(
         f"FROM {TRACES_TABLE} "
         f"WHERE serviceName = {service} "
         f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
-        f"AND timestamp >= now() - INTERVAL {seconds} SECOND"
+        f"AND timestamp >= now() - INTERVAL {seconds} SECOND" + _version(version)
     )
 
 
@@ -237,6 +244,7 @@ def gen_ai_metrics_query(
     service_name: str,
     environment: str,
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    version: str | None = None,
 ) -> str:
     """Build GenAI metric sample presence counts for one service."""
     service = _literal(service_name, "service_name")
@@ -260,7 +268,45 @@ def gen_ai_metrics_query(
         f"FROM {METRICS_TABLE} "
         f"WHERE resource_attrs['service.name'] = {service} "
         f"AND resource_attrs['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
-        f"AND unix_milli >= {bucket_cutoff} "
+        f"AND unix_milli >= {bucket_cutoff}"
+        f"{_metric_version(version)} "
+        f"AND {metric_filter}"
+        ")"
+    )
+
+
+def canary_metrics_query(
+    *,
+    service_name: str,
+    environment: str,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    version: str | None = None,
+) -> str:
+    """Build Canary probe custom OTel metric counts and latest UTC timestamp."""
+    service = _literal(service_name, "service_name")
+    env = _literal(environment, "environment")
+    seconds = _window(window_seconds)
+    cutoff = f"toUnixTimestamp64Milli(now64(3) - INTERVAL {seconds} SECOND)"
+    bucket_cutoff = f"intDiv({cutoff}, 3600000) * 3600000"
+    metric_filter = (
+        "(startsWith(metric_name, 'canary.probe.duration_ms') "
+        "OR metric_name = 'canary.probe.outcomes')"
+    )
+    return (
+        "SELECT "
+        "countIf(startsWith(metric_name, 'canary.probe.duration_ms')), "
+        "countIf(metric_name = 'canary.probe.outcomes'), "
+        "toDateTime(intDiv(max(unix_milli), 1000), 'UTC') "
+        f"FROM {SAMPLES_TABLE} "
+        f"WHERE unix_milli >= {cutoff} "
+        f"AND {metric_filter} "
+        "AND fingerprint GLOBAL IN ("
+        "SELECT DISTINCT fingerprint "
+        f"FROM {METRICS_TABLE} "
+        f"WHERE resource_attrs['service.name'] = {service} "
+        f"AND resource_attrs['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
+        f"AND unix_milli >= {bucket_cutoff}"
+        f"{_metric_version(version)} "
         f"AND {metric_filter}"
         ")"
     )

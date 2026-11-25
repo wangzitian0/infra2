@@ -15,6 +15,8 @@ from infra2_sdk.runtime.config_schema import (
 )
 from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
+from common.security.secrets_render import escape_composed_url_secrets
+
 from common.security.store import clean_ident as _clean_ident
 
 
@@ -437,7 +439,9 @@ def scaffold_service(
         files.update(
             {
                 "deploy.py": _generate_deploy_py(name, project, port),
-                "secrets.ctmpl": render_agent_template(mf, **vn),
+                "secrets.ctmpl": escape_composed_url_secrets(
+                    render_agent_template(mf, **vn)
+                ),
                 "vault-policy.hcl": render_agent_policy(mf, **vn),
                 "vault-agent.hcl": _generate_vault_agent_hcl(),
             }

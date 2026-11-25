@@ -196,3 +196,53 @@ def test_optional_keys_never_use_a_direct_map_access() -> None:
         template = _deployed(service)["secrets.ctmpl"]
         assert "{{ with .Data.data." not in template, service.directory
         assert "{{- with .Data.data." not in template, service.directory
+
+
+def test_composed_url_templates_wrap_secrets_with_urlquery_for_reserved_chars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v3.2.14 root cause: a 44-char base64 password containing `/`, `+`, `=` breaks URL parsing unless urlquery-escaped."""
+    import urllib.parse
+
+    from infra2_sdk.runtime.redis import RedisSettings
+
+    (tmp_path / "svc").mkdir()
+    (tmp_path / "svc/compose.yaml").write_text(_X_INFRA2, encoding="utf-8")
+    manifest = EnvironmentManifest(
+        source="x",
+        fields=(
+            EnvironmentField(
+                "redis_url",
+                "REDIS_URL",
+                source="runtime",
+                provided_by="platform/redis:password",
+                composed_from="redis://:{password}@platform-redis{env:ENV_SUFFIX}:6379/0",
+                sensitive=True,
+            ),
+            EnvironmentField(
+                "api_key",
+                "API_KEY",
+                source="human",
+                sensitive=True,
+                empty_ok=True,
+            ),
+        ),
+    )
+    (tmp_path / "m.json").write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
+    monkeypatch.setattr(secrets_render, "ROOT", tmp_path)
+    service = secrets_render.Service("svc", "proj", "svc", ("m.json",), policy=False)
+    template = secrets_render.render(service)["secrets.ctmpl"]
+
+    assert (
+        'REDIS_URL={{ printf "%q" (printf "redis://:%s@platform-redis%s:6379/0" '
+        '(urlquery .Data.data.password) (env "ENV_SUFFIX")) }}'
+    ) in template
+    assert "(urlquery .Data.data.API_KEY)" not in template
+
+    raw_pw = "aB+cD/eF1234567890123456789012345678901234="
+    encoded = urllib.parse.quote(raw_pw, safe="")
+    parsed = RedisSettings(url=f"redis://:{encoded}@platform-redis-staging:6379/0")
+    assert parsed.host == "platform-redis-staging"
+    assert parsed.port == 6379
+    assert parsed.db == 0
+    assert parsed.password == raw_pw
