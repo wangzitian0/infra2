@@ -122,7 +122,6 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
-      SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       # Keep the fixed stack aligned with preview. A live staging cold start on
@@ -188,7 +187,6 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_WORKER_RESOURCE_ATTRIBUTES:+http://platform-signoz-otel-collector:4318}
       OTEL_SERVICE_NAME: ${OTEL_WORKER_SERVICE_NAME:-finance-report-worker}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_WORKER_RESOURCE_ATTRIBUTES:-}
-      SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}
     volumes:
       - secrets:/secrets:ro
     networks:

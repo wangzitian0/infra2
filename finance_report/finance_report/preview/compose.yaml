@@ -169,7 +169,6 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
-      SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}
       DATABASE_URL: postgresql+asyncpg://ephemeral:ephemeral@finance_report-preview-db${ENV_SUFFIX}:5432/preview
       ENABLE_STORAGE_SWEEP: "false"
       API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-2000}

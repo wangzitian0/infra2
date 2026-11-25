@@ -8,9 +8,16 @@ must also set ``SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}``. A rollback replac
 INFRA_SERVICE_VERSION, so SERVICE_VERSION then names the image that runs.
 
 Scope: every tracked compose file, compiled. The vault-agent sidecar runs no SDK code.
+
+The env manifest of a stack is the contract. An App stack manifest is a projection of the
+pinned App release (tools/app_manifest_sync.py). An App release with an older SDK does not
+declare SERVICE_VERSION, so its stack must not set it (inventory rule G1).
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 import yaml
@@ -45,6 +52,25 @@ def identity_services(text: str) -> dict[str, str | None]:
     return found
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def manifest_declares_service_version(compose_path: str) -> bool:
+    """True when no manifest is next to ``compose_path``, or when that manifest declares it.
+
+    A preview stack uses the manifest of the App stack with the same App: ``preview/``
+    reads ``10.app/env.manifest.json``.
+    """
+    directory = (ROOT / compose_path).parent
+    manifest = directory / "env.manifest.json"
+    if not manifest.is_file() and directory.name == "preview":
+        manifest = directory.parent / "10.app" / "env.manifest.json"
+    if not manifest.is_file():
+        return True
+    fields = json.loads(manifest.read_text(encoding="utf-8")).get("fields", [])
+    return any(f.get("env") == "SERVICE_VERSION" for f in fields)
+
+
 def _compiled() -> dict[str, str]:
     return {path: load_stack(path).compiled for path in tracked_compose_files()}
 
@@ -61,7 +87,26 @@ def test_scope_is_not_empty() -> None:
 @pytest.mark.parametrize("path", tracked_compose_files())
 def test_every_identity_service_sets_service_version(path: str) -> None:
     services = identity_services(load_stack(path).compiled)
-    assert {n: v for n, v in services.items() if v != SERVICE_VERSION} == {}
+    expected = SERVICE_VERSION if manifest_declares_service_version(path) else None
+    assert {n: v for n, v in services.items() if v != expected} == {}
+
+
+@pytest.mark.parametrize(
+    ("path", "declares"),
+    [
+        ("platform/30.todo/compose.yaml", True),
+        ("finance_report/finance_report/10.app/compose.yaml", False),
+        ("finance_report/finance_report/preview/compose.yaml", False),
+        ("truealpha/truealpha/20.data_engine/compose.yaml", False),
+    ],
+)
+def test_the_manifest_decides_service_version(path: str, declares: bool) -> None:
+    """Todo (SDK 4.8.0) declares it. The pinned Apps (older SDK) do not declare it yet.
+
+    When an App release adopts SDK 4.8.0, its projected manifest declares SERVICE_VERSION,
+    this case fails, and the App stack must then set it.
+    """
+    assert manifest_declares_service_version(path) is declares
 
 
 def test_guard_rejects_a_service_without_service_version() -> None:
