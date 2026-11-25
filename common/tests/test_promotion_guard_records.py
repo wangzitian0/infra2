@@ -69,6 +69,7 @@ def world(repo, monkeypatch, tmp_path):
         "read_record",
         lambda *a, **k: stage_records.read_record(*a, opener=gh, **k),
     )
+    monkeypatch.setattr(guard, "check_prod_canary_health", lambda **_k: None)
     monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
     monkeypatch.setenv("GITHUB_RUN_ID", "9")
@@ -101,7 +102,17 @@ def _green(
     world: FakeGitHub, *, staging: dict | None = None, ci: dict | None = None
 ) -> None:
     """The two upstream records of a green promotion of v3.1.23."""
-    world.add(_record(subject=f"tag:{TAG}", run=1), run=1, **(staging or {}))
+    st = _record(subject=f"tag:{TAG}", run=1)
+    st["checks"] = [
+        *st["checks"],
+        {
+            "name": "platform/todo:staging_gate",
+            "ok": True,
+            "detail": f"[{TAG}] todo gate ok",
+            "seconds": 1.0,
+        },
+    ]
+    world.add(st, run=1, **(staging or {}))
     ci_record = _record(env=writer.CI_ENV, subject=f"sha:{world.commit}", run=2)
     world.add(ci_record, run=2, path=CI, event="push", **(ci or {}))
 
@@ -480,3 +491,61 @@ def test_the_guard_cli_calls_the_common_function_and_exits_nonzero_on_a_refusal(
         "releases": ["v1.0.1"],
     }
     assert "upstream_post refused" in capsys.readouterr().err
+
+
+def test_required_staging_gates_includes_platform_todo_on_platform_and_shared_changes() -> (
+    None
+):
+    for changed in (
+        "platform/12.alerting/compose.yaml",
+        "common/deploy/reconcile_iac_inputs.py",
+        "common/security/secrets_render.py",
+        "common/observability/canary_verify.py",
+        "uv.lock",
+    ):
+        plan = reconcile.build_plan([changed], after="v3.2.14", app_release_tags={})
+        assert "platform/todo" in plan.selected, changed
+        assert guard.required_staging_gates(plan) == {"platform/todo": "v3.2.14"}, (
+            changed
+        )
+
+
+def test_check_prod_canary_health_and_uv_lock_sdk_verification(
+    tmp_path, monkeypatch
+) -> None:
+    """Phase 3: live Prod /api/health failure and unverified/revoked uv.lock SDK refuse."""
+    guard.check_prod_canary_health(
+        domain="example.test",
+        http_get=lambda _u, _t: (
+            200,
+            json.dumps({"ok": True, "canary": {"ok": True}}),
+        ),
+    )
+    for bad in (
+        (503, json.dumps({"ok": False, "canary": {"ok": False}})),
+        (200, json.dumps({"ok": True, "canary": {"ok": False}})),
+        (200, "not-json"),
+    ):
+        with pytest.raises(SystemExit, match="live prod todo canary"):
+            guard.check_prod_canary_health(
+                domain="example.test", http_get=lambda _u, _t, reply=bad: reply
+            )
+
+    repo = tmp_path / "uvrepo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "uv.lock").write_text(
+        'version = 1\n\n[[package]]\nname = "infra2-sdk"\nversion = "4.9.1"\n',
+        encoding="utf-8",
+    )
+    _git(repo, "add", "uv.lock")
+    _git(repo, "commit", "-q", "-m", "lock 4.9.1")
+    _git(repo, "tag", "v3.2.14")
+
+    with pytest.raises(SystemExit, match="no unrevoked Canary staging_gate pass"):
+        guard.assert_uv_lock_sdk_verified(
+            "v3.2.14", repo, repo="o/r", token="tok", verified_versions={"4.9.0"}
+        )
+    guard.assert_uv_lock_sdk_verified(
+        "v3.2.14", repo, repo="o/r", token="tok", verified_versions={"4.9.1"}
+    )

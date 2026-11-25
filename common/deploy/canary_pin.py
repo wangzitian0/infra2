@@ -73,14 +73,8 @@ def canary_sdk_version(repo_root: Path = REPO_ROOT) -> str:
 
 
 def canary_sdk_unit(repo_root: Path = REPO_ROOT) -> str:
-    """Stage record unit ``sdk:<version>`` of the Canary image. ``sdk:unknown`` on error."""
-    try:
-        return f"sdk:{canary_sdk_version(repo_root)}"
-    except (OSError, CanaryPinError) as exc:
-        print(
-            f"::warning::Canary SDK pin unreadable ({exc}); the SDK unit is sdk:unknown"
-        )
-        return "sdk:unknown"
+    """Stage record unit ``sdk:<version>`` of the Canary image. Fail closed on error."""
+    return f"sdk:{canary_sdk_version(repo_root)}"
 
 
 CANARY_COMPOSE_RELS: tuple[str, ...] = (

@@ -71,6 +71,7 @@ def world(repo, monkeypatch) -> FakeGitHub:
         "read_record",
         lambda *a, **k: stage_records.read_record(*a, opener=gh, **k),
     )
+    monkeypatch.setattr(guard, "check_prod_canary_health", lambda **_k: None)
     ci = _record(env=writer.CI_ENV, subject=f"sha:{gh.commit}", run=2)
     gh.add(ci, run=2, path=CI, event="push")
     return gh

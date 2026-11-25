@@ -263,31 +263,44 @@ def list_records(
     return records
 
 
-def _canary_verified_sdks(rec: Mapping[str, Any]) -> set[str]:
-    """``X`` of each ``sdk:X`` unit of one record, when the record verifies it (#1635)."""
+def _canary_sdk_verdict(rec: Mapping[str, Any]) -> tuple[set[str], set[str]]:
+    """Return ``(passed_sdks, revoked_sdks)`` for one qualifying stage record."""
     if (
         rec.get("env") != "staging.release_validation"
         or rec.get("phase") != "post"
         or rec.get("event") not in ("tag", "push")
     ):
-        return set()
+        return set(), set()
     if not str(rec.get("subject") or "").startswith("tag:"):
-        return set()
-    checks = rec.get("checks") or ()
-    if not any(
-        isinstance(chk, Mapping)
-        and chk.get("name") in CANARY_STAGING_GATE_CHECKS
-        and chk.get("ok") is True
-        for chk in checks
-    ):
-        return set()
-    verified: set[str] = set()
+        return set(), set()
+    versions: set[str] = set()
     for unit in rec.get("units") or ():
         if isinstance(unit, str) and unit.startswith("sdk:"):
             version_str = unit.removeprefix("sdk:").strip()
             if version_str and version_str != "unknown":
-                verified.add(version_str)
-    return verified
+                versions.add(version_str)
+    if not versions:
+        return set(), set()
+    checks = rec.get("checks") or ()
+    canary_checks = [
+        chk
+        for chk in checks
+        if isinstance(chk, Mapping)
+        and (
+            chk.get("name") in CANARY_STAGING_GATE_CHECKS
+            or chk.get("name") == "platform/todo:canary_verify"
+        )
+    ]
+    if not canary_checks:
+        return set(), set()
+    if any(chk.get("ok") is not True for chk in canary_checks):
+        return set(), versions
+    if any(
+        chk.get("name") in CANARY_STAGING_GATE_CHECKS and chk.get("ok") is True
+        for chk in canary_checks
+    ):
+        return versions, set()
+    return set(), versions
 
 
 def verified_sdk_versions(
@@ -299,16 +312,22 @@ def verified_sdk_versions(
     opener: Opener = open_url,
     wanted: Iterable[str] | None = None,
 ) -> set[str]:
-    """Return ``X`` from ``sdk:X`` units in staging release post records where Canary ``staging_gate`` passed (#1635).
+    """Return ``sdk:X`` versions using latest-wins revocation (#1635).
 
-    ``wanted`` stops the scan of the stage records when each wanted version is verified. The
-    result then holds the versions found so far. A wanted version that no record verifies
-    still scans the full window. ``wanted`` has no effect when ``records`` is given.
+    Records are evaluated newest-first: a newer failed ``platform/todo`` gate revokes an
+    older pass for that SDK version, and a newer pass supersedes an older failure.
     """
+    verified: set[str] = set()
+    revoked: set[str] = set()
     if records is not None:
-        verified: set[str] = set()
         for rec in records:
-            verified |= _canary_verified_sdks(rec)
+            passed_v, failed_v = _canary_sdk_verdict(rec)
+            for v in passed_v:
+                if v not in revoked:
+                    verified.add(v)
+            for v in failed_v:
+                if v not in verified:
+                    revoked.add(v)
         return verified
     resolved_repo = repo or os.environ.get("GITHUB_REPOSITORY", "")
     resolved_token = (
@@ -322,7 +341,6 @@ def verified_sdk_versions(
         else None
     )
     targets = None if wanted is None else {str(v) for v in wanted}
-    found: set[str] = set()
     for _, record in _checked_records(
         resolved_repo,
         resolved_token,
@@ -332,10 +350,16 @@ def verified_sdk_versions(
         phase="post",
         since=since,
     ):
-        found |= _canary_verified_sdks(record)
-        if targets and targets <= found:
+        passed_v, failed_v = _canary_sdk_verdict(record)
+        for v in passed_v:
+            if v not in revoked:
+                verified.add(v)
+        for v in failed_v:
+            if v not in verified:
+                revoked.add(v)
+        if targets and targets <= verified:
             break
-    return found
+    return verified
 
 
 @dataclass(frozen=True)

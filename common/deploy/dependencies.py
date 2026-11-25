@@ -168,12 +168,6 @@ def explain_fanout(
         if key:
             selected.setdefault(key, f"own-dir ({file_path})")
             matched.add(file_path)
-    for service_key, globs in manifest.items():
-        hits = [f for f in files if any(fnmatch.fnmatch(f, g) for g in globs)]
-        if hits:
-            selected.setdefault(service_key, f"declared dep ({hits[0]})")
-            matched.update(hits)
-
     # The compiled text of an x-infra2 stack, and so its CONFIGURATION_SHA256, depends on
     # the compiler, not only on the stack directory (infra2#1822 Slice 2).
     from common.deploy.compose_compile import COMPILER_INPUT_PATHS
@@ -185,6 +179,12 @@ def explain_fanout(
                 service_key, f"x-infra2 compiler input ({compiler_hits[0]})"
             )
         matched.update(compiler_hits)
+
+    for service_key, globs in manifest.items():
+        hits = [f for f in files if any(fnmatch.fnmatch(f, g) for g in globs)]
+        if hits:
+            selected.setdefault(service_key, f"declared dep ({hits[0]})")
+            matched.update(hits)
 
     dropped = [f for f in files if f not in matched]
     return FanoutDecision(selected=selected, dropped=dropped)

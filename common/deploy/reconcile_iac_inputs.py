@@ -182,6 +182,7 @@ class ReconcilePlan:
     # plan shows WHY a service is absent instead of failing on it (v1.1.34).
     not_yet_in_production: list[str] = field(default_factory=list)
     app_release_tags: dict[str, str] = field(default_factory=dict)
+    canary_version_ref: str = ""
 
     @property
     def services(self) -> list[str]:
@@ -2544,6 +2545,9 @@ def build_plan(
         prod_services=prod_services,
         not_yet_in_production=not_yet_in_production,
         app_release_tags=dict(sorted(effective_app_tags.items())),
+        canary_version_ref=str(after or "").strip()
+        if "platform/todo" in selected
+        else "",
     )
 
 
