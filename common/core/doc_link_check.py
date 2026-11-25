@@ -78,8 +78,8 @@ def ignored_paths(candidates: set[str]) -> set[str]:
 def submodule_paths() -> set[str]:
     """Paths registered in .gitmodules, as repo-relative POSIX strings.
 
-    A link INTO a submodule is legitimate -- the root README pointing at
-    ``oh-my-code-agent/README.md`` is exactly the kind of cross-reference
+    A link INTO a submodule is legitimate -- a page pointing at
+    ``repos/infra2-sdk/README.md`` is exactly the kind of cross-reference
     AGENTS.md's entry map is built from -- but it cannot be verified here.
     CI checks out without ``--recursive``, so those directories are empty,
     and a checker that treated an empty submodule as a dead link would fail

@@ -9,6 +9,7 @@ import contextlib
 import functools
 import hashlib
 import hmac
+import importlib.metadata
 import importlib.util
 import json
 import logging
@@ -706,6 +707,8 @@ class RunnerHealthResponse(BaseModel):
     checks: Dict[str, bool]
     in_flight_deploys: int
     git_sha: str
+    sdk_version: str
+    task_sdk: str
 
 
 class DeployRequest(BaseModel):
@@ -784,6 +787,22 @@ def _workspace_git_sha() -> str:
         except (OSError, subprocess.SubprocessError):
             pass
     return os.environ.get("GIT_SHA", "unknown").strip() or "unknown"
+
+
+# sync_runner.prepare_ref_env runs each deploy task in a venv of the ref's own uv.lock.
+TASK_SDK_SOURCE = "ref_lock"
+
+
+def _installed_sdk_version() -> str:
+    """The infra2-sdk version installed in this image, or ``unknown``.
+
+    The reconcile reads it before a deploy: the runner compiles the composes of a ref with
+    this SDK, so a ref that locks a newer SDK must stop early (#1822).
+    """
+    try:
+        return importlib.metadata.version("infra2-sdk")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def _runner_checks() -> dict[str, bool]:
@@ -870,6 +889,10 @@ def health() -> JSONResponse:
             "checks": checks,
             "in_flight_deploys": in_flight_deploys,
             "git_sha": _workspace_git_sha(),
+            "sdk_version": _installed_sdk_version(),
+            # A deploy task imports the SDK that the uv.lock of its ref locks, not
+            # sdk_version above (sync_runner.prepare_ref_env, #1822).
+            "task_sdk": TASK_SDK_SOURCE,
         },
         status_code=status_code,
     )

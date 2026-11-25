@@ -5,12 +5,15 @@ Sync Runner - executes invoke sync tasks for changed services.
 
 import concurrent.futures
 import fcntl
+import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -45,6 +48,16 @@ INVOKE_BOOTSTRAP = (
     "sys.path.insert(0, '.'); "
     "runpy.run_module('invoke', run_name='__main__')"
 )
+
+# A deploy task runs in a venv that `uv sync --locked` builds from the uv.lock of the
+# checked-out ref, so the task imports the infra2-sdk that the ref locks, not the SDK of
+# this image (#1822). The venvs and the uv cache are on the /workspace volume, outside the
+# git checkout, so `git clean` keeps them and a container recreate keeps them too.
+REF_ENV_ROOT = WORKSPACE / ".ref-envs"
+UV_CACHE_DIR = WORKSPACE / ".uv-cache"
+REF_ENV_SYNC_TIMEOUT = 600  # seconds; a cold sync took 11 s in the replay
+REF_ENV_KEEP = 3
+REF_ENV_MARKER = ".infra2-synced"
 
 # The bootstrap/* layer has no deploy.py (it's not a deploy.py-driven service), so its
 # explicit "no sync task" entries are stated here; everything else is DERIVED.
@@ -327,6 +340,7 @@ class SyncResult:
     results: list[ServiceSyncResult] = field(default_factory=list)
     repo_updated: bool = True
     error: str = ""
+    ref_env: dict = field(default_factory=dict)
 
     @property
     def succeeded(self) -> int:
@@ -366,6 +380,7 @@ class SyncResult:
             "skipped": self.skipped,
             "error": self.error,
             "failure_summary": failure_summary,
+            "ref_env": self.ref_env,
             "results": [result.to_dict() for result in self.results],
         }
 
@@ -389,6 +404,7 @@ class SyncResult:
             "skipped": self.skipped,
             "error": self.error,
             "failure_summary": failure_summary,
+            "ref_env": {k: v for k, v in self.ref_env.items() if k != "python"},
             "results": [result.to_public_dict() for result in self.results],
         }
 
@@ -699,6 +715,121 @@ def safe_invoke_env_summary(env: dict[str, str]) -> str:
     return " ".join(parts)
 
 
+@dataclass
+class RefEnv:
+    """The venv that runs the deploy tasks of one checkout, keyed by its uv.lock hash."""
+
+    python: str = ""
+    lock_sha256: str = ""
+    sdk_version: str = ""
+    seconds: float = 0.0
+    reused: bool = False
+    error: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def _prune_ref_envs(keep: Path) -> None:
+    """Keep the newest REF_ENV_KEEP venvs (``keep`` included); remove the others."""
+    envs = sorted(
+        (p for p in REF_ENV_ROOT.iterdir() if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for old in [p for p in envs if p != keep][REF_ENV_KEEP - 1 :]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def prepare_ref_env(repo_path: Path) -> RefEnv:
+    """Build (or reuse) the venv of ``repo_path/uv.lock`` and return its interpreter.
+
+    A sync failure returns ``error``: the caller fails the deploy and never falls back to
+    the SDK of this image.
+    """
+    started = time.monotonic()
+    env = RefEnv()
+    try:
+        lock_bytes = (repo_path / "uv.lock").read_bytes()
+    except OSError as exc:
+        env.error = f"cannot read uv.lock of the checkout: {exc}"
+        return env
+    env.lock_sha256 = hashlib.sha256(lock_bytes).hexdigest()
+    venv = REF_ENV_ROOT / env.lock_sha256[:16]
+    python = venv / "bin" / "python"
+    marker = venv / REF_ENV_MARKER
+    if marker.is_file() and python.is_file():
+        env.reused = True
+    else:
+        # A venv without the marker is partial (a timeout or a crash): build it again.
+        REF_ENV_ROOT.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(venv, ignore_errors=True)
+        uv_env = {
+            **os.environ,
+            "UV_PROJECT_ENVIRONMENT": str(venv),
+            "UV_CACHE_DIR": str(UV_CACHE_DIR),
+            "UV_PYTHON_DOWNLOADS": "never",
+            "UV_LINK_MODE": "copy",
+        }
+        try:
+            result = subprocess.run(
+                [
+                    "uv",
+                    "sync",
+                    "--locked",
+                    "--no-dev",
+                    "--no-install-project",
+                    "--python",
+                    sys.executable,
+                ],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                env=uv_env,
+                timeout=REF_ENV_SYNC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            env.error = f"uv sync --locked timed out after {REF_ENV_SYNC_TIMEOUT}s"
+        except OSError as exc:
+            env.error = f"uv sync --locked could not start: {exc}"
+        else:
+            if result.returncode != 0:
+                env.error = (
+                    f"uv sync --locked failed (exit {result.returncode}): "
+                    f"{_tail_text(result.stderr.strip(), 1500)}"
+                )
+        if env.error:
+            env.seconds = round(time.monotonic() - started, 3)
+            return env
+    try:
+        probe = subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import importlib.metadata as m; print(m.version('infra2-sdk'))",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        env.error = f"the ref venv interpreter does not run: {exc}"
+    else:
+        env.sdk_version = probe.stdout.strip()
+        if probe.returncode != 0 or not env.sdk_version:
+            env.error = f"the ref venv has no infra2-sdk: {probe.stderr.strip()[-500:]}"
+    if not env.error:
+        marker.write_text(env.lock_sha256 + "\n", encoding="utf-8")
+        os.utime(venv)
+        env.python = str(python)
+        try:
+            _prune_ref_envs(venv)
+        except OSError as exc:
+            logger.warning("ref venv prune failed: %s", exc)
+    env.seconds = round(time.monotonic() - started, 3)
+    return env
+
+
 def run_invoke_task(
     task_name: str,
     repo_path: Path,
@@ -706,8 +837,12 @@ def run_invoke_task(
     deploy_ref: str | None = None,
     version_ref: str | None = None,
     action: str | None = None,
+    python: str | None = None,
 ) -> dict:
-    """Run an invoke task with timeout and return result."""
+    """Run an invoke task with timeout and return result.
+
+    ``python`` is the interpreter of the ref venv (``prepare_ref_env``).
+    """
     logger.info(
         f"Running: invoke {task_name} (env={deploy_env}, timeout={DEPLOY_TIMEOUT}s)"
     )
@@ -742,7 +877,7 @@ def run_invoke_task(
 
     try:
         result = subprocess.run(
-            [sys.executable, "-P", "-c", INVOKE_BOOTSTRAP, task_name],
+            [python or sys.executable, "-P", "-c", INVOKE_BOOTSTRAP, task_name],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -909,6 +1044,24 @@ def sync_services(
                 services = set(_all_services())
                 logger.info("No changes detected or fresh clone; syncing all services")
 
+        ref_env = prepare_ref_env(repo_path)
+        if ref_env.error:
+            logger.error("Ref venv failed; no deploy task runs: %s", ref_env.error)
+            return SyncResult(
+                env=deploy_env,
+                ref=ref,
+                requested_services=requested_services,
+                error=f"ref venv (uv sync --locked) failed: {ref_env.error}",
+                ref_env=ref_env.to_dict(),
+            )
+        logger.info(
+            "Ref venv: infra2-sdk %s, lock %s, %s in %.1fs",
+            ref_env.sdk_version,
+            ref_env.lock_sha256[:12],
+            "reused" if ref_env.reused else "synced",
+            ref_env.seconds,
+        )
+
         results: list[ServiceSyncResult] = []
         task_map = (
             _service_task_map()
@@ -916,7 +1069,9 @@ def sync_services(
         ordered_services = sorted(services)
 
         def _invoke_for_service(service_name: str, task_name: str) -> dict[str, object]:
-            extra = {"version_ref": version_ref} if version_ref else {}
+            extra: dict[str, str] = {"python": ref_env.python}
+            if version_ref:
+                extra["version_ref"] = version_ref
             if action and action != "sync":
                 extra["action"] = action
             if resolved_head:
@@ -984,6 +1139,7 @@ def sync_services(
             ref=ref,
             requested_services=requested_services,
             results=results,
+            ref_env=ref_env.to_dict(),
         )
         logger.info(
             "Sync complete: "

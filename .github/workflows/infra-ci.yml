@@ -47,7 +47,7 @@ jobs:
   # the first place never reports anything, and blocks merge forever
   # waiting on a status that will never arrive -- exactly what happened to
   # submodule-pointer-only PRs before the path list above included the
-  # bare gitlink paths (oh-my-code-agent, repos/finance_report, etc.),
+  # bare gitlink paths (repos/finance_report, repos/truealpha, etc.),
   # which never match a `dir/**` glob since a gitlink bump changes that
   # exact path, never a file beneath it.
   #
@@ -825,12 +825,14 @@ jobs:
           pip install pyyaml httpx
           pip install --no-deps "$(python tools/sdk_requirement.py)"
 
+      # --report-only: the inventory gives this job blocks_merge: false; a refusal of the
+      # current candidate is an open production decision, not a defect of the pull request.
       - name: Probe the guard when the pull request changes it
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python tools/promotion_probe.py --only-if-changed "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          python tools/promotion_probe.py --report-only --only-if-changed "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
 
   record:
     name: Write the CI stage record

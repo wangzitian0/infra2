@@ -50,7 +50,7 @@ def _sdk_package(lock: Path) -> dict:
 
 
 def sdk_version(lock: Path) -> str:
-    """Return the locked ``infra2-sdk`` version string (for example ``3.32.0``) from ``lock``."""
+    """Return the locked ``infra2-sdk`` version string (for example ``4.3.0``) from ``lock``."""
     version = str(_sdk_package(lock).get("version") or "").strip()
     if not version:
         raise ValueError(f"{lock}: {PACKAGE} has no version")

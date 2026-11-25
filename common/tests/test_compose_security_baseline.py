@@ -36,7 +36,7 @@ def _git_tracked_compose_files() -> list[Path]:
     paths: list[Path] = []
     for line in proc.stdout.splitlines():
         rel = line.strip()
-        if not rel or rel.startswith("repos/") or rel.startswith("oh-my-code-agent/"):
+        if not rel or rel.startswith("repos/"):
             continue
         p = REPO_ROOT / rel
         if p.exists():

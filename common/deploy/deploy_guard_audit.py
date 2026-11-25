@@ -18,7 +18,8 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Mapping
+import threading
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -355,6 +356,43 @@ def record_check(
     path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _tee_run(argv: Sequence[str]) -> tuple[int, str, str]:
+    """Stream child stdout/stderr live while capturing text for summary recording."""
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    out_lines: list[str] = []
+    err_lines: list[str] = []
+
+    def _pump(stream: Any, target: Any, bucket: list[str]) -> None:
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                bucket.append(line)
+                target.write(line)
+                target.flush()
+        finally:
+            stream.close()
+
+    t_out = threading.Thread(
+        target=_pump, args=(proc.stdout, sys.stdout, out_lines), daemon=True
+    )
+    t_err = threading.Thread(
+        target=_pump, args=(proc.stderr, sys.stderr, err_lines), daemon=True
+    )
+    t_out.start()
+    t_err.start()
+    rc = proc.wait()
+    t_out.join()
+    t_err.join()
+    return int(rc), "".join(out_lines), "".join(err_lines)
+
+
 def run_recorded_check(
     key: str,
     label: str,
@@ -363,18 +401,24 @@ def run_recorded_check(
     env: Mapping[str, str] | None = None,
     runner=subprocess.run,
 ) -> int:
-    proc = runner(argv, text=True, capture_output=True, check=False)
-    if proc.stdout:
-        sys.stdout.write(proc.stdout)
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
-    if proc.returncode == 0:
+    if runner is subprocess.run:
+        returncode, stdout_text, stderr_text = _tee_run(argv)
+    else:
+        proc = runner(argv, text=True, capture_output=True, check=False)
+        returncode = int(proc.returncode)
+        stdout_text = proc.stdout or ""
+        stderr_text = proc.stderr or ""
+        if stdout_text:
+            sys.stdout.write(stdout_text)
+        if stderr_text:
+            sys.stderr.write(stderr_text)
+    if returncode == 0:
         record_check(key, "pass", label, env=env)
         return 0
-    combined = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()
-    first = combined.splitlines()[-1][:200] if combined else f"exited {proc.returncode}"
+    combined = (stderr_text + "\n" + stdout_text).strip()
+    first = combined.splitlines()[-1][:200] if combined else f"exited {returncode}"
     record_check(key, "fail", f"{label}: {first}", env=env)
-    return int(proc.returncode)
+    return returncode
 
 
 def _load_hook_results(
@@ -421,7 +465,19 @@ def app_hook_pair(item: Mapping[str, Any]) -> tuple[str, str]:
         or str(item.get("stderr_tail") or "").strip()
         or "hook failed"
     )
+    failed_checks = [
+        str(c.get("name") or "")
+        for c in (item.get("checks") or ())
+        if isinstance(c, Mapping)
+        and not c.get("skipped")
+        and not c.get("ok")
+        and c.get("name")
+    ]
     summary_line = raw_summary.splitlines()[0][:200]
+    if len(failed_checks) > 1 or (
+        len(failed_checks) == 1 and failed_checks[0] not in summary_line
+    ):
+        summary_line = f"failed=[{', '.join(failed_checks)}]; {summary_line}"[:200]
     return (
         f"{APP_HOOK_KEY_PREFIX}{svc}:{slot}:{norm_env}",
         f"- {svc} [{slot} @ {vref}]: {summary_line}",

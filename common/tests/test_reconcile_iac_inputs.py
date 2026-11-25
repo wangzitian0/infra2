@@ -12,6 +12,7 @@ import urllib.error
 from email.message import Message
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 
@@ -2504,7 +2505,7 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     _, _, ta_audit_env = invocations[-1]
     assert ta_audit_env["ENVIRONMENT"] == "staging"
 
-    # 3. finance_report smoke (uses BASE_URL="$INFRA2_HOOK_APP_URL" bash tools/smoke_test.sh)
+    # 3. finance_report smoke (uses APP_URL)
     res_fr_smoke = execute_app_hook_slot(
         fr_manifest,
         "smoke",
@@ -2518,9 +2519,11 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     assert res_fr_smoke.status == "pass"
     _, fr_cwd, fr_env = invocations[-1]
     assert fr_cwd == fr_sub
-    assert fr_env["INFRA2_HOOK_APP_URL"] == "https://report-staging.zitian.party"
     assert fr_env["APP_URL"] == "https://report-staging.zitian.party"
-    assert fr_env["BASE_URL"] == "https://report-staging.zitian.party"
+    assert fr_env["ENVIRONMENT"] == "staging"
+    assert "INFRA2_HOOK_APP_URL" not in fr_env
+    assert "BASE_URL" not in fr_env
+    assert "DEPLOY_ENV" not in fr_env
 
     # 4. run_post_deploy_app_hooks uses repos/<app> cwd when present, or fetches temp checkout
     (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
@@ -3903,10 +3906,7 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
 
     rejected = {
         "NEW_REQUIRED_NAME": "missing required hook env: NEW_REQUIRED_NAME",
-        # The runner lists these three in optional_env of every slot.
-        "INFRA2_HOOK_APP_URL": "cannot be in both required_env and optional_env",
-        "BASE_URL": "cannot be in both required_env and optional_env",
-        "DEPLOY_ENV": "cannot be in both required_env and optional_env",
+        "INFRA2_TOUCHED_FILES": "missing required hook env: INFRA2_TOUCHED_FILES",
     }
     for name, message in rejected.items():
         assert name not in app_contract.HOOK_RUNNER_CONTEXT_ENV
@@ -3921,6 +3921,19 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
                 ambient_env={"PATH": "/usr/bin:/bin"},
                 runner=_runner,
             )
+    with pytest.raises(
+        ValueError, match="cannot be in both required_env and optional_env"
+    ):
+        app_contract.execute_app_hook_slot(
+            _manifest(["INFRA2_TOUCHED_FILES"]),
+            "smoke",
+            app_url="https://app.example.invalid",
+            environment="staging",
+            version_ref="v1.2.3",
+            cwd=tmp_path,
+            ambient_env={"PATH": "/usr/bin:/bin", "INFRA2_TOUCHED_FILES": "a.py"},
+            runner=_runner,
+        )
 
 
 def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook_env(
@@ -5404,7 +5417,7 @@ def test_sync_app_releases_missing_token_sdk_record_fails_not_held(
     monkeypatch.setattr(
         reconcile,
         "locked_sdk_version_for_app_ref",
-        lambda *_a, **_kw: "3.32.0",
+        lambda *_a, **_kw: "4.3.0",
     )
     with pytest.raises(ValueError, match="requires repo and token"):
         main(
@@ -5609,21 +5622,15 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
     events: list[tuple[str, object]] = []
     attempts = {"count": 0}
 
-    class _HealthResp:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_a):
-            return False
-
-    def _fake_urlopen(req_or_url, timeout=5):
+    def _fake_get(url, timeout=5.0):
         attempts["count"] += 1
         events.append(("health", attempts["count"]))
         if attempts["count"] < 3:
-            raise OSError("restarting")
-        return _HealthResp()
+            raise httpx.ConnectError("restarting")
+        return httpx.Response(200, json={"status": "ok"})
+
+    def _no_urlopen(*_a, **_k):
+        raise AssertionError("the staging health wait must not use urllib (#1988)")
 
     def _fake_exec(manifest, slot, *, app_url, environment, version_ref, cwd, **_kw):
         events.append(("hook", (manifest.service, app_url, environment)))
@@ -5639,7 +5646,8 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
         )
 
     monkeypatch.setenv("WAIT_FOR_STAGING_READY", "1")
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", _no_urlopen)
+    monkeypatch.setattr(reconcile.httpx, "get", _fake_get)
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
     monkeypatch.setattr(reconcile.time, "sleep", lambda _s: None)
 
@@ -5657,6 +5665,94 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
         ("health", 3),
         ("hook", ("platform/todo", "https://todo-staging.zitian.party", "staging")),
     ]
+
+
+# The Cloudflare edge body for a refused client (measured 2026-11-25 with urllib).
+_CLOUDFLARE_403 = httpx.Response(
+    403, text="error code: 1010", headers={"server": "cloudflare"}
+)
+_CLOUDFLARE_403_HTML = httpx.Response(
+    403,
+    text="<!DOCTYPE html><html><title>Attention Required! | Cloudflare</title></html>",
+    headers={"content-type": "text/html", "server": "cloudflare"},
+)
+
+
+@pytest.mark.parametrize(
+    ("response", "answered"),
+    [
+        (httpx.Response(200, json={"status": "ok"}), True),
+        (httpx.Response(302, headers={"location": "https://sso-staging.x/"}), True),
+        (httpx.Response(401, text="unauthorized"), True),
+        (httpx.Response(404, text="<!DOCTYPE html><html>Next.js 404</html>"), True),
+        (_CLOUDFLARE_403, False),
+        (_CLOUDFLARE_403_HTML, False),
+        (httpx.Response(429, text="error code: 1015"), False),
+        (httpx.Response(404, text="404 page not found\n"), False),
+        (httpx.Response(502, text="Bad Gateway"), False),
+        (httpx.Response(503, json={"status": "starting"}), False),
+    ],
+)
+def test_staging_health_answered_verdict(
+    response: httpx.Response, answered: bool
+) -> None:
+    """#1708: only an answer from the App counts; a Cloudflare 403 page does not."""
+    assert reconcile._staging_health_answered(response) is answered
+
+
+def _drive_staging_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    replies: list[httpx.Response],
+    *,
+    timeout_seconds: float = 90.0,
+) -> list[str]:
+    """Run the wait against ``replies``; return the URLs it read."""
+    calls: list[str] = []
+    clock = {"now": 0.0}
+
+    def _fake_get(url, timeout=5.0):
+        calls.append(url)
+        return replies[min(len(calls), len(replies)) - 1]
+
+    def _no_urlopen(*_a, **_k):
+        raise AssertionError("the staging health wait must not use urllib (#1988)")
+
+    def _sleep(seconds):
+        clock["now"] += seconds
+
+    monkeypatch.setattr("urllib.request.urlopen", _no_urlopen)
+    monkeypatch.setattr(reconcile.httpx, "get", _fake_get)
+    monkeypatch.setattr(reconcile.time, "sleep", _sleep)
+    monkeypatch.setattr(reconcile.time, "monotonic", lambda: clock["now"])
+    reconcile._wait_for_staging_app_ready(
+        "https://todo-staging.zitian.party/", timeout_seconds=timeout_seconds
+    )
+    return calls
+
+
+def test_staging_wait_does_not_count_cloudflare_403_as_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1708: a Cloudflare 403 page and a Traefik no-route 404 keep the wait polling."""
+    calls = _drive_staging_wait(
+        monkeypatch,
+        [
+            _CLOUDFLARE_403_HTML,
+            _CLOUDFLARE_403,
+            httpx.Response(404, text="404 page not found\n"),
+            httpx.Response(503, text="starting"),
+            httpx.Response(200, json={"status": "ok"}),
+        ],
+    )
+    assert calls == ["https://todo-staging.zitian.party/health"] * 5
+
+
+def test_staging_wait_stops_at_timeout_when_cloudflare_always_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1708: a refusal that never ends returns at the timeout: 10 s / 2 s gives 6 reads."""
+    calls = _drive_staging_wait(monkeypatch, [_CLOUDFLARE_403], timeout_seconds=10.0)
+    assert len(calls) == 6
 
 
 def test_preview_gate_passes_infra2_touched_files_from_compare(
@@ -6249,3 +6345,110 @@ def test_app_sdk_pins_reject_an_unverified_locked_version_after_one_scan(
     assert scans == [{"4.4.0", "4.5.0"}]
     assert reconcile.assert_app_sdk_versions_verified([]) == {}
     assert scans == [{"4.4.0", "4.5.0"}]
+
+
+def test_run_scheduled_app_audits_isolates_setup_failure_and_persists_hook_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    """A setup exception on one service does not abort sibling services, and hook artifacts survive cleanup."""
+    from infra2_sdk.manifests import HookRunResult
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.99\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.144\n",
+        encoding="utf-8",
+    )
+
+    def _resolve_coords(service: str, **_kw):
+        if service == "finance_report/app":
+            raise RuntimeError("transient git fetch failure")
+        return (
+            "v0.2.144",
+            ResolvedRef(sha=SHA, image_ref="v0.2.144", form="tag").sha,
+            "https://truealpha-staging.example",
+        )
+
+    manifest = _hooks_v3("truealpha/app")
+    hook_cwd = tmp_path / "ephemeral_checkout"
+    hook_cwd.mkdir(parents=True, exist_ok=True)
+
+    class _FakeTempDir:
+        def cleanup(self) -> None:
+            import shutil
+
+            shutil.rmtree(hook_cwd, ignore_errors=True)
+
+    monkeypatch.setattr(reconcile, "resolve_app_hook_coordinates", _resolve_coords)
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_app_hook_cwd",
+        lambda *_a, **_kw: (hook_cwd, _FakeTempDir()),
+    )
+
+    def _fake_exec(
+        m,
+        slot: str,
+        *,
+        app_url: str,
+        environment: str,
+        version_ref: str,
+        cwd: Path,
+        **_kw,
+    ):
+        art_dir = cwd / ".artifacts" / "hooks"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "oracle_summary.json").write_text(
+            json.dumps({"passed": 8, "failed": 0}), encoding="utf-8"
+        )
+        (art_dir / "raw.xml").write_text("<testsuite tests='1'/>", encoding="utf-8")
+        return HookRunResult(
+            service=m.service,
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.5,
+            summary="all checks passed",
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+    artifacts_out = tmp_path / "persisted-artifacts"
+
+    results = reconcile.run_scheduled_app_audits(
+        tmp_path,
+        services=["finance_report/app", "truealpha/app"],
+        artifacts_dir=artifacts_out,
+        force_replay=True,
+        runner=subprocess.run,
+    )
+    by_svc = {r["service"]: r for r in results}
+    assert by_svc["finance_report/app"]["status"] == "fail"
+    assert by_svc["finance_report/app"]["ok"] is False
+    assert "transient git fetch failure" in str(
+        by_svc["finance_report/app"]["error_message"]
+    )
+    assert by_svc["truealpha/app"]["status"] == "pass"
+    assert by_svc["truealpha/app"]["oracle_summaries"] == {
+        "oracle_summary": {"passed": 8, "failed": 0}
+    }
+    assert not hook_cwd.exists()
+    persisted_svc_dir = artifacts_out / "truealpha_app"
+    assert json.loads(
+        (persisted_svc_dir / "oracle_summary.json").read_text(encoding="utf-8")
+    ) == {
+        "passed": 8,
+        "failed": 0,
+    }
+    assert (persisted_svc_dir / "raw.xml").is_file()

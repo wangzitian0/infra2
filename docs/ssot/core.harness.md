@@ -12,10 +12,8 @@
 | Workspace 通用偏好 | `harness/workspace/` |
 | Infra2 架构与运维规则 | [`docs/ssot/core.md`](./core.md) 与相关 SSOT |
 | SDK 公共契约 | 已发布的 `infra2-sdk` SemVer artifact |
-| Coding-agent tooling | `oh-my-code-agent` 自己的 `init.md`、`AGENTS.md`、文档地图与 release/commit |
 | App 开发与领域规则 | 各 App 自己的 `AGENTS.md`、架构文档、代码和 CI |
 | Agent 规则内容（Root / Workspace 层）、skill、MCP spec 与其渲染函数 | `dev_env/workspace-iac`（git 单源；投影由 `ws-apply` / `ws-publish` 单向生成） |
-| 本机常驻运行时（hub、受管 HOME、watcher、TUI） | `oh-my-code-agent`，只消费 dev_env 渲染的配置，不持有内容真源 |
 
 ## 2. Goal And Non-Goals
 
@@ -31,7 +29,6 @@ App 的集成状态。它统一 workspace 视角，不统一产品仓库的迭�
 - 不把 App submodule 变成 package、runtime、deployment 或 config-hash 依赖。
 - 不替 App 决定领域架构、CI gate 实例、版本节奏或发布审批。
 - 不把人类工作流偏好放进 `infra2-sdk` 的运行时 wire contract。
-- 不把 `oh-my-code-agent` 变成 infra/App 的源码或运行时依赖。
 
 ## 3. Ownership Model
 
@@ -39,7 +36,6 @@ App 的集成状态。它统一 workspace 视角，不统一产品仓库的迭�
 |---|---|---|---|---|
 | `infra2` | Infrastructure implementation and deployment control plane | Local | Pinned | Infra2 release tag |
 | `infra2-sdk` | Versioned contracts and explicitly invoked protocol adapters | Coordinated, independently released | Pinned | SDK SemVer |
-| `oh-my-code-agent` | Coding-agent observation, profiles and isolated runtimes | Coordinated, independently released | Snapshot | Tool release or pinned commit |
 | `finance_report` | Integration-visible application checkout | Autonomous | Snapshot | App image ref/digest |
 | `truealpha` | Integration-visible application checkout | Autonomous | Snapshot | App image ref/digest |
 
@@ -48,7 +44,7 @@ App 的集成状态。它统一 workspace 视角，不统一产品仓库的迭�
 - `snapshot`：pin 仅视为开发快照记录。当 submodule 发生 HEAD 推进或漂移时，`harness check` 判定为 WARNING 记录而不阻断开发（退出码 0），`harness status` 保持 CURRENT 正常状态，确保自主 App 的自治边界与迭代节奏。
 
 `coordinated` 不表示两个 Git 仓库合成一个发布单元。Infra2 与 SDK 仍通过各自 PR、
-commit、tag 和兼容性证明独立发布；`oh-my-code-agent` 也通过自己的仓库独立演进。
+commit、tag 和兼容性证明独立发布。
 Harness 只拥有这些仓库之间的协作视图与边界定义。
 
 ## 4. Rule Precedence
@@ -57,9 +53,7 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 2. 进入嵌套仓库后，先读取该仓库本地 authority；本地规则覆盖 workspace 偏好。
 3. Workspace guide 只提供默认决策倾向，不得绕过目标仓库的命令、gate 或审批。
 4. App 规则与 workspace 偏好冲突时，App 自治规则胜出；不通过修改 App 来消除差异。
-5. `oh-my-code-agent` 的 `init.md` 定义产品边界，`AGENTS.md` 定义 agent 操作规则，
-   `docs/README.md` 路由各主题 authority。其隔离能力按 host/version 的证据判断。
-6. 共用工程基础指可定位的 authority、可执行的本地 proof 与独立发布契约。
+5. 共用工程基础指可定位的 authority、可执行的本地 proof 与独立发布契约。
    Finance Report 的正式概念归属在 `common/<pkg>/contract.py` 和 readme，
    `docs/ssot/` 已退休；TrueAlpha 以 `init.md` 和 issue acceptance 为入口。
    入口对照见 [`harness/README.md`](../../harness/README.md#repository-entry-points)。
@@ -71,18 +65,17 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 - Infra2 和 App 各自拥有 CI gate 实例、部署编排、适配器调用时机与人类治理规则。
 - 跨仓库视图优先在读取时 join 已发布证据，不复制第二份可漂移的事实。
 - 新抽象只有在语义稳定且至少有清晰的多消费者契约时才进入 SDK。
-- Coding-agent 配置发现、Profile/Skill/MCP 激活和隔离 runtime 属于 `oh-my-code-agent`；
-  它不承载 App 部署、通用任务调度或领域命令。App 的 Skill 内容与 policy 由 App 持有。
+- Coding-agent 规则、skill 与 MCP spec 属于 `dev_env`（§5.1）；它不承载 App 部署、
+  通用任务调度或领域命令。App 的 policy 由 App 持有。
 
-### 5.1 Harness 三方边界（2026-09-23 owner 裁定）
+### 5.1 Harness 边界（2026-09-23 owner 裁定）
 
-一条判据：**需要 review 才能改的是内容，归 `dev_env`；常驻进程与机器状态是运行时，
-归 `oh-my-code-agent`；checkout 只持有自己那一层，并在固定位置接收产物。** 一件东西只落一格。
+一条判据：**需要 review 才能改的是内容，归 `dev_env`；checkout 只持有自己那一层，
+并在固定位置接收产物。** 一件东西只落一格。
 
 | 方 | 持有 | 绝不做 |
 |---|---|---|
 | `dev_env`（单源） | Root / Workspace 规则真源、skill / command / MCP spec / secrets 模板、纯函数工具（`ws-publish`、`ws-check-drift`、`ws-agents-lint`、`ws-doctor`、`ws-mem-distill`），全部 `--json`，CI | 常驻进程、机器状态、UI |
-| `oh-my-code-agent`（运行时） | hub（每 OS user 一个，profile = workspace，一个 (workspace, server) 一份进程，宿主经 bridge 接入）、受管 HOME、定时器与 watcher、drift / report / TUI | 持有内容真源；重实现 render / drift 判定（只调用 dev_env 工具并展示）；写回 dev_env 或渲染产物；调度任务；超出 Knowledge Pack 证据级的写权限 |
 | checkout（消费者） | 自己的 `AGENTS.md`（Repo 层，入库）；`harness/repos.yaml` 的 `rules_layer` 声明；`skills/`（从 `dev_env` 1:1 渲染，入库） | 跟踪文件里出现 Root / Workspace 内容；**手写或就地修改**渲染产物 |
 
 渲染产物入库不违反单向流动：**入库的是副本，不是真源**。判据是可计算的——
@@ -92,15 +85,12 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 只有 `SKILL.md` 随渲染出仓；`local.md` 留在 `dev_env`，承载 vault 名、绝对家目录路径
 与只此一机存在的命令。这些 repo 都是 public，泄露不可撤销。
 
-不变量：内容单向流动（dev_env → render → checkout / OMCA desired state），无反向写路径；
-`ws-apply` 生成 `~/.omca/harness.json`（工具经 `ws-mcp-runtime exec` 注入运行环境，凭证仅由
-`env_files` 与运行时缓存解析，渲染件零字面量凭据）并将各宿主 MCP 配置统一收敛为
-`omca hub bridge -profile <workspace> -server <name>`；`ws-tui` 与 `ws-mem-daemon` 已退役，
-全机仅保留 `omca` 单一 TUI 与常驻守护进程；Root 常驻块（`scope: host`）严格 $\le 2,000$ 字符；
+不变量：内容单向流动（dev_env → render → checkout / 宿主配置），无反向写路径；
+渲染件零字面量凭据；Root 常驻块（`scope: host`）严格 $\le 2,000$ 字符；
 Workspace 块不进任何机器全局文件。物证、投递表与归档记录见
 [infra2#820](https://github.com/wangzitian0/infra2/issues/820) 与已归档
 [`Infra-019`](../project/archive/README.md#infra-019)。宿主发现规则
-（Codex / Gemini CLI 不越过 `.git`，Claude / Pi 无界向上）以 OMCA Knowledge Pack 与
+（Codex / Gemini CLI 不越过 `.git`，Claude / Pi 无界向上）以
 `dev_env` `test_discovery_matrix_b_layer_sentinel.py` 回归护栏为准。
 
 这一边界延续 [`core.md` §3.1](./core.md#31-repository-dependency-boundary) 与已归档
@@ -227,7 +217,6 @@ uv run pytest -q common/tests/test_sdk_contract_adoption.py
 证明标准：
 
 - 清单只把 `infra2` 和 `infra2-sdk` 列为 focus。
-- `oh-my-code-agent` 以 root-level `workspace-tooling / coordinated` submodule 存在。
 - 所有 `external-application` 必须是 `autonomous`，且不能进入 focus。
 - authority 与 preference 路径可读且不能逃逸 workspace root。
 - 现有 SDK 采用测试继续证明消费者使用发布 artifact，而不是 submodule 源码。
@@ -237,6 +226,5 @@ uv run pytest -q common/tests/test_sdk_contract_adoption.py
 - `sweep` 对未 resolved review thread、红色 check、未知值与失败的 probe 从不报告
   `WAITING`；gate 文本不参与判定；带变更 flag 的 gate 命令在执行前被拒绝。
 
-独立可用性证明必须经过分发边界：SDK 使用仓库外环境安装的发布 artifact；OMCA
-使用脱离构建源码目录的已安装二进制，并按实际 host/version 验证。源码目录内的
-测试不能替代这项证明；安全自动观测也不能替代人类 TUI/restart/model 验收。
+独立可用性证明必须经过分发边界：SDK 使用仓库外环境安装的发布 artifact。源码目录内的
+测试不能替代这项证明。
