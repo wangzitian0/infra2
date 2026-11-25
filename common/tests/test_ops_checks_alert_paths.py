@@ -185,6 +185,31 @@ def test_ops_checks_audit_job_runs_all_deploy_guards_before_scheduled_app_hooks(
     assert "confirmed_finding_pairs(" in alert_step["run"]
 
 
+def test_ops_checks_audit_job_timeout_and_artifact_uploads() -> None:
+    """audit job has 90m timeout, passes --artifacts-dir, and uploads artifacts + stage record."""
+    audit_job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"]
+    assert audit_job["timeout-minutes"] == 90
+    steps = _steps(audit_job)
+    hook_step = steps["Run scheduled App runtime audits (#1493)"]
+    assert "--artifacts-dir scheduled-audit-artifacts" in hook_step["run"]
+
+    results_step = steps["Upload scheduled audit artifacts"]
+    assert (
+        results_step["if"]
+        == "${{ !cancelled() && github.event.inputs.dry_run != 'true' }}"
+    )
+    assert results_step["with"]["name"] == "scheduled-audit-results"
+    assert results_step["with"]["retention-days"] == 30
+
+    record_step = steps["Upload scheduled audit stage record"]
+    assert (
+        record_step["if"]
+        == "${{ !cancelled() && github.event.inputs.dry_run != 'true' && env.STAGE_RECORD_POST != '' }}"
+    )
+    assert record_step["continue-on-error"] is True
+    assert record_step["with"]["name"] == "${{ env.STAGE_RECORD_POST }}"
+
+
 def _ops_checks_scheduler_ping_step() -> tuple[dict, str]:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["watchdog"]["steps"]
