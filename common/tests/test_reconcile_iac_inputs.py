@@ -6635,3 +6635,57 @@ def test_run_canary_reality_gate_blocks_prod_marker_and_fails_staging(
     assert rc_batch_fail == 1
     assert marker_calls == []
     assert seen_envs == ["production"]
+
+
+def test_cumulative_promotion_pins_canary_version_ref_to_latest_canary_release(
+    tmp_path,
+) -> None:
+    """Cumulative prod promotion uses the newest release in (before, after] that triggered platform/todo."""
+    from common.deploy.promotion_guard import required_staging_gates
+
+    repo = tmp_path / "repo"
+    (repo / "docs/ssot").mkdir(parents=True)
+    (repo / "platform/12.alerting").mkdir(parents=True)
+    (repo / "docs/ssot/deploy-dependencies.yaml").write_text(
+        (ROOT / "docs/ssot/deploy-dependencies.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (repo / "platform/12.alerting/compose.yaml").write_text("services: {}\n")
+    (repo / "docs/README.md").write_text("v1\n")
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-q", "-m", "v3.2.13")
+    git("tag", "v3.2.13")
+    git("tag", "production/v3.2.13")
+
+    (repo / "platform/12.alerting/compose.yaml").write_text(
+        "services:\n  alerting:\n    image: x\n"
+    )
+    git("commit", "-qam", "v3.2.14")
+    git("tag", "v3.2.14")
+
+    (repo / "docs/README.md").write_text("v2\n")
+    git("commit", "-qam", "v3.2.15")
+    git("tag", "v3.2.15")
+
+    changed = reconcile.changed_files_from_git(repo, "v3.2.13", "v3.2.15")
+    plan = build_plan(
+        changed,
+        repo_root=repo,
+        before="v3.2.13",
+        after="v3.2.15",
+        app_release_tags={},
+    )
+    assert "platform/todo" in plan.selected
+    assert plan.canary_version_ref == "v3.2.14"
+    assert required_staging_gates(plan) == {"platform/todo": "v3.2.14"}

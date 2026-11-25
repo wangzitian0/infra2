@@ -120,6 +120,10 @@ def assert_uv_lock_sdk_verified(
         check=False,
     )
     if shown.returncode != 0:
+        if (repo_root / "uv.lock").is_file():
+            raise SystemExit(
+                f"::error::upstream_post refused: cannot read {after}:uv.lock ({shown.stderr.strip()})"
+            )
         return
     sdk_ver = _infra2_sdk_from_uv_lock_text(shown.stdout)
     if not sdk_ver:
@@ -169,9 +173,6 @@ def require_upstream_post(
         raise SystemExit(
             "::error::upstream_post: GITHUB_REPOSITORY and GITHUB_TOKEN are required"
         )
-    domain = (env.get("INTERNAL_DOMAIN") or "zitian.party").strip()
-    check_prod_canary_health(domain=domain)
-    assert_uv_lock_sdk_verified(after, repo_root, repo=repo, token=token)
     commit = subprocess.run(
         ["git", "rev-parse", "--verify", f"{after}^{{commit}}"],
         cwd=repo_root,
@@ -179,6 +180,10 @@ def require_upstream_post(
         text=True,
         check=True,
     ).stdout.strip()
+    domain = (env.get("INTERNAL_DOMAIN") or "zitian.party").strip()
+    if "platform/todo" not in required:
+        check_prod_canary_health(domain=domain)
+    assert_uv_lock_sdk_verified(after, repo_root, repo=repo, token=token)
     staging_env = stage_hook_plan("staging").stage_id
 
     def staging(tag: str):

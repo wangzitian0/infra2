@@ -1092,7 +1092,10 @@ def test_verified_sdk_scan_keeps_the_verdict_of_the_full_scan() -> None:
     ):
         gh = _sdk_window()
         assert _verified(gh, wanted=wanted) & wanted == full & wanted, wanted
-    for unverified in ({"4.5.0"}, {"4.6.0"}, {"9.9.9"}):
+    revoked = _sdk_window()
+    assert _verified(revoked, wanted={"4.5.0"}) == {"4.4.0"}
+    assert revoked.run_reads == 2  # stops early once 4.5.0 is revoked on run 2
+    for unverified in ({"4.6.0"}, {"9.9.9"}):
         gh = _sdk_window()
         assert _verified(gh, wanted=unverified) == full
         assert gh.run_reads == 3, unverified  # the full window, as without `wanted`
@@ -1112,7 +1115,7 @@ def test_verified_sdk_scan_with_records_ignores_wanted() -> None:
 def test_verified_sdk_versions_revokes_on_newer_failure_and_restores_on_newer_pass() -> (
     None
 ):
-    """Latest-wins revocation: newer Canary failure revokes older pass; newer pass restores."""
+    """Latest-wins revocation: newer operation/post failure revokes older pass; newer pass restores."""
     from common.deploy.stage_record_reader import verified_sdk_versions
 
     revoked_records = [
@@ -1121,18 +1124,49 @@ def test_verified_sdk_versions_revokes_on_newer_failure_and_restores_on_newer_pa
     ]
     assert verified_sdk_versions(revoked_records) == set()
 
-    # Failure in canary_verify also revokes even if staging_gate is green.
-    cv_fail = _sdk_record("4.9.1", "v3.2.15", run=105, canary_ok=True)
-    cv_fail["checks"].append({"name": "platform/todo:canary_verify", "ok": False})
+    # Failure in operation (`canary_verify`) also revokes an older post pass.
+    op_fail = {
+        **_record(subject="tag:v3.2.15", phase="operation", run=105),
+        "units": ["platform/todo", "sdk:4.9.1"],
+        "checks": [{"name": "canary_verify", "ok": False}],
+    }
     assert (
-        verified_sdk_versions([cv_fail, _sdk_record("4.9.1", "v3.2.14", run=104)])
+        verified_sdk_versions([op_fail, _sdk_record("4.9.1", "v3.2.14", run=104)])
         == set()
     )
+
+    # An operation canary_verify pass alone does NOT verify an SDK version without post staging_gate.
+    op_pass = {
+        **_record(subject="tag:v3.2.15", phase="operation", run=105),
+        "units": ["platform/todo", "sdk:4.9.1"],
+        "checks": [{"name": "canary_verify", "ok": True}],
+    }
+    assert verified_sdk_versions([op_pass]) == set()
+
+    # End-to-end via FakeGitHub: skips `pre`, revokes on `operation` canary_verify fail.
+    gh = _CountingGitHub()
+    gh.add(
+        {
+            **_record(subject="tag:v3.2.15", phase="pre", run=105),
+            "units": ["platform/todo", "sdk:4.9.1"],
+            "checks": [{"name": "upstream_post", "ok": False}],
+        },
+        run=105,
+        created="2026-11-05T00:00:00Z",
+    )
+    gh.add(op_fail, run=105, created="2026-11-05T00:00:00Z")
+    gh.add(
+        _sdk_record("4.9.1", "v3.2.14", run=104, canary_ok=True),
+        run=104,
+        created="2026-11-04T00:00:00Z",
+    )
+    assert _verified(gh, wanted={"4.9.1"}) == set()
+    assert gh.run_reads == 1
 
     # Recovery: newest pass supersedes older failure.
     recovered = [
         _sdk_record("4.9.1", "v3.2.16", run=106, canary_ok=True),
-        _sdk_record("4.9.1", "v3.2.15", run=105, canary_ok=False),
+        op_fail,
     ]
     assert verified_sdk_versions(recovered) == {"4.9.1"}
 

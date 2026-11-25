@@ -33,7 +33,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -194,13 +194,19 @@ def _checked_records(
     subject: str,
     phase: str,
     since: datetime | None,
+    phases: Collection[str] | None = None,
 ) -> Iterator[tuple[datetime, dict]]:
     """``(created, record)`` of each record that passes the provenance checks, newest first."""
+    allowed_phases = (
+        set(phases) if phases is not None else ({phase} if phase else set())
+    )
     for artifact in _artifacts(repo, token, opener):
         name = str(artifact.get("name") or "")
         if since and _created(artifact) < since:
             return
-        if not name.startswith(prefix) or (phase and f"-{phase}-" not in name):
+        if not name.startswith(prefix):
+            continue
+        if allowed_phases and not any(f"-{p}-" in name for p in allowed_phases):
             continue
         if subject and not name.endswith("-" + subject.replace(":", "-")):
             continue
@@ -215,7 +221,7 @@ def _checked_records(
         record = checked[0] if isinstance(checked, tuple) else None
         if (
             record
-            and record["phase"] == (phase or record["phase"])
+            and (not allowed_phases or record["phase"] in allowed_phases)
             and record["subject"] == (subject or record["subject"])
         ):
             yield _created(artifact), record
@@ -265,9 +271,10 @@ def list_records(
 
 def _canary_sdk_verdict(rec: Mapping[str, Any]) -> tuple[set[str], set[str]]:
     """Return ``(passed_sdks, revoked_sdks)`` for one qualifying stage record."""
+    phase = rec.get("phase")
     if (
         rec.get("env") != "staging.release_validation"
-        or rec.get("phase") != "post"
+        or phase not in ("post", "operation")
         or rec.get("event") not in ("tag", "push")
     ):
         return set(), set()
@@ -288,19 +295,19 @@ def _canary_sdk_verdict(rec: Mapping[str, Any]) -> tuple[set[str], set[str]]:
         if isinstance(chk, Mapping)
         and (
             chk.get("name") in CANARY_STAGING_GATE_CHECKS
-            or chk.get("name") == "platform/todo:canary_verify"
+            or chk.get("name") in ("canary_verify", "platform/todo:canary_verify")
         )
     ]
     if not canary_checks:
         return set(), set()
     if any(chk.get("ok") is not True for chk in canary_checks):
         return set(), versions
-    if any(
+    if phase == "post" and any(
         chk.get("name") in CANARY_STAGING_GATE_CHECKS and chk.get("ok") is True
         for chk in canary_checks
     ):
         return versions, set()
-    return set(), versions
+    return set(), set()
 
 
 def verified_sdk_versions(
@@ -347,8 +354,9 @@ def verified_sdk_versions(
         opener,
         prefix=_env_prefix("staging.release_validation"),
         subject="",
-        phase="post",
+        phase="",
         since=since,
+        phases=("post", "operation"),
     ):
         passed_v, failed_v = _canary_sdk_verdict(record)
         for v in passed_v:
@@ -357,7 +365,7 @@ def verified_sdk_versions(
         for v in failed_v:
             if v not in verified:
                 revoked.add(v)
-        if targets and targets <= verified:
+        if targets and targets <= (verified | revoked):
             break
     return verified
 

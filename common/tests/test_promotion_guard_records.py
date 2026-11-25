@@ -549,3 +549,61 @@ def test_check_prod_canary_health_and_uv_lock_sdk_verification(
     guard.assert_uv_lock_sdk_verified(
         "v3.2.14", repo, repo="o/r", token="tok", verified_versions={"4.9.1"}
     )
+
+    # If uv.lock exists on disk in repo but is missing at `after`, fail closed.
+    _git(repo, "rm", "-q", "uv.lock")
+    _git(repo, "commit", "-q", "-m", "drop lock")
+    _git(repo, "tag", "v3.2.15")
+    (repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="cannot read v3.2.15:uv.lock"):
+        guard.assert_uv_lock_sdk_verified(
+            "v3.2.15", repo, repo="o/r", token="tok", verified_versions={"4.9.1"}
+        )
+
+
+def test_require_upstream_post_checks_prod_canary_health_without_recovery_deadlock(
+    repo, monkeypatch
+) -> None:
+    """App-only promotions fail closed on unhealthy prod Canary; Canary recovery itself is not deadlocked."""
+    gh = FakeGitHub()
+    commit = _git(repo, "rev-parse", f"{TAG}^{{commit}}")
+    gh.add(
+        _record(subject=f"tag:{TAG}", run=1),
+        run=1,
+    )
+    ci = _record(env=writer.CI_ENV, subject=f"sha:{commit}", run=2)
+    gh.add(ci, run=2, path=CI, event="push")
+    monkeypatch.setattr(
+        guard,
+        "read_record",
+        lambda *a, **k: stage_records.read_record(*a, opener=gh, **k),
+    )
+
+    def _down(*_a, **_k):
+        raise SystemExit(
+            "::error::upstream_post refused: live prod todo canary unhealthy"
+        )
+
+    monkeypatch.setattr(guard, "check_prod_canary_health", _down)
+    env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_TOKEN": "tok"}
+
+    # App-only promotion (no platform/todo in required) must refuse when prod canary is down.
+    with pytest.raises(SystemExit, match="live prod todo canary unhealthy"):
+        guard.require_upstream_post(
+            TAG,
+            repo,
+            before="",
+            required={"finance_report/app": "v0.2.61"},
+            releases=lambda *_a, **_k: [],
+            env=env,
+        )
+
+    # Canary recovery promotion (platform/todo in required) bypasses live prod check in `pre`.
+    guard.require_upstream_post(
+        TAG,
+        repo,
+        before="",
+        required={"platform/todo": TAG},
+        releases=lambda *_a, **_k: [],
+        env=env,
+    )
