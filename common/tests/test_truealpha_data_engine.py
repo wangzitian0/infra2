@@ -1156,7 +1156,14 @@ def test_configuration_sha256_hashes_the_compiled_compose(monkeypatch):
 def test_configuration_sha256_ignores_the_files_that_the_stack_no_longer_deploys(
     monkeypatch, tmp_path
 ):
-    """secrets.ctmpl, vault-agent.hcl and dagster-entrypoint.sh stay for rollback only."""
+    """The hash reads only vault-policy.hcl next to the compiled stack.
+
+    The compiled stack embeds its Vault template and agent config, so git keeps no
+    secrets.ctmpl or vault-agent.hcl here (common/security/secrets_render.COMPILED_FILES).
+    A file with one of those names, or a changed dagster-entrypoint.sh, does not change it.
+    """
+    for name in ("secrets.ctmpl", "vault-agent.hcl"):
+        assert not (SERVICE_DIR / name).exists(), name
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer
     base = deployer.source_config_env_base(_STAGING)
