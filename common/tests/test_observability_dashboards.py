@@ -2248,7 +2248,7 @@ def test_channel_name_has_a_single_definition() -> None:
         str(path.relative_to(ROOT))
         for path in ROOT.rglob("*.py")
         if "infra2-feishu-alerts" in path.read_text(encoding="utf-8", errors="ignore")
-        and not {"tests", ".venv", "repos", "oh-my-code-agent"} & set(path.parts)
+        and not {"tests", ".venv", "repos"} & set(path.parts)
         and not str(path.relative_to(ROOT)).startswith("common/alerting")
         and path != ROOT / "common" / "alerting.py"
     ]

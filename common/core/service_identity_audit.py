@@ -24,7 +24,7 @@ DEPLOY_BOUNDARIES = (
     ROOT / "common/deploy/promote.py",
     ROOT / "common/deploy/preview.py",
 )
-NON_OWNED_TOP_LEVEL = {"repos", "oh-my-code-agent"}
+NON_OWNED_TOP_LEVEL = {"repos"}
 
 
 def _owned_alert_catalogs() -> list[Path]:
