@@ -109,8 +109,14 @@ def test_sync_services_returns_structured_failure_result(monkeypatch) -> None:
 
     monkeypatch.setattr(sync_runner, "file_lock", unlocked)
     monkeypatch.setattr(sync_runner, "update_repo", lambda ref=None: True)
+    monkeypatch.setattr(
+        sync_runner,
+        "prepare_ref_env",
+        lambda _repo: sync_runner.RefEnv(python="/ref-env/bin/python"),
+    )
 
-    def fake_run(task_name, _repo_path, deploy_env):
+    def fake_run(task_name, _repo_path, deploy_env, *_ref, python=None):
+        assert python == "/ref-env/bin/python"
         return {
             "task": task_name,
             "success": task_name != "redis.sync",
@@ -758,6 +764,7 @@ def test_health_reports_installed_sdk_version(monkeypatch, tmp_path) -> None:
     - Removing `sdk_version` from the `/health` body fails the `"sdk_version" in body` check.
     - Reading the version from `uv.lock` of the workspace instead of the installed package
       fails the equality with `importlib.metadata.version("infra2-sdk")`.
+    - A `task_sdk` value that the reconcile does not know fails the `task_sdk` equality.
     """
     import importlib.metadata
 
@@ -773,6 +780,10 @@ def test_health_reports_installed_sdk_version(monkeypatch, tmp_path) -> None:
 
     assert "sdk_version" in body
     assert body["sdk_version"] == importlib.metadata.version("infra2-sdk")
+    # The reconcile check reads this value (common/deploy/reconcile_iac_inputs.py).
+    from common.deploy.reconcile_iac_inputs import RUNNER_TASK_SDK_REF_LOCK
+
+    assert body["task_sdk"] == RUNNER_TASK_SDK_REF_LOCK
 
     def absent(_name: str) -> str:
         raise importlib.metadata.PackageNotFoundError("infra2-sdk")

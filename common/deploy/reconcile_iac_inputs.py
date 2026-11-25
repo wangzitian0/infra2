@@ -3379,6 +3379,9 @@ def emit_post_record(
 
 
 RUNNER_HEALTH_ATTEMPTS = 3
+# The /health ``task_sdk`` value of a runner that runs each deploy task under the
+# uv.lock of its ref (bootstrap/06.iac_runner/sync_runner.py ``prepare_ref_env``).
+RUNNER_TASK_SDK_REF_LOCK = "ref_lock"
 
 
 def _sdk_version_key(version: str) -> tuple[int, ...]:
@@ -3436,14 +3439,14 @@ def assert_runner_sdk_covers_ref(
     read_health: Callable[[str], Mapping[str, object]] | None = None,
     locked_version: Callable[[str, Path], str] | None = None,
 ) -> str:
-    """Stop before any deploy unit when ``after`` locks a newer infra2-sdk than the runner.
+    """Stop before any deploy unit when the runner task SDK is older than ``after`` locks.
 
-    The IaC runner compiles the x-infra2 composes of ``after`` with its own installed SDK.
-    An older SDK rejects keys that a newer one added, so the deploy fails midway (#1822).
-    The runner image is rebuilt only in a production promotion, before this check runs.
-    A runner that does not report ``sdk_version`` (or reports ``unknown``) gives a warning
-    and passes. Its ``git_sha`` is the workspace HEAD, not the image build commit, so it
-    cannot give the SDK of the image. Returns the verdict detail.
+    An old runner compiles the x-infra2 composes of ``after`` with its image SDK. An older
+    SDK rejects keys that a newer one added, so the deploy fails midway (#1822). A runner
+    that reports ``task_sdk=ref_lock`` runs each task under ``<after>:uv.lock`` and passes.
+    Otherwise the check compares ``sdk_version`` (the image SDK). A runner without
+    ``sdk_version`` gives a warning and passes: its ``git_sha`` is the workspace HEAD, not
+    the image build commit, so it cannot give the SDK. Returns the verdict detail.
     """
     url = (runner_url or os.environ.get("IAC_RUNNER_URL", "")).strip()
     if not url:
@@ -3456,6 +3459,10 @@ def assert_runner_sdk_covers_ref(
         health = (read_health or _read_runner_health)(url)
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
         raise SystemExit(f"::error::runner SDK check failed: {exc}") from exc
+    if health.get("task_sdk") == RUNNER_TASK_SDK_REF_LOCK:
+        # The runner builds a venv from <after>:uv.lock for each deploy and fails the
+        # deploy when that sync fails, so the task imports ref_version (#1822).
+        return f"runner task SDK = {after} uv.lock (infra2-sdk {ref_version})"
     runner_version = str(health.get("sdk_version") or "").strip()
     if runner_version in ("", "unknown"):
         detail = (
