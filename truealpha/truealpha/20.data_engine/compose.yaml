@@ -1,3 +1,12 @@
+# TrueAlpha data engine (Dagster): hand-written file in the compiled x-infra2 shape
+# (#1822 Slice 3, step A). Deploy: deploy_v2(service="truealpha/data_engine").
+# Each Dagster service equals its compiled x-vault service: the SDK wait entrypoint
+# exports /secrets/.env, then runs `command`. The command runs dagster-entrypoint.sh,
+# which sets DAGSTER_POSTGRES_URL, validates the boot environment, and runs the role.
+# The script is bind-mounted at its image path /app/dagster-entrypoint.sh until the
+# pinned truealpha release carries it (truealpha#1866, v0.2.144).
+# The vault-agent sidecar keeps its mounted config and template; the deploy can set
+# VAULT_SECRETS_TEMPLATE (base64 of the release template), which the entrypoint decodes.
 # Fail closed when IMAGE_DIGEST, RELEASE_ID, CONFIGURATION_SHA256, or CAPTURE_APPROVED_BY is unset.
 x-dagster-service: &dagster-service
   image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:?IMAGE_DIGEST is required}
@@ -11,7 +20,6 @@ x-dagster-service: &dagster-service
   depends_on:
     vault-agent:
       condition: service_healthy
-  entrypoint: ["/bin/sh", "/opt/truealpha/dagster-entrypoint.sh"]
   environment: &dagster-env
     ENVIRONMENT: ${ENV}
     # Host-loopback MinIO (#602); was derived inside the hand-written secrets.ctmpl.
@@ -37,7 +45,7 @@ x-dagster-service: &dagster-service
     OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
     OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
   volumes:
-    - ./dagster-entrypoint.sh:/opt/truealpha/dagster-entrypoint.sh:ro
+    - ./dagster-entrypoint.sh:/app/dagster-entrypoint.sh:ro
     - secrets:/secrets:ro
     - ${DATA_PATH}:/var/lib/dagster
   # OpenD deliberately listens only on host 127.0.0.1. Host networking reaches
@@ -58,7 +66,7 @@ services:
     container_name: truealpha-data-engine-vault-agent${ENV_SUFFIX}
     restart: always
     mem_limit: 128m
-    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    cpu_shares: 256
     entrypoint:
       - sh
       - -c
@@ -87,18 +95,20 @@ services:
       VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
       ENV: ${ENV}
       ENVIRONMENT: ${ENV}
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
+      # secrets.ctmpl builds DATABASE_URL with this port. `env "X"` inside the template
+      # reads the agent's own environment, so every variable the template names must be
+      # forwarded here; test_vault_agent_forwards_every_template_env pins it. The SDK
+      # sidecar (x-infra2.vault) cannot forward it yet, so step B waits for that option.
       TA_POSTGRES_PORT: ${TA_POSTGRES_PORT}
-      # secrets.ctmpl dials MinIO with this (#604); `env "X"` inside the template
-      # reads the agent's own environment, so every variable the template names
-      # must be forwarded here — test_vault_agent_forwards_every_template_env pins it.
-      TA_MINIO_S3_PORT: ${TA_MINIO_S3_PORT}
       # Cache-bust (mirrors 10.app's vault-agent): secrets.ctmpl is a single-file
       # bind mount, so a checkout that rewrites it leaves this container holding the
       # old inode, and Compose only recreates the agent when its resolved config
       # changes. Without this, #604's endpoint line and #626's LLM_* lines stayed
       # unrendered on running staging/prod for weeks. CONFIGURATION_SHA256 covers
       # compose.yaml + secrets.ctmpl + vault-agent.hcl + vault-policy.hcl + public env.
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+      # The Dagster services still stop on an unset value (`:?`).
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -139,7 +149,31 @@ services:
   dagster-code-server:
     <<: *dagster-service
     container_name: truealpha-dagster-code-server${ENV_SUFFIX}
+    # The compiled x-vault wait entrypoint: export /secrets/.env, then exec `command`.
+    entrypoint: &vault-wait
+      - sh
+      - -c
+      - |
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
+          sleep 2
+          waited=$$((waited + 2))
+        done
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
+        set -a
+        . /secrets/.env
+        set +a
+        exec "$$@"
+      - --
     command:
+      - /bin/sh
+      - /app/dagster-entrypoint.sh
       - dagster
       - api
       - grpc
@@ -180,7 +214,10 @@ services:
         condition: service_healthy
       dagster-code-server:
         condition: service_healthy
+    entrypoint: *vault-wait
     command:
+      - /bin/sh
+      - /app/dagster-entrypoint.sh
       - dagster-webserver
       - --grpc-socket
       - /var/lib/dagster/code-server.sock
@@ -210,7 +247,8 @@ services:
         condition: service_healthy
       dagster-code-server:
         condition: service_healthy
-    command: ["dagster-daemon", "run", "--grpc-socket", "/var/lib/dagster/code-server.sock"]
+    entrypoint: *vault-wait
+    command: ["/bin/sh", "/app/dagster-entrypoint.sh", "dagster-daemon", "run", "--grpc-socket", "/var/lib/dagster/code-server.sock"]
     healthcheck:
       # `dagster-daemon liveness-check` is a full CLI cold start — under host load
       # (LA 8-10 measured) the import alone exceeds the 10s budget, and the daemon
