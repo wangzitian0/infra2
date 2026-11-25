@@ -84,7 +84,6 @@ class DataEngineDeployer(Deployer):
             "CAPTURE_APPROVED_BY",
             "GIT_COMMIT_SHA",
             "CONFIGURATION_SHA256",
-            "VAULT_SECRETS_TEMPLATE",
         }
     )
 
@@ -250,13 +249,47 @@ class DataEngineDeployer(Deployer):
                 "GIT_COMMIT_SHA": secrets.get("GIT_COMMIT_SHA") or "unknown",
             }
         )
+        compiled = cls._compiled_compose()
+        # The compiled sidecar embeds its template and ignores VAULT_SECRETS_TEMPLATE
+        # (#1822 Slice 3). A release template that is not the compiled one stops here,
+        # as common.deploy.promote does for the app stacks; an equal one adds nothing.
         vault_template = (env if env is not None else cls.env()).get(
             "VAULT_SECRETS_TEMPLATE", ""
         )
         if vault_template:
-            base["VAULT_SECRETS_TEMPLATE"] = vault_template
-        base["CONFIGURATION_SHA256"] = cls._configuration_sha256(base)
+            cls._assert_release_template(vault_template, compiled)
+        base["CONFIGURATION_SHA256"] = cls._configuration_sha256(base, compiled)
         return base
+
+    @classmethod
+    def _compiled_compose(cls) -> str:
+        """The compiled text of compose.yaml: the text that the deploy uploads as raw."""
+        from common.deploy.compose_compile import load_stack
+
+        return load_stack(cls.compose_path).compiled
+
+    @classmethod
+    def _assert_release_template(cls, encoded: str, compiled: str) -> None:
+        """Raise ValueError when the base64 release template is not the compiled one."""
+        import base64
+
+        from common.deploy.compose_compile import vault_template_label
+
+        try:
+            release = base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError(
+                f"{cls.service}: VAULT_SECRETS_TEMPLATE is not base64 UTF-8 text: {exc}"
+            ) from None
+        label = vault_template_label(compiled)
+        got = hashlib.sha256(release.encode("utf-8")).hexdigest()
+        if not label or got != label:
+            raise ValueError(
+                f"{cls.service}: the release Vault template (sha256 {got[:12]}) is not "
+                f"the compiled template of {cls.compose_path} (sha256 "
+                f"{label[:12] or 'none'}). Regenerate env.manifest.json from the release "
+                "tag (tools/app_manifest_sync.py --write), merge, then deploy again"
+            )
 
     #: Where the governed moomoo origins run (truealpha#854, #874).
     _MOOMOO_ORIGIN_ENVIRONMENTS = ("staging", "production")
@@ -289,18 +322,20 @@ class DataEngineDeployer(Deployer):
         return base
 
     @classmethod
-    def _configuration_sha256(cls, public_env: dict[str, str]) -> str:
-        directory = Path(__file__).resolve().parent
-        artifacts = []
-        for name in (
-            "compose.yaml",
-            "dagster-entrypoint.sh",
-            "secrets.ctmpl",
-            "vault-agent.hcl",
-            "vault-policy.hcl",
-        ):
-            path = directory / name
-            artifacts.append((name, hashlib.sha256(path.read_bytes()).hexdigest()))
+    def _configuration_sha256(
+        cls, public_env: dict[str, str], compiled: str | None = None
+    ) -> str:
+        """Hash the compiled compose, the Vault policy and the public env (#1822).
+
+        The compiled text holds the vault-agent config and template and runs the image
+        dagster-entrypoint.sh, so no other stack file is deployed.
+        """
+        text = cls._compiled_compose() if compiled is None else compiled
+        policy = Path(__file__).resolve().parent / "vault-policy.hcl"
+        artifacts = [
+            ("compose.compiled.yaml", hashlib.sha256(text.encode("utf-8")).hexdigest()),
+            ("vault-policy.hcl", hashlib.sha256(policy.read_bytes()).hexdigest()),
+        ]
         payload = {
             "public_env": dict(sorted(public_env.items())),
             "artifacts": artifacts,
