@@ -54,8 +54,9 @@ _SERVICE_ROOT_FLOORS: dict[str, tuple[int, int]] = {
     "platform": (13, 350),
     # finance_report and truealpha read fewer inputs since #1822 Slice 3: an x-infra2
     # stack has no mounted secrets.ctmpl or vault-agent.hcl (data stores, then 10.app).
+    # truealpha 20.data_engine mounts no dagster-entrypoint.sh since v0.2.144 (truealpha#1866).
     "finance_report": (4, 2),
-    "truealpha": (4, 5),
+    "truealpha": (4, 4),
     "bootstrap": (4, 12),
 }
 
