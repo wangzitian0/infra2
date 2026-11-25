@@ -3695,18 +3695,14 @@ def run_canary_reality_gate(
     env_name = "production" if target_env in ("prod", "production") else "staging"
     expected_sdk = _expected_canary_sdk_at_ref(after, repo_root)
     expected_sha = ""
-    try:
-        resolved = resolve_image_ref(after, repo_root=repo_root)
-        expected_sha = str(getattr(resolved, "sha", "") or "").strip().lower()
-    except Exception:  # noqa: BLE001
-        shown = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", f"{after}^{{commit}}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if shown.returncode == 0:
-            expected_sha = shown.stdout.strip().lower()
+    shown = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", f"{after}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown.returncode == 0:
+        expected_sha = shown.stdout.strip().lower()
 
     max_attempts = 4
     report = None
@@ -3849,7 +3845,10 @@ def run_operation(
         and not args.dry_run
         and not deploy_failed
         and not hooks_failed
-        and any(cmd.service == "platform/todo" for cmd in train.applied)
+        and any(
+            "platform/todo" in {s.strip() for s in cmd.service.split(",")}
+            for cmd in train.applied
+        )
     ):
         cv_began = time.monotonic()
         cv_ok, cv_detail = run_canary_reality_gate(

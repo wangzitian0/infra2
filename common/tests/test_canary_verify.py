@@ -1627,6 +1627,33 @@ def test_canary_verify_hardening_gates_feishu_metrics_ledger_day_and_platform_de
     assert "canary.probe.outcomes" in cm_sql
     assert "resource_attrs['service.version'] = 'v3.2.10'" in cm_sql
 
+    # 6. expected_version requires /api/health to report matching non-null version.
+    base_ok = _canned_stdout(
+        traces=f"500\t{fresh}",
+        logs=f"100\t{fresh}",
+        environment="staging",
+    )
+    missing_ver, _ = _verify_with_canned_ssh(
+        "staging", base_ok, health_body={"ok": True}, expected_version="abc1234"
+    )
+    assert missing_ver.monitoring.ok is False
+    assert "public_health=fail" in missing_ver.monitoring.summary
+    mismatch_ver, _ = _verify_with_canned_ssh(
+        "staging",
+        base_ok,
+        health_body={"ok": True, "version": "oldsha99"},
+        expected_version="abc1234",
+    )
+    assert mismatch_ver.monitoring.ok is False
+    match_ver, _ = _verify_with_canned_ssh(
+        "staging",
+        base_ok,
+        health_body={"ok": True, "version": "abc1234"},
+        expected_version="abc1234",
+    )
+    assert match_ver.monitoring.ok is True
+    assert match_ver.all_ok is True
+
 
 def test_require_app_peer_cli_flag_forwards_to_verify_canary() -> None:
     pass_report = CanaryRealityReport(

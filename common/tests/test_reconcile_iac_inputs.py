@@ -6602,3 +6602,25 @@ def test_run_canary_reality_gate_blocks_prod_marker_and_fails_staging(
     assert rc_prod_ok == 0
     assert marker_calls == ["v3.2.11"]
     assert seen_envs == ["production"]
+
+    # 4. Batched platform commands ("platform/alerting,platform/todo") still trigger canary_verify.
+    fail_mode[0] = True
+    marker_calls.clear()
+    seen_envs.clear()
+    monkeypatch.setenv("STAGE_RECORD_DIR", str(tmp_path / "rec_batch_fail"))
+    rc_batch_fail = main(
+        [
+            "--before",
+            "v3.2.10",
+            "--after",
+            "v3.2.11",
+            "--promote-prod",
+            "--changed-file",
+            "platform/12.alerting/compose.yaml",
+            "--changed-file",
+            "platform/30.todo/compose.yaml",
+        ]
+    )
+    assert rc_batch_fail == 1
+    assert marker_calls == []
+    assert seen_envs == ["production"]

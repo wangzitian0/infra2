@@ -839,8 +839,11 @@ def verify_canary(
     ):
         telemetry_version = observed_version.strip()
 
-    if expected_version and health_ok and isinstance(observed_version, str):
-        if observed_version.strip() != expected_version.strip():
+    if expected_version and health_ok:
+        if (
+            not isinstance(observed_version, str)
+            or observed_version.strip() != expected_version.strip()
+        ):
             health_ok = False
 
     # The same environment, version and window scope the ClickHouse telemetry queries.
