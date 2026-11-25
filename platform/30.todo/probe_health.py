@@ -19,6 +19,8 @@ from infra2_sdk.deploy import default_http_get, poll_until_healthy
 GATE_VERDICT_WAIT_SECONDS = 90
 GATE_MAX_VERDICT_AGE_SECONDS = 180
 GATE_REQUEST_TIMEOUT_SECONDS = 10
+HEALTH_POLL_MAX_ATTEMPTS = 3
+HEALTH_POLL_RETRY_SECONDS = 3.0
 GATE_POLL_SECONDS = 10
 SSO_PROTECTED_STATUSES = frozenset({301, 302, 303, 307, 308, 401, 403})
 # The Canary image pin of the deployed release (common/deploy/canary_pin.py owns the format).
@@ -114,7 +116,23 @@ def main(
         default=GATE_REQUEST_TIMEOUT_SECONDS,
         help="HTTP request timeout in seconds.",
     )
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        default=HEALTH_POLL_MAX_ATTEMPTS,
+        help="Maximum health poll attempts before failing.",
+    )
+    parser.add_argument(
+        "--retry-interval",
+        type=float,
+        default=HEALTH_POLL_RETRY_SECONDS,
+        help="Seconds to wait between retry attempts.",
+    )
     args = parser.parse_args(argv)
+    if args.attempts < 1:
+        parser.error("--attempts must be >= 1")
+    if args.retry_interval < 0:
+        parser.error("--retry-interval must be >= 0")
 
     url = f"{args.base_url.rstrip('/')}/api/health"
     deadline = time.monotonic() + GATE_VERDICT_WAIT_SECONDS
@@ -122,8 +140,8 @@ def main(
         response = poll_until_healthy(
             url,
             http_get=default_http_get(timeout=float(args.timeout)),
-            max_attempts=1,
-            interval_seconds=0.0,
+            max_attempts=args.attempts,
+            interval_seconds=args.retry_interval,
         )
         payload = json.loads(response.body)
         canary = payload.get("canary")
