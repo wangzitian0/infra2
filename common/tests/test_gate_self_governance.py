@@ -1,8 +1,8 @@
 """What judges a pull request is computed, and must never compute to less.
 
 `SELF_GOVERNING_FILES` was a hand-written list of five paths. A hand-written
-list is open: `tools/pr_merge_gate.py` imports `tools/omca_gate_policy.py` (the
-blocking audit layer) and `common/console.py`, and neither was on it. Adding an
+list is open: `tools/pr_merge_gate.py` imported a blocking audit layer (since
+retired with its tool) and `common/console.py`, and neither was on it. Adding an
 import widened what judges a pull request without widening what protects it.
 
 Replacing it with a closure fixes that by construction and introduces the
@@ -43,7 +43,6 @@ MUST_BE_GOVERNED = (
     # the hand-written list the closure replaced (a ratchet: grow, never shrink)
     *sorted(LIST_BEFORE_THE_CLOSURE),
     # the closure found what the list had missed
-    "common/gate/omca_policy.py",
     "common/console.py",
     # entry point, logic module and the one test of the logic (#1823 Step 4.3)
     "tools/pr_merge_gate.py",

@@ -357,7 +357,7 @@ def _signoz_signal_entries() -> list[dict[str, Any]]:
     catalogs: list[dict[str, Any]] = [{"rules": list(STANDARD_RULES)}]
     for path in sorted(ROOT.glob("**/alert_rules.json")):
         relative = path.relative_to(ROOT)
-        if relative.parts[0] in {"repos", "oh-my-code-agent"} or any(
+        if relative.parts[0] == "repos" or any(
             part.startswith(".") for part in relative.parts
         ):
             continue

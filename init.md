@@ -27,7 +27,6 @@
    - The stages, phases and change kinds are defined once in [`docs/ssot/ops.pipeline.md` section 2.0](docs/ssot/ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases).
 5. **Workspace Harness Without Ownership Merger (`docs/ssot/core.harness.md`, `harness/repos.yaml`):**
    - `repos/finance_report` and `repos/truealpha` are autonomous application checkouts (`contract: snapshot`).
-   - `oh-my-code-agent/` is independent workspace tooling (`contract: snapshot`).
    - `repos/infra2-sdk` is a coordinated contract submodule (`contract: pinned`).
    - Each repository owns its own `init.md` (charter), `AGENTS.md` (projected Repo-tier operational rules), CI gates, and release identity.
 

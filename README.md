@@ -54,7 +54,6 @@ invoke --list
 ```
 infra2/
 ├── harness/          # Workspace 清单与通用协作/设计偏好
-├── oh-my-code-agent/ # Coding-agent 配置观察与隔离 runtime (git submodule)
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
 ├── finance_report/   # L4 - 业务应用 IaC 编排 (Finance Report Deployer)
@@ -78,9 +77,6 @@ submodules 只作为统一开发 workspace；生产部署仍由 infra tag、SDK 
 App 的本地规范、CI 与发布流程保持自治。详见 [Workspace Harness](harness/README.md)、
 [Workspace repositories](repos/README.md) 和
 [Core repository boundary](docs/ssot/core.md#31-repository-dependency-boundary)。
-
-根目录 [`oh-my-code-agent`](oh-my-code-agent/README.md) 是独立的 workspace tooling
-sub-repo，后续统一承载各类 TUI 管理；它不进入 infra/App runtime dependency graph。
 
 ## 📚 文档入口
 

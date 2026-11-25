@@ -90,10 +90,6 @@ def run_preflight(verbose: bool = False) -> int:
         ),
         ("Deploy guard audit", [sys.executable, "tools/deploy_guard_audit.py"]),
         (
-            "OMCA gate policy self-test",
-            [sys.executable, "-m", "tools.omca_gate_policy", "--self-test"],
-        ),
-        (
             "Backup inventory audit",
             [sys.executable, "tools/backup_inventory_audit.py"],
         ),

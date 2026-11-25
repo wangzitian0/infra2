@@ -100,7 +100,6 @@
   "common/tests/test_no_new_wheels_lint.py": 2.18,
   "common/tests/test_observability_dashboards.py": 1.78,
   "common/tests/test_observability_roundtrip_probe.py": 0.12,
-  "common/tests/test_omca_gate_policy.py": 0.02,
   "common/tests/test_onboarding_sop_contract.py": 0.01,
   "common/tests/test_ops_checks_alert_paths.py": 2.17,
   "common/tests/test_ops_checks_entrypoints_import.py": 5.0,

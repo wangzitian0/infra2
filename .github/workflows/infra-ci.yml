@@ -47,7 +47,7 @@ jobs:
   # the first place never reports anything, and blocks merge forever
   # waiting on a status that will never arrive -- exactly what happened to
   # submodule-pointer-only PRs before the path list above included the
-  # bare gitlink paths (oh-my-code-agent, repos/finance_report, etc.),
+  # bare gitlink paths (repos/finance_report, repos/truealpha, etc.),
   # which never match a `dir/**` glob since a gitlink bump changes that
   # exact path, never a file beneath it.
   #
