@@ -2505,7 +2505,7 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     _, _, ta_audit_env = invocations[-1]
     assert ta_audit_env["ENVIRONMENT"] == "staging"
 
-    # 3. finance_report smoke (uses BASE_URL="$INFRA2_HOOK_APP_URL" bash tools/smoke_test.sh)
+    # 3. finance_report smoke (uses APP_URL)
     res_fr_smoke = execute_app_hook_slot(
         fr_manifest,
         "smoke",
@@ -2519,9 +2519,11 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     assert res_fr_smoke.status == "pass"
     _, fr_cwd, fr_env = invocations[-1]
     assert fr_cwd == fr_sub
-    assert fr_env["INFRA2_HOOK_APP_URL"] == "https://report-staging.zitian.party"
     assert fr_env["APP_URL"] == "https://report-staging.zitian.party"
-    assert fr_env["BASE_URL"] == "https://report-staging.zitian.party"
+    assert fr_env["ENVIRONMENT"] == "staging"
+    assert "INFRA2_HOOK_APP_URL" not in fr_env
+    assert "BASE_URL" not in fr_env
+    assert "DEPLOY_ENV" not in fr_env
 
     # 4. run_post_deploy_app_hooks uses repos/<app> cwd when present, or fetches temp checkout
     (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
@@ -3904,10 +3906,7 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
 
     rejected = {
         "NEW_REQUIRED_NAME": "missing required hook env: NEW_REQUIRED_NAME",
-        # The runner lists these three in optional_env of every slot.
-        "INFRA2_HOOK_APP_URL": "cannot be in both required_env and optional_env",
-        "BASE_URL": "cannot be in both required_env and optional_env",
-        "DEPLOY_ENV": "cannot be in both required_env and optional_env",
+        "INFRA2_TOUCHED_FILES": "missing required hook env: INFRA2_TOUCHED_FILES",
     }
     for name, message in rejected.items():
         assert name not in app_contract.HOOK_RUNNER_CONTEXT_ENV
@@ -3922,6 +3921,19 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
                 ambient_env={"PATH": "/usr/bin:/bin"},
                 runner=_runner,
             )
+    with pytest.raises(
+        ValueError, match="cannot be in both required_env and optional_env"
+    ):
+        app_contract.execute_app_hook_slot(
+            _manifest(["INFRA2_TOUCHED_FILES"]),
+            "smoke",
+            app_url="https://app.example.invalid",
+            environment="staging",
+            version_ref="v1.2.3",
+            cwd=tmp_path,
+            ambient_env={"PATH": "/usr/bin:/bin", "INFRA2_TOUCHED_FILES": "a.py"},
+            runner=_runner,
+        )
 
 
 def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook_env(
@@ -5405,7 +5417,7 @@ def test_sync_app_releases_missing_token_sdk_record_fails_not_held(
     monkeypatch.setattr(
         reconcile,
         "locked_sdk_version_for_app_ref",
-        lambda *_a, **_kw: "3.32.0",
+        lambda *_a, **_kw: "4.3.0",
     )
     with pytest.raises(ValueError, match="requires repo and token"):
         main(

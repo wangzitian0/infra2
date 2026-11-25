@@ -533,7 +533,6 @@ def test_the_deployer_issues_the_identity_and_the_compose_hands_it_to_the_contai
                 "VPS_HOST": "vps",
             }
         ),
-        "verify_vault_app_token": classmethod(lambda cls: {"valid": True}),
         "ensure_runtime_secrets": classmethod(lambda cls, c, env=None: True),
         "apply_secret_supply": classmethod(lambda cls, c, env=None: True),
         "compute_local_config_hash": classmethod(lambda cls, c, env: "new"),

@@ -42,9 +42,7 @@ from common.observability.openpanel import openpanel_env
 from infra2_sdk.refs import resolve_to_sha
 from common.deploy.preflight import (
     check_approle_creds,
-    extract_vault_token_from_env,
     parse_env_var as _env_value,
-    verify_token_status,
 )
 from common.deploy.dokploy_adapter import (
     await_effective_config_hash,
@@ -259,37 +257,6 @@ def ensure_generated_secrets(service: str, env: str) -> None:
         raise ValueError(
             f"{service}: failed to auto-provision one or more runtime secrets in "
             f"Vault for env {env!r} — see the Vault write error logged above."
-        )
-
-
-def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
-    """Fail closed before deploy if the compose's legacy VAULT_APP_TOKEN is present but
-    invalid or expiring within min_ttl_hours. The token is gated only when present — a
-    compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
-
-    AppRole services (VAULT_ROLE_ID/VAULT_SECRET_ID present) are skipped: post-migration a
-    vestigial VAULT_APP_TOKEN can linger in Dokploy and expire un-renewed, so gating on it
-    would hard-block an AppRole deploy that would otherwise clean it up. Reuses the
-    class-free common.env.verify_vault_token. This does NOT auto-repair; it fails closed.
-
-    No caller-supplied domain: the token being verified lives on the ONE shared Vault
-    instance, never a per-service app-routing domain (infra_domain() — #561's general
-    form; this call site was the one #561 didn't cover, since it's phrased as a
-    positional caller-supplied param rather than a URL built inline).
-    """
-    env_text = client.get_compose_env(compose_id)
-    is_approle, token = extract_vault_token_from_env(env_text)
-    if is_approle or not token:
-        return  # AppRole auth or no token -> nothing to gate on
-
-    result = verify_token_status(
-        token, vault_addr=f"https://vault.{infra_domain()}", min_ttl_hours=min_ttl_hours
-    )
-    if not result.get("valid"):
-        raise RuntimeError(
-            f"VAULT_APP_TOKEN preflight failed for compose {compose_id}: "
-            f"{result.get('error') or 'invalid token'}. This is a legacy static token; "
-            "remove it from the service's Dokploy env (services authenticate via AppRole now)."
         )
 
 
@@ -522,13 +489,10 @@ def _preflight_deploy(
     client: Any,
     compose_id: str,
     deploy_environment: str,
-    verify_vault: bool,
 ) -> None:
-    """Fail closed on auth or token defects and ensure required secrets exist."""
+    """Fail closed on auth defects and ensure required secrets exist."""
     assert_approle_creds_present(service, client, compose_id)
     ensure_generated_secrets(service, deploy_environment)
-    if verify_vault:
-        preflight_vault_token(client, compose_id)
 
 
 def _evaluate_schema_gate(
@@ -1063,7 +1027,6 @@ def deploy(
         client=dep.client,
         compose_id=cfg.compose_id,
         deploy_environment=deploy_environment,
-        verify_vault=opt.verify_vault,
     )
 
     image_tag = opt.image_ref or sha[:7]

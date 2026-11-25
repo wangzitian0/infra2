@@ -83,22 +83,14 @@ def _hook_context_env(
     """Return (env name, value) pairs that the runner fills from the deploy request."""
     return (
         ("APP_URL", app_url),
-        ("INFRA2_HOOK_APP_URL", app_url),
-        ("BASE_URL", app_url),
         ("ENVIRONMENT", environment),
-        ("DEPLOY_ENV", environment),
         ("APP_VERSION_REF", version_ref),
     )
 
 
 #: Env names that the runner adds to ``optional_env`` of every slot. A manifest cannot list
 #: them in ``required_env``: the SDK rejects a name in both lists.
-_HOOK_OPTIONAL_CONTEXT_ENV: tuple[str, ...] = (
-    "INFRA2_HOOK_APP_URL",
-    "BASE_URL",
-    "DEPLOY_ENV",
-    "INFRA2_TOUCHED_FILES",
-)
+_HOOK_OPTIONAL_CONTEXT_ENV: tuple[str, ...] = ("INFRA2_TOUCHED_FILES",)
 #: Env names that the runner fills from the deploy request when the ambient env holds none.
 #: A manifest may list these in ``required_env`` without a secret.
 HOOK_RUNNER_CONTEXT_ENV: frozenset[str] = frozenset(
@@ -242,38 +234,11 @@ def _attribute(field: EnvironmentField, name: str) -> object:
     return tuple(sorted(value)) if name == "aliases" else value
 
 
-def _satisfies_alias(
-    wanted_env: str,
-    wanted: Mapping[str, object],
-    have_env: str,
-    have: Mapping[str, object],
-) -> bool:
-    """Return True when ``have`` covers ``wanted`` via declared primary or alias names."""
-    have_aliases = have.get("aliases") or ()
-    wanted_aliases = wanted.get("aliases") or ()
-    have_names = {
-        have_env,
-        *(have_aliases if isinstance(have_aliases, (tuple, list)) else ()),
-    }
-    wanted_names = {
-        wanted_env,
-        *(wanted_aliases if isinstance(wanted_aliases, (tuple, list)) else ()),
-    }
-    if not wanted_names <= have_names:
-        return False
-    return all(
-        wanted[name] == have[name]
-        for name in CONTRACT_ATTRIBUTES
-        if name not in {"env", "aliases"}
-    )
-
-
 def unmet(release: Contract, provided: Sequence[Contract]) -> list[Gap]:
     """What ``release`` needs and none of the ``provided`` contracts supplies.
 
     ``provided`` holds one contract per manifest of the stack. A variable is met when one of
-    them declares it with the same attributes (or covers an older primary name as an alias
-    with identical contract attributes). ``provided`` may supply more than the release
+    them declares it with the same attributes. ``provided`` may supply more than the release
     needs. The App stack copies are projections of the pinned release (#1822): a field
     that a newer release dropped leaves the copy when the pin advances, so an older
     release can show a gap on a newer infra2 and the deploy fails closed.
@@ -282,13 +247,6 @@ def unmet(release: Contract, provided: Sequence[Contract]) -> list[Gap]:
     for env, wanted in sorted(release.items()):
         declared = [contract[env] for contract in provided if env in contract]
         if wanted in declared:
-            continue
-        if any(
-            _satisfies_alias(env, wanted, have_env, have)
-            for contract in provided
-            for have_env, have in contract.items()
-            if env == have_env or env in (have.get("aliases") or ())
-        ):
             continue
         if not declared:
             gaps.append(Gap(env, f"missing (source {wanted['source']})"))
@@ -381,20 +339,12 @@ def render_release_template(
         else parse_manifest(raw_stack, label=stack_path)
     )
 
-    release_names = {
-        name
-        for entry in release_fields.values()
-        for name in (entry.env, *entry.aliases)
-    }
     merged_fields: dict[str, EnvironmentField] = {}
     for entry in stack_manifest.fields:
         if entry.env in service.exclude_envs:
             continue
         if entry.env in release_fields:
             merged_fields[entry.env] = release_fields[entry.env]
-            continue
-        if any(name in release_names for name in (entry.env, *entry.aliases)):
-            # A migrated release field shares an alias with this stack baseline entry.
             continue
         merged_fields[entry.env] = entry
     for env, entry in release_fields.items():

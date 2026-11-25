@@ -237,15 +237,6 @@ def test_deployer_sync_under_secrets_supply_action_stops_after_the_supply(
         "apply_secret_supply",
         classmethod(lambda cls, c, env=None: seen.append(env) or True),
     )
-    monkeypatch.setattr(
-        AlertingLike,
-        "verify_vault_app_token",
-        classmethod(
-            lambda cls: (_ for _ in ()).throw(
-                AssertionError("must not reach the compose path")
-            )
-        ),
-    )
     assert AlertingLike.sync(object()) == {
         "action": "supplied",
         "details": "secret supply applied; no compose",
@@ -272,11 +263,6 @@ def test_deployer_sync_runs_the_supply_even_when_the_compose_hash_says_skip(
     monkeypatch.setattr(deployer_module, "validate_env", lambda: [])
     monkeypatch.delenv("DEPLOY_ACTION", raising=False)
     monkeypatch.setenv("IAC_DEPLOY_REF", "a" * 40)
-    monkeypatch.setattr(
-        AlertingLike,
-        "verify_vault_app_token",
-        classmethod(lambda cls: {"valid": True, "ttl_hours": 999}),
-    )
     monkeypatch.setattr(
         AlertingLike, "ensure_runtime_secrets", classmethod(lambda cls, c: True)
     )

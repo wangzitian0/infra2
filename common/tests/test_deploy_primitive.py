@@ -925,46 +925,6 @@ def test_deploy_replaces_compose_env_and_removes_model_overrides():
     assert "VISION_MODEL" not in plan.env_vars
 
 
-# --- bash-parity: vault preflight ------------------------------------------------
-
-
-def test_preflight_vault_token_skips_when_compose_has_no_token():
-    # a compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault)
-    client = FakeDokploy(env_str="IMAGE_TAG=abc\nFOO=bar")
-    dp.preflight_vault_token(client, "cmp")  # must not raise / not call vault
-
-
-def test_preflight_vault_token_skips_for_approle_service(monkeypatch):
-    # #369: an AppRole service (VAULT_ROLE_ID/VAULT_SECRET_ID present) must NOT be gated
-    # on a vestigial VAULT_APP_TOKEN — it would expire un-renewed and hard-block deploys.
-    import common.security.store as env_mod
-
-    def _boom(*_a, **_k):
-        raise AssertionError("AppRole service must not hit the VAULT_APP_TOKEN check")
-
-    monkeypatch.setattr(env_mod, "verify_vault_token", _boom)
-    client = FakeDokploy(
-        env_str="VAULT_ROLE_ID=role-x\nVAULT_SECRET_ID=secret-y\nVAULT_APP_TOKEN=hvs.stale"
-    )
-    dp.preflight_vault_token(client, "cmp")  # must not raise / not call vault
-
-
-def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
-    import common.security.store as env_mod
-
-    monkeypatch.setattr(
-        env_mod,
-        "verify_vault_token",
-        lambda token, addr=None, min_ttl_hours=24: {
-            "valid": False,
-            "error": "TTL too low",
-        },
-    )
-    client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.deadbeef")
-    with pytest.raises(RuntimeError, match="VAULT_APP_TOKEN preflight failed"):
-        dp.preflight_vault_token(client, "cmp")
-
-
 # --- #290's fixed staging/prod twin: assert_approle_creds_present ----------------
 
 
@@ -1250,34 +1210,6 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
     )
     assert plan.sha == FULL_SHA
     assert client.deployed  # the deploy still happened
-
-
-def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
-    import common.security.store as env_mod
-
-    monkeypatch.setattr(
-        env_mod,
-        "verify_vault_token",
-        lambda token, addr=None, min_ttl_hours=24: {"valid": False, "error": "expired"},
-    )
-    # This test isolates the legacy VAULT_APP_TOKEN gate specifically — a real compose
-    # with a live, invalid legacy token but NO AppRole creds at all no longer exists
-    # post-#257 (every service's compose requires VAULT_ROLE_ID/SECRET_ID to even
-    # start), so assert_approle_creds_present would otherwise fire first here on a
-    # fixture this test doesn't intend to exercise. See test_assert_approle_creds_*
-    # below for that gate's own coverage.
-    monkeypatch.setattr(dp, "assert_approle_creds_present", lambda *a, **k: None)
-    client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.x")
-    with pytest.raises(RuntimeError, match="preflight failed"):
-        dp.deploy(
-            "staging",
-            "deadbeef",
-            options=PromoteOptions(verify_vault=True),
-            deps=PromoteDeps(client=client, domain="z.p"),
-        )
-    # gate runs before mutation: neither env-update nor deploy happened
-    assert client.updated == []
-    assert client.deployed == []
 
 
 # --- bash-parity: post-deploy effective-config verify ----------------------------

@@ -53,7 +53,7 @@ from common.deploy.sync_pipeline import (
     SyncPipeline,
     SyncResult,
 )
-from common.security.store import get_secrets, verify_vault_token
+from common.security.store import get_secrets
 from common.core.facets import (
     BackupFacet,
     Exemption,
@@ -1504,35 +1504,6 @@ class Deployer:
             env_vars,
             _artifact_items_from_disk(cls.compose_path, compose_content),
             _dependency_items_from_disk(cls.compose_path),
-        )
-
-    @classmethod
-    def verify_vault_app_token(cls) -> dict:
-        """Verify VAULT_APP_TOKEN stored in Dokploy is valid."""
-        e = cls.env()
-        existing = cls._find_remote_compose(e)
-
-        if not existing:
-            return {"valid": True, "error": None, "details": "No existing deployment"}
-
-        from common.deploy.preflight import (
-            extract_vault_token_from_env,
-            verify_token_status,
-        )
-
-        is_approle, token = extract_vault_token_from_env(existing.get("env", ""))
-        if is_approle:
-            return {
-                "valid": True,
-                "error": None,
-                "details": "AppRole auth; legacy VAULT_APP_TOKEN preflight skipped",
-            }
-        if not token:
-            return {"valid": True, "error": None, "details": "No VAULT_APP_TOKEN found"}
-
-        vault_addr = e.get("VAULT_ADDR", "http://vault:8200")
-        return verify_token_status(
-            token, vault_addr=vault_addr, min_ttl_hours=24, verifier=verify_vault_token
         )
 
     @classmethod
