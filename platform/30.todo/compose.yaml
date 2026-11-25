@@ -44,6 +44,9 @@ services:
       AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
       # The deploy issues the full infra2 SHA as INFRA_IAC_REF. The page shows its first 7 characters.
       GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
+      # infra2-sdk reads the service version only from SERVICE_VERSION (#1823 N1). The deploy
+      # issues INFRA_SERVICE_VERSION, the version that OTEL_RESOURCE_ATTRIBUTES also carries.
+      SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_SMALL_MODEL: ${LLM_SMALL_MODEL:-}

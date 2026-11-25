@@ -1,10 +1,9 @@
 """Each container that receives ENV also receives ENVIRONMENT with the same value.
 
-The locked infra2-sdk resolves ENVIRONMENT, then the deprecated aliases ENV and APP_ENV. The
-SDK Vault template reads `or (env "ENVIRONMENT") (env "ENV")`. infra2#1823 N1 retires
-the aliases. After that, a container that has only ENV gets no environment tier, and a
-vault-agent renders `secret/data/<project>//<service>`. This guard makes the retirement
-safe: it fails when a hand-written compose service sets ENV without ENVIRONMENT.
+The locked infra2-sdk reads only ENVIRONMENT; infra2#1823 N1 retired the aliases ENV and
+APP_ENV. The SDK Vault template reads `env "ENVIRONMENT"`. A container that has only ENV
+gets no environment tier, and a vault-agent renders `secret/data/<project>//<service>`.
+This guard fails when a hand-written compose service sets ENV without ENVIRONMENT.
 
 Scope: every plain compose file under the deploy roots. A compiled x-infra2 stack gets
 its vault-agent from the infra2-sdk compiler, so the SDK tests govern that sidecar.

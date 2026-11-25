@@ -246,7 +246,7 @@ def test_vault_agent_forwards_every_template_env():
     )
     # The generated template builds DATABASE_URL with the host Postgres port. Since #637
     # it reads no MinIO port: the compose anchor derives S3_ENDPOINT (test below).
-    assert referenced == {"ENVIRONMENT", "ENV", "TA_POSTGRES_PORT"}
+    assert referenced == {"ENVIRONMENT", "TA_POSTGRES_PORT"}
     assert _vault_agent_environment()["TA_POSTGRES_PORT"] == "${TA_POSTGRES_PORT}"
     # The source forwards it with x-infra2.vault.env.
     source = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))

@@ -136,6 +136,24 @@ def test_scaffold_compose_yaml_db_environment(tmp_path: Path):
     assert "DATABASE_URL" not in compose_none
 
 
+@pytest.mark.parametrize("profile", ["infra2", "standalone"])
+def test_scaffold_compose_sets_environment_and_no_retired_env(
+    tmp_path: Path, profile: str
+):
+    """The infra2-sdk reads only ENVIRONMENT (#1823 N1). Each generated service sets
+    ENVIRONMENT from the deploy variable ENV and does not set the retired name ENV."""
+    yaml = pytest.importorskip("yaml")
+    scaffold_service("demo-service", tmp_path / "app", profile=profile)
+    compose = yaml.safe_load((tmp_path / "app" / "compose.yaml").read_text("utf-8"))
+
+    services = compose["services"]
+    assert services, "the generated compose has no service"
+    for name, spec in services.items():
+        env = spec["environment"]
+        assert "ENV" not in env, name
+        assert env["ENVIRONMENT"] in ("${ENV}", "${ENV:-local_dev}"), name
+
+
 def test_scaffold_main_cli_with_argv(tmp_path: Path):
     out = tmp_path / "argv_test"
     code = main(["argv-svc", "--out-dir", str(out), "--port", "8088"])
@@ -489,16 +507,15 @@ def test_infra2_app_stops_at_import_without_a_tier(tmp_path: Path):
     result = _run_generated_app(tmp_path, "infra2", "import app")
 
     assert result.returncode != 0
-    assert (
-        "ValueError: ENVIRONMENT is required; set one of ENVIRONMENT, ENV, APP_ENV"
-        in (result.stderr)
+    assert "ValueError: ENVIRONMENT is required; set ENVIRONMENT to a known tier" in (
+        result.stderr
     )
 
 
 def test_infra2_app_starts_with_a_known_tier(tmp_path: Path):
     code = (
         "import os\n"
-        "os.environ['ENV'] = 'local_dev'\n"
+        "os.environ['ENVIRONMENT'] = 'local_dev'\n"
         "from starlette.testclient import TestClient\n"
         "import app\n"
         "print(TestClient(app.app).get('/livez').status_code)\n"
@@ -603,7 +620,7 @@ def test_generated_postgres_app_stops_with_a_clear_error_without_database_url(
 def test_generated_postgres_app_uses_a_set_database_url(tmp_path: Path, profile: str):
     variables = {
         "DATABASE_URL": " postgresql+asyncpg://u:p@db.invalid/app ",
-        "ENV": "local_dev",
+        "ENVIRONMENT": "local_dev",
     }
 
     result = _run_postgres_app(
