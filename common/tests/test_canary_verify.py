@@ -1544,7 +1544,9 @@ def test_app_peer_remote_script_uses_readyz_and_passes_valid_shell_syntax() -> N
         assert res.returncode == 0, f"{shell} syntax error: {res.stderr}"
 
 
-def test_canary_verify_hardening_gates_feishu_metrics_ledger_day_and_platform_deps() -> None:
+def test_canary_verify_hardening_gates_feishu_metrics_ledger_day_and_platform_deps() -> (
+    None
+):
     """Verify hardened Phase 2 gates fail closed under single mutations."""
     fresh = _relative_ts(60, now=FIXED_NOW)
     # 1. Feishu bridge degraded fails alerts pillar.
@@ -1601,7 +1603,11 @@ def test_canary_verify_hardening_gates_feishu_metrics_ledger_day_and_platform_de
                     "unconfigured": ["s3"],
                     "gating": ["postgres", "redis", "s3"],
                     "informational": ["signoz"],
-                    "checks": {"postgres": {"status": "pass"}, "redis": {"status": "pass"}, "s3": {"status": "unconfigured"}},
+                    "checks": {
+                        "postgres": {"status": "pass"},
+                        "redis": {"status": "pass"},
+                        "s3": {"status": "unconfigured"},
+                    },
                 }
             ),
         ),

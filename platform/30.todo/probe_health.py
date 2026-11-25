@@ -172,13 +172,9 @@ def main(
         try:
             payload = json.loads(response.body)
         except (ValueError, TypeError) as exc:
-            raise AssertionError(
-                f"invalid JSON from {url}: {response.body!r}"
-            ) from exc
+            raise AssertionError(f"invalid JSON from {url}: {response.body!r}") from exc
         if not isinstance(payload, dict):
-            raise AssertionError(
-                f"expected JSON object from {url}: {payload!r}"
-            )
+            raise AssertionError(f"expected JSON object from {url}: {payload!r}")
         canary = payload.get("canary")
         # Gate mode waits for a verdict, not for a pass: a red verdict ends the wait.
         pending = (

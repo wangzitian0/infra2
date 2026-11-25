@@ -989,14 +989,18 @@ def test_probe_health_gate_fails_closed_for_a_release_without_a_pin(
         ),
     )
     with pytest.raises(AssertionError, match="stale or unreadable"):
-        probe.main(["https://x.example", "--gate", "HEAD"], pin_reader=lambda _ref: "9.9.9")
+        probe.main(
+            ["https://x.example", "--gate", "HEAD"], pin_reader=lambda _ref: "9.9.9"
+        )
     monkeypatch.setattr(
         probe,
         "poll_until_healthy",
         lambda *a, **k: SimpleNamespace(body="not-json"),
     )
     with pytest.raises(AssertionError, match="invalid JSON"):
-        probe.main(["https://x.example", "--gate", "HEAD"], pin_reader=lambda _ref: "9.9.9")
+        probe.main(
+            ["https://x.example", "--gate", "HEAD"], pin_reader=lambda _ref: "9.9.9"
+        )
 
 
 def test_probe_health_retries_transient_http_zero_and_fails_when_exhausted(

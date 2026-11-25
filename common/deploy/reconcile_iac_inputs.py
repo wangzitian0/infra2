@@ -3662,7 +3662,13 @@ def _expected_canary_sdk_at_ref(after: str, repo_root: Path) -> str:
     """Resolve the Canary image SDK version pinned at ``after``."""
     try:
         shown = subprocess.run(
-            ["git", "-C", str(repo_root), "show", f"{after}:platform/30.todo/compose.yaml"],
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "show",
+                f"{after}:platform/30.todo/compose.yaml",
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -3722,7 +3728,9 @@ def run_canary_reality_gate(
                 True,
                 f"canary_verify passed ({env_name}, sdk={report.installed_sdk})",
             )
-        hard_fail = not (report.sdk.ok and report.alerts.ok and report.llm.ok and report.app_peer.ok)
+        hard_fail = not (
+            report.sdk.ok and report.alerts.ok and report.llm.ok and report.app_peer.ok
+        )
         if hard_fail or attempt == max_attempts:
             break
         sleep_fn(20)
@@ -3737,7 +3745,9 @@ def run_canary_reality_gate(
         ("llm", report.llm),
         ("app_peer", report.app_peer),
     )
-    failures = [f"{name}: {pillar.summary}" for name, pillar in pillars if not pillar.ok]
+    failures = [
+        f"{name}: {pillar.summary}" for name, pillar in pillars if not pillar.ok
+    ]
     return False, f"canary_verify failed ({env_name}): " + "; ".join(failures)
 
 

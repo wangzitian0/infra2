@@ -235,8 +235,7 @@ def gen_ai_spans_query(
         f"FROM {TRACES_TABLE} "
         f"WHERE serviceName = {service} "
         f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
-        f"AND timestamp >= now() - INTERVAL {seconds} SECOND"
-        + _version(version)
+        f"AND timestamp >= now() - INTERVAL {seconds} SECOND" + _version(version)
     )
 
 

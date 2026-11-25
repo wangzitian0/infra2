@@ -505,7 +505,9 @@ def _evaluate_ledger_day(
         and now_utc.hour == 0
         and now_utc.minute < 5
         and last_ok_epoch is not None
-        and -CLOCK_SKEW_TOLERANCE_SECONDS <= (now_utc.timestamp() - last_ok_epoch) <= window_seconds
+        and -CLOCK_SKEW_TOLERANCE_SECONDS
+        <= (now_utc.timestamp() - last_ok_epoch)
+        <= window_seconds
     ):
         return True, ""
     return False, f"stale ledger day {day_str!r} != {expected_day}"
