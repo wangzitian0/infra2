@@ -1,7 +1,11 @@
 """Authentik deployment with vault-init"""
 
 import sys
+from pathlib import Path
+
+from common.deploy.config_hash import prepare_delivered_mounts
 from common.deploy.deployer import Deployer, make_tasks
+from common.deploy.host_files import deliver_host_files
 from common.core.environ import with_env_suffix
 from common.security.store import generate_password, get_secrets, vault_token
 from common.console import success, warning, info, error, run_with_status
@@ -141,6 +145,29 @@ class AuthentikDeployer(Deployer):
             warning(f"Set bootstrap admin email: {bootstrap_email}")
 
         return True
+
+    # The token-init container runs this script (#1822). A raw compose has no checkout,
+    # so composing() writes it to ${DATA_PATH}/init-token.sh and the compose mounts that.
+    INIT_TOKEN_SCRIPT = "init-token.sh"
+
+    @classmethod
+    def composing(cls, c, env_vars):
+        """Deliver init-token.sh to the host, then deploy (`sync` skips pre_compose)."""
+        e = cls.env()
+        script = (Path(__file__).parent / cls.INIT_TOKEN_SCRIPT).read_bytes()
+        host_path = f"{cls.data_path_for_env(e)}/{cls.INIT_TOKEN_SCRIPT}"
+        env_vars.update(
+            prepare_delivered_mounts(
+                delivered=deliver_host_files(
+                    cls._on_host(c, e), {host_path: (script, "0755")}
+                ),
+                error_message=f"Failed to deliver {cls.INIT_TOKEN_SCRIPT} to {host_path}",
+                rendered={cls.INIT_TOKEN_SCRIPT: script},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
+            )
+        )
+        return super().composing(c, env_vars)
 
     @classmethod
     def pre_compose(cls, c):

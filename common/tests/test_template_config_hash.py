@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # service directory -> template file that deploy.py renders to a ${DATA_PATH} host file
 TEMPLATE_SERVICES = {
     "platform/03.clickhouse": "config.xml",
+    "platform/10.authentik": "init-token.sh",
     "platform/11.signoz": "otel-collector-config.yaml",
     "platform/21.portal": "config.yml.tmpl",
     "platform/25.free": "config.json.tmpl",

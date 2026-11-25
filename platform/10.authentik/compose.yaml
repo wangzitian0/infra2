@@ -181,7 +181,12 @@ services:
       ENVIRONMENT: ${ENV}
     volumes:
       - secrets:/secrets:ro
-      - ./init-token.sh:/init-token.sh:ro
+      # deploy.py writes platform/10.authentik/init-token.sh to this host path (#1822):
+      # a raw compose has no checkout to mount it from.
+      - ${DATA_PATH}/init-token.sh:/init-token.sh:ro
+    labels:
+      # A script change changes this value, so compose recreates token-init (#1438).
+      - "iac.mount-sha256.init-token.sh=${IAC_MOUNT_SHA256_INIT_TOKEN_SH:-}"
     networks:
       - dokploy-network
     logging:

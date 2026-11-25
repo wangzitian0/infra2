@@ -938,7 +938,8 @@ def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
 
     class FailingDeployer(d.Deployer):
         service = "authentik"
-        compose_path = "platform/10.authentik/compose.yaml"
+        # A compose with no delivered host file: this test checks the env restore only.
+        compose_path = "platform/02.redis/compose.yaml"
 
         @classmethod
         def env(cls):
