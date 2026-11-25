@@ -150,7 +150,9 @@ def test_a_service_that_builds_is_a_problem(tmp_path: Path, monkeypatch) -> None
 def test_a_missing_service_is_a_problem(tmp_path: Path, monkeypatch) -> None:
     _pinned(tmp_path, monkeypatch, "    image: x\n")
     monkeypatch.setattr(pi, "PLATFORM_IMAGES", {"t": _image(("gone",))})
-    assert pi.pin_problems(tmp_path) == ["svc/compose.yaml service 'gone' does not exist"]
+    assert pi.pin_problems(tmp_path) == [
+        "svc/compose.yaml service 'gone' does not exist"
+    ]
 
 
 def test_the_check_command_exits_1_on_a_problem(tmp_path: Path, monkeypatch) -> None:
@@ -200,7 +202,9 @@ def test_the_matrix_has_one_row_per_image() -> None:
         }
 
 
-def test_two_different_digests_give_no_pinned_digest(tmp_path: Path, monkeypatch) -> None:
+def test_two_different_digests_give_no_pinned_digest(
+    tmp_path: Path, monkeypatch
+) -> None:
     image = _pinned(tmp_path, monkeypatch, "")
     tag = pi.expected_tag(image, tmp_path)
     monkeypatch.setattr(pi, "PLATFORM_IMAGES", {"t": _image(("a", "b"))})

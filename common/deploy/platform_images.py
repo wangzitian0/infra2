@@ -74,7 +74,9 @@ def input_files(image: PlatformImage, root: Path = REPO_ROOT) -> list[Path]:
     root = root.resolve()
     dockerfile = (root / image.dockerfile).resolve()
     if not dockerfile.is_file():
-        raise FileNotFoundError(f"{image.key}: Dockerfile {image.dockerfile} does not exist")
+        raise FileNotFoundError(
+            f"{image.key}: Dockerfile {image.dockerfile} does not exist"
+        )
     context = (root / image.context).resolve()
     return sorted({dockerfile, *_dockerfile_copy_sources(dockerfile, context)})
 
@@ -97,7 +99,10 @@ def pinned_refs(image: PlatformImage, root: Path = REPO_ROOT) -> dict[str, str]:
     """``{service: image value}`` of each service that runs the image. Raises when unreadable."""
     text = (root / image.compose).read_text(encoding="utf-8")
     services = (safe_load_text(yaml, text) or {}).get("services") or {}
-    return {name: str((services.get(name) or {}).get("image") or "") for name in image.services}
+    return {
+        name: str((services.get(name) or {}).get("image") or "")
+        for name in image.services
+    }
 
 
 def pin_problems(root: Path = REPO_ROOT) -> list[str]:
@@ -114,7 +119,9 @@ def pin_problems(root: Path = REPO_ROOT) -> list[str]:
                 problems.append(f"{where} does not exist")
                 continue
             if "build" in spec:
-                problems.append(f"{where} has `build:`; CI publishes {image.repository}")
+                problems.append(
+                    f"{where} has `build:`; CI publishes {image.repository}"
+                )
             ref = str(spec.get("image") or "")
             match = image.pin_re.match(ref)
             if not match:
@@ -157,7 +164,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("matrix", help="print the CI publish matrix as one JSON line")
-    sub.add_parser("check", help="exit 1 when a compose pin does not match its input files")
+    sub.add_parser(
+        "check", help="exit 1 when a compose pin does not match its input files"
+    )
     args = parser.parse_args(argv)
     if args.command == "matrix":
         print(json.dumps(build_matrix(), separators=(",", ":")))

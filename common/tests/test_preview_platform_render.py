@@ -228,7 +228,10 @@ def test_slot_backing_services_use_the_platform_unit_images():
     s3 = _services("platform/03.s3/compose.yaml")["s3"]
     published = PLATFORM_IMAGES["s3"]
     assert published.pin_re.match(s3["image"]), s3["image"]
-    assert slot["s3"]["build"] == {"context": "../..", "dockerfile": published.dockerfile}
+    assert slot["s3"]["build"] == {
+        "context": "../..",
+        "dockerfile": published.dockerfile,
+    }
 
 
 def test_slot_postgres_keeps_no_data_across_up():
