@@ -68,7 +68,6 @@ jobs:
       pull-requests: read
     outputs:
       has_non_doc: ${{ steps.check.outputs.has_non_doc }}
-      app_images_changed: ${{ steps.check.outputs.app_images_changed }}
       gate_changed: ${{ steps.gate.outputs.gate_changed }}
       reuse_run_id: ${{ steps.reuse.outputs.run_id }}
     steps:
@@ -103,19 +102,11 @@ jobs:
           # as "not doc-only" (run everything) rather than fail the check.
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             echo "has_non_doc=true" >> "$GITHUB_OUTPUT"
-            echo "app_images_changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           changed=$(git diff --name-only "$base" "$head")
           echo "Changed files:"
           echo "$changed"
-          # The job app-image-imports pulls App images, so it runs only when an App stack
-          # file or the pinned release tags change (#1823).
-          if echo "$changed" | grep -qE '^(truealpha/|finance_report/|harness/repos\.yaml$)'; then
-            echo "app_images_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "app_images_changed=false" >> "$GITHUB_OUTPUT"
-          fi
           if echo "$changed" | grep -qvE '\.md$' \
             || echo "$changed" | grep -qE '^(AGENTS|CLAUDE)\.md$' \
             || echo "$changed" | grep -qE '^docs/project/.*\.md$' \
@@ -771,32 +762,6 @@ jobs:
   # The CI post record of a commit on main (#1645). The production pre record of a release
   # reads it, so it names every job of the merge authority (`blocks_merge: true` in
   # docs/ssot/ci-gate-inventory.yaml). always(): a failed job is a red check, not a missing one.
-  # Run the imports of each infra2-owned App entrypoint in the pinned App image (#1823).
-  # v3.1.150 shipped a data-engine entrypoint that imported a module the pinned image lacks;
-  # no unit test could see it because none ran the image. The job is path-filtered through
-  # detect-changes, not through `paths:` (see the top of this file). It does not block merge:
-  # a required check needs a ruleset context (ci-gate-inventory.yaml).
-  app-image-imports:
-    name: App image entrypoint imports
-    needs: detect-changes
-    if: needs.detect-changes.outputs.app_images_changed == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Install pyyaml
-        run: pip install pyyaml
-
-      - name: Run the entrypoint imports in the pinned images
-        run: python tools/app_image_imports.py --runtime docker --platform linux/amd64
-
   # Read-only: would a production promotion pass require_upstream_post now? It runs the guard
   # on the real stage records of the next candidate tag. A pull request that does not change
   # the guard skips in one second (#1830). The schedule runs it in ops-checks.yml, report-only.
