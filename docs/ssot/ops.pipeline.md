@@ -135,7 +135,7 @@ State: `run_cell` in the SDK runs `smoke`, the three gate lists and `scheduled_a
 5. Each check has a time limit. Each cell has a time budget.
 6. The policy table says if a cell blocks or reports. A cell that reports does not stop the chain.
 
-State: `run_cell` runs the checks of a list in order and stops at the first failure. The list has one time limit. Items 3 to 6 are targets.
+State: `run_cell` executes every check in order and honors `policy.stop_on_fail` (`true` on blocking pre/operation cells, `false` on reporting cells such as `scheduled_audit` and `staging.post`). Each cell has a bounded time budget. Items 3 and 5–6 remain aligned against `stages.yaml`.
 
 **Check rows (target)**
 

@@ -6345,3 +6345,110 @@ def test_app_sdk_pins_reject_an_unverified_locked_version_after_one_scan(
     assert scans == [{"4.4.0", "4.5.0"}]
     assert reconcile.assert_app_sdk_versions_verified([]) == {}
     assert scans == [{"4.4.0", "4.5.0"}]
+
+
+def test_run_scheduled_app_audits_isolates_setup_failure_and_persists_hook_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    """A setup exception on one service does not abort sibling services, and hook artifacts survive cleanup."""
+    from infra2_sdk.manifests import HookRunResult
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.99\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.144\n",
+        encoding="utf-8",
+    )
+
+    def _resolve_coords(service: str, **_kw):
+        if service == "finance_report/app":
+            raise RuntimeError("transient git fetch failure")
+        return (
+            "v0.2.144",
+            ResolvedRef(sha=SHA, image_ref="v0.2.144", form="tag").sha,
+            "https://truealpha-staging.example",
+        )
+
+    manifest = _hooks_v3("truealpha/app")
+    hook_cwd = tmp_path / "ephemeral_checkout"
+    hook_cwd.mkdir(parents=True, exist_ok=True)
+
+    class _FakeTempDir:
+        def cleanup(self) -> None:
+            import shutil
+
+            shutil.rmtree(hook_cwd, ignore_errors=True)
+
+    monkeypatch.setattr(reconcile, "resolve_app_hook_coordinates", _resolve_coords)
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_app_hook_cwd",
+        lambda *_a, **_kw: (hook_cwd, _FakeTempDir()),
+    )
+
+    def _fake_exec(
+        m,
+        slot: str,
+        *,
+        app_url: str,
+        environment: str,
+        version_ref: str,
+        cwd: Path,
+        **_kw,
+    ):
+        art_dir = cwd / ".artifacts" / "hooks"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "oracle_summary.json").write_text(
+            json.dumps({"passed": 8, "failed": 0}), encoding="utf-8"
+        )
+        (art_dir / "raw.xml").write_text("<testsuite tests='1'/>", encoding="utf-8")
+        return HookRunResult(
+            service=m.service,
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.5,
+            summary="all checks passed",
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+    artifacts_out = tmp_path / "persisted-artifacts"
+
+    results = reconcile.run_scheduled_app_audits(
+        tmp_path,
+        services=["finance_report/app", "truealpha/app"],
+        artifacts_dir=artifacts_out,
+        force_replay=True,
+        runner=subprocess.run,
+    )
+    by_svc = {r["service"]: r for r in results}
+    assert by_svc["finance_report/app"]["status"] == "fail"
+    assert by_svc["finance_report/app"]["ok"] is False
+    assert "transient git fetch failure" in str(
+        by_svc["finance_report/app"]["error_message"]
+    )
+    assert by_svc["truealpha/app"]["status"] == "pass"
+    assert by_svc["truealpha/app"]["oracle_summaries"] == {
+        "oracle_summary": {"passed": 8, "failed": 0}
+    }
+    assert not hook_cwd.exists()
+    persisted_svc_dir = artifacts_out / "truealpha_app"
+    assert json.loads(
+        (persisted_svc_dir / "oracle_summary.json").read_text(encoding="utf-8")
+    ) == {
+        "passed": 8,
+        "failed": 0,
+    }
+    assert (persisted_svc_dir / "raw.xml").is_file()

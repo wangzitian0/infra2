@@ -402,3 +402,74 @@ def test_recorded_check_cli_corrupt_report_and_scheduled_audit_crash_fallback(
             "- finance_report/app [scheduled_audit @ v0.1.0]: smoke failed",
         )
     ]
+
+
+def test_app_hook_pair_surfaces_multiple_failed_checks_without_skipped() -> None:
+    """Multiple failed sub-checks appear together as failed=[...] while skipped checks stay out."""
+    key, detail = deploy_guard_audit.app_hook_pair(
+        {
+            "service": "finance_report/app",
+            "slot": "scheduled_audit",
+            "environment": "staging",
+            "version_ref": "v0.2.99",
+            "summary": "scheduled_audit partial pass",
+            "checks": [
+                {"name": "audit_replay", "ok": False, "skipped": False},
+                {"name": "core_journey", "ok": True, "skipped": False},
+                {"name": "pdf_corpus_oracle", "ok": False, "skipped": False},
+                {"name": "financial_scenario_benchmark", "ok": False, "skipped": True},
+            ],
+        }
+    )
+    assert key == "app-hook:finance_report/app:scheduled_audit:staging"
+    assert (
+        detail
+        == "- finance_report/app [scheduled_audit @ v0.2.99]: failed=[audit_replay, pdf_corpus_oracle]; scheduled_audit partial pass"
+    )
+
+
+def test_run_recorded_check_streams_and_captures_live_subprocess(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Default subprocess runner streams via _tee_run and records non-zero exit tails."""
+    import json
+    import sys
+
+    guard_report = tmp_path / "guard-stream.json"
+    env = {deploy_guard_audit.REPORT_ENV: str(guard_report)}
+
+    rc_ok = deploy_guard_audit.run_recorded_check(
+        "guard:stream-ok",
+        "stream check",
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('stream-out'); print('stream-err', file=sys.stderr)",
+        ],
+        env=env,
+    )
+    assert rc_ok == 0
+    captured_ok = capsys.readouterr()
+    assert "stream-out" in captured_ok.out
+    assert "stream-err" in captured_ok.err
+
+    rc_fail = deploy_guard_audit.run_recorded_check(
+        "guard:stream-fail",
+        "failing stream check",
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('boom-err', file=sys.stderr); raise SystemExit(2)",
+        ],
+        env=env,
+    )
+    assert rc_fail == 2
+    saved = json.loads(guard_report.read_text(encoding="utf-8"))
+    assert saved["checks"]["guard:stream-ok"] == {
+        "status": "pass",
+        "summary": "stream check",
+    }
+    assert saved["checks"]["guard:stream-fail"] == {
+        "status": "fail",
+        "summary": "failing stream check: boom-err",
+    }

@@ -87,7 +87,7 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'all')) }}
     # Pinned to 24.04: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build (#1543).
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       actions: read
@@ -190,7 +190,30 @@ jobs:
           WAIT_FOR_STAGING_READY: "1"
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python tools/deploy_guard_audit.py --record-check guard:scheduled-app-audit "scheduled App runtime audits" -- python -m tools.reconcile_iac_inputs --run-scheduled-audit --output-json scheduled-audit-result.json
+          python tools/deploy_guard_audit.py --record-check guard:scheduled-app-audit "scheduled App runtime audits" -- python -m tools.reconcile_iac_inputs --run-scheduled-audit --output-json scheduled-audit-result.json --artifacts-dir scheduled-audit-artifacts
+
+      - name: Upload scheduled audit artifacts
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: scheduled-audit-results
+          path: |
+            scheduled-audit-result.json
+            scheduled-audit-artifacts
+            deploy-guard-audit-report.json
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload scheduled audit stage record
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' && env.STAGE_RECORD_POST != '' }}
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: ${{ env.STAGE_RECORD_POST }}
+          path: stage-records/${{ env.STAGE_RECORD_POST }}.json
+          if-no-files-found: ignore
+          overwrite: true
 
       - name: Alert on confirmed failure
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)

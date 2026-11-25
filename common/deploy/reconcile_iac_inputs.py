@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -81,7 +82,7 @@ from common.deploy.env_config import (
     preview_service_config,
 )
 from common.deploy.github_api import API as GITHUB_API, github_headers
-from common.deploy.stage_record import utc_now, write_stage_record
+from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
 from common.deploy.canary_pin import (
     APP_SDK_RANGE,
     CANARY_COMPOSE_RELS,
@@ -2257,6 +2258,38 @@ def _wait_for_staging_app_ready(
         time.sleep(2.0)
 
 
+def _copy_hook_artifacts(
+    hook_cwd: Path,
+    manifest: RuntimeHooksManifest,
+    service: str,
+    artifacts_dir: Path | None,
+) -> dict[str, object]:
+    """Read `*summary*.json` from hook artifacts and persist the directory before cleanup."""
+    artifacts_rel = str(
+        getattr(manifest, "artifacts_dir", ".artifacts/hooks") or ".artifacts/hooks"
+    )
+    src_dir = (
+        (hook_cwd / artifacts_rel)
+        if not Path(artifacts_rel).is_absolute()
+        else Path(artifacts_rel)
+    )
+    if not src_dir.is_dir():
+        return {}
+    summaries: dict[str, object] = {}
+    for summary_file in sorted(src_dir.glob("*summary*.json")):
+        try:
+            summaries[summary_file.stem] = json.loads(
+                summary_file.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+    if artifacts_dir is not None:
+        dest_dir = Path(artifacts_dir) / service.replace("/", "_")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_dir, dest_dir, dirs_exist_ok=True)
+    return summaries
+
+
 def run_scheduled_app_audits(
     repo_root: Path = REPO_ROOT,
     *,
@@ -2271,6 +2304,7 @@ def run_scheduled_app_audits(
     verdict_cache_path: Path | None = None,
     force_replay: bool | None = None,
     heartbeat_seconds: float = _HOOK_HEARTBEAT_SECONDS,
+    artifacts_dir: Path | None = None,
 ) -> list[dict[str, object]]:
     """Execute a scheduled runtime hook slot across registered Apps and local services (#1493, #1521)."""
     if slot not in HOOK_SLOTS:
@@ -2329,43 +2363,43 @@ def run_scheduled_app_audits(
         rel_local = local_manifests.get(service) or LOCAL_SERVICE_HOOK_MANIFESTS.get(
             service
         )
-        if service not in APP_SOURCES and rel_local:
-            local_path = Path(repo_root) / rel_local
-            if not local_path.is_file():
-                local_path = REPO_ROOT / rel_local
-            manifest = load_hooks_manifest(local_path)
-            # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
-            version_ref = "main"
-            source_sha = "local"
-            app_url = _local_service_app_url(service, target_env, effective_domain)
-            hook_cwd = local_path.parent
-            tmp_checkout = None
-        else:
-            repo_slug = APP_SOURCES.get(service)
-            if not repo_slug:
-                raise ValueError(f"unknown app service {service!r}")
-            version_ref, source_sha, app_url = resolve_app_hook_coordinates(
-                service,
-                repo_root=repo_root,
-                after=pinned_tags.get(service, ""),
-                target_env=target_env,
-                domain=effective_domain,
-                runner=runner,
-            )
-            manifest = fetch_hooks_manifest(
-                service,
-                source_sha,
-                manifest_fetcher=manifest_fetcher,
-            )
-            # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
-            hook_cwd, tmp_checkout = resolve_app_hook_cwd(
-                service,
-                source_sha,
-                release_ref=_slot_release_ref(manifest, (slot,), version_ref),
-                repo_root=repo_root,
-                runner=runner,
-            )
+        tmp_checkout = None
         try:
+            if service not in APP_SOURCES and rel_local:
+                local_path = Path(repo_root) / rel_local
+                if not local_path.is_file():
+                    local_path = REPO_ROOT / rel_local
+                manifest = load_hooks_manifest(local_path)
+                # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
+                version_ref = "main"
+                source_sha = "local"
+                app_url = _local_service_app_url(service, target_env, effective_domain)
+                hook_cwd = local_path.parent
+            else:
+                repo_slug = APP_SOURCES.get(service)
+                if not repo_slug:
+                    raise ValueError(f"unknown app service {service!r}")
+                version_ref, source_sha, app_url = resolve_app_hook_coordinates(
+                    service,
+                    repo_root=repo_root,
+                    after=pinned_tags.get(service, ""),
+                    target_env=target_env,
+                    domain=effective_domain,
+                    runner=runner,
+                )
+                manifest = fetch_hooks_manifest(
+                    service,
+                    source_sha,
+                    manifest_fetcher=manifest_fetcher,
+                )
+                # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
+                hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+                    service,
+                    source_sha,
+                    release_ref=_slot_release_ref(manifest, (slot,), version_ref),
+                    repo_root=repo_root,
+                    runner=runner,
+                )
             if (
                 effective_ambient.get("WAIT_FOR_STAGING_READY") == "1"
                 and hook_env_name == "staging"
@@ -2387,6 +2421,26 @@ def run_scheduled_app_audits(
                 ambient_env=effective_ambient,
                 runner=runner,
             )
+            summaries = _copy_hook_artifacts(hook_cwd, manifest, service, artifacts_dir)
+            if summaries:
+                entry["oracle_summaries"] = summaries
+        except Exception as exc:  # noqa: BLE001 - isolate service audit failure so sibling services still run
+            msg = f"{type(exc).__name__}: {exc}"
+            entry = {
+                "service": service,
+                "service_id": service,
+                "slot": slot,
+                "environment": hook_env_name,
+                "version_ref": pinned_tags.get(service) or "main",
+                "app_url": _app_url_for(service, target_env, effective_domain)
+                if service in APP_SOURCES
+                else "",
+                "status": "fail",
+                "ok": False,
+                "summary": msg,
+                "error_message": msg,
+                "checks": [],
+            }
         finally:
             if tmp_checkout is not None:
                 tmp_checkout.cleanup()
@@ -3096,6 +3150,97 @@ def post_checks(hook_results: Sequence[dict]) -> list[CheckVerdict]:
         )
         for item in hook_results
     ]
+
+
+def _scheduled_audit_stage_checks(
+    hook_results: Sequence[Mapping[str, Any]],
+) -> list[CheckVerdict]:
+    """Expand per-service `scheduled_audit` sub-checks into unique StageRecord verdicts."""
+    if not hook_results:
+        return [
+            CheckVerdict("scheduled_audit", False, "no scheduled_audit service ran")
+        ]
+    checks: list[CheckVerdict] = []
+    seen: set[str] = set()
+    for item in hook_results:
+        service = str(item.get("service") or "unknown")
+        slot = str(item.get("slot") or "scheduled_audit")
+        sub_checks = item.get("checks") or ()
+        if not sub_checks:
+            base_name = f"{service}:{slot}"
+            name = base_name if base_name not in seen else f"{base_name}#{len(seen)}"
+            seen.add(name)
+            checks.append(
+                CheckVerdict(
+                    name=name,
+                    ok=(item.get("status") == "pass"),
+                    detail=str(item.get("summary") or item.get("error_message") or "")[
+                        :300
+                    ],
+                    seconds=max(0.0, float(item.get("duration_seconds") or 0.0)),
+                )
+            )
+            continue
+        for sub in sub_checks:
+            sub_name = str(sub.get("name") or "check")
+            base_name = f"{service}:{sub_name}"
+            name = base_name if base_name not in seen else f"{base_name}#{len(seen)}"
+            seen.add(name)
+            skipped = bool(sub.get("skipped"))
+            ok = False if skipped else bool(sub.get("ok"))
+            checks.append(
+                CheckVerdict(
+                    name=name,
+                    ok=ok,
+                    detail=str(sub.get("detail") or "")[:300],
+                    seconds=max(0.0, float(sub.get("seconds") or 0.0)),
+                    skipped=skipped,
+                )
+            )
+    return checks
+
+
+def _emit_scheduled_audit_stage_record(
+    hook_results: Sequence[Mapping[str, Any]],
+    *,
+    repo_root: Path,
+    started_at: str,
+) -> StageRecord | None:
+    """Emit the `staging.provider_regression` post record for `scheduled_audit` runs."""
+    try:
+        sha = (os.environ.get("GITHUB_SHA") or "").strip()
+        if not sha:
+            sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        github_event = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
+        event = {"push": "tag", "schedule": "schedule"}.get(github_event, "dispatch")
+        ref = os.environ.get("GITHUB_REF") or "refs/heads/main"
+        persist = bool(
+            os.environ.get("GITHUB_ACTIONS") or os.environ.get("STAGE_RECORD_DIR")
+        )
+        return write_stage_record(
+            env="staging.provider_regression",
+            phase="post",
+            subject=f"sha:{sha}",
+            ref=ref,
+            event=event,
+            run_url=github_run_url(os.environ),
+            started_at=started_at,
+            checks=_scheduled_audit_stage_checks(hook_results),
+            units=(sdk_unit(),),
+            persist=persist,
+        )
+    except Exception as exc:  # noqa: BLE001 - stage record failure must not crash scheduled audit
+        print(
+            f"::warning::scheduled_audit stage record not written: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return None
 
 
 def _cell(text: str) -> str:
@@ -3961,18 +4106,25 @@ def main(argv: list[str] | None = None) -> int:
         help="validate 5-slot schema v2 runtime-hooks.manifest.json contracts for registered Apps (#1608)",
     )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
+    parser.add_argument(
+        "--artifacts-dir",
+        default="",
+        help="optional persistent directory for --run-scheduled-audit hook artifacts",
+    )
     args = parser.parse_args(argv)
     promote_prod = bool(args.promote_prod or args.target_env in ("prod", "production"))
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
     if args.run_scheduled_audit:
+        started_at = utc_now()
         hook_results = run_scheduled_app_audits(
             repo_root,
             target_env=target_env,
             slot="scheduled_audit",
             base_domain=args.domain,
             services=args.sync_service or None,
+            artifacts_dir=Path(args.artifacts_dir) if args.artifacts_dir else None,
         )
         out_payload = {"scheduled_audit_results": hook_results}
         print(json.dumps(out_payload, sort_keys=True))
@@ -3980,6 +4132,9 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.output_json).write_text(
                 json.dumps(out_payload, indent=2), encoding="utf-8"
             )
+        _emit_scheduled_audit_stage_record(
+            hook_results, repo_root=repo_root, started_at=started_at
+        )
         return 1 if any(item.get("status") != "pass" for item in hook_results) else 0
     if args.audit_app_hooks:
         audit_res = audit_app_hooks(
