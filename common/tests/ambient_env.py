@@ -2,10 +2,9 @@
 
 `platform/12.alerting/app.py` calls `init_service` when the module
 loads. `init_service` reads the service name, the version and the `OTEL_*` variables of the SDK
-contract. In its default mode it also reads the tier variables and checks each alias pair.
-The todo app uses the identity mode, which skips the tier variables and still checks
-`SERVICE_VERSION` with `IMAGE_TAG`. Two names of one pair with different values stop a strict
-start with `EnvironmentConflictError` (#1238). A shell that exports an endpoint but no
+contract. In its default mode it also reads the tier variables. infra2-sdk reads no
+retired alias (`ENV`, `APP_ENV`, `IMAGE_TAG`), so only contract names can stop a strict
+start (#1238, #1823 N1). A shell that exports an endpoint but no
 `OTEL_SERVICE_NAME` made the todo app raise while a test only loaded it.
 
 The helper removes every variable and alias that the SDK contract declares, and every name that

@@ -436,19 +436,21 @@ def test_a_todo_source_that_drops_a_canary_host_compiles_without_it(name: str) -
 
 
 def test_the_compiled_sidecar_forwards_each_env_that_the_template_reads() -> None:
-    """The todo template builds DATABASE_URL with `env "ENV_SUFFIX"` and falls back from ENVIRONMENT to ENV (#1864)."""
+    """The todo template builds DATABASE_URL with `env "ENV_SUFFIX"` and reads the tier
+    only from ENVIRONMENT (#1864, #1823 N1). The sidecar sets both, and no ENV."""
     import re
 
     template = _todo_template()
     reads = set(re.findall(r'env "([A-Z_]+)"', template))
-    assert reads == {"ENVIRONMENT", "ENV", "ENV_SUFFIX"}
+    assert reads == {"ENVIRONMENT", "ENV_SUFFIX"}
     sidecar = yaml.safe_load(_todo_compiled())["services"]["vault-agent"]
     assert sidecar["container_name"] == "platform-todo-vault-agent${ENV_SUFFIX}"
     env = sidecar["environment"]
-    assert {name: env.get(name) for name in ("ENV", "ENV_SUFFIX")} == {
-        "ENV": "${ENV}",
+    assert {name: env.get(name) for name in ("ENVIRONMENT", "ENV_SUFFIX")} == {
+        "ENVIRONMENT": "${ENV}",
         "ENV_SUFFIX": "${ENV_SUFFIX:-}",
     }
+    assert "ENV" not in env
     assert env["VAULT_SECRETS_TEMPLATE"].replace("$$", "$") == template
 
 
@@ -529,22 +531,21 @@ def test_equivalence_allows_only_the_release_template_injection_in_the_base() ->
     ]
 
 
-def test_equivalence_allows_only_environment_equal_to_env_in_the_base_sidecar() -> None:
-    """A hand sidecar sets `ENVIRONMENT: ${ENV}` next to `ENV: ${ENV}` (#1823 N1). Only
-    that exact pair is dropped; another value, or no ENV, is a difference."""
+def test_equivalence_finds_a_retired_env_in_the_base_sidecar() -> None:
+    """The compiled sidecar sets `ENVIRONMENT: ${ENV}` and no `ENV` (#1823 N1).
+    A base sidecar that also sets `ENV: ${ENV}`, or sets another ENVIRONMENT value, is a
+    difference."""
     compiled, base, files = _eq_case()
-    marker = "      ENV: ${ENV}\n"
+    marker = "      ENVIRONMENT: ${ENV}\n"
     assert base.count(marker) == 1
-    paired = base.replace(marker, marker + "      ENVIRONMENT: ${ENV}\n")
-    assert equivalence_problems(_EQ_SOURCE, compiled, paired, files) == []
-    other = base.replace(marker, marker + "      ENVIRONMENT: production\n")
-    assert equivalence_problems(_EQ_SOURCE, compiled, other, files) == [
-        "services.vault-agent.environment.ENVIRONMENT: only in the base file"
+    assert "      ENV: ${ENV}\n" not in base
+    paired = base.replace(marker, "      ENV: ${ENV}\n" + marker)
+    assert equivalence_problems(_EQ_SOURCE, compiled, paired, files) == [
+        "services.vault-agent.environment.ENV: only in the base file"
     ]
-    alone = base.replace(marker, "      ENVIRONMENT: ${ENV}\n")
-    assert sorted(equivalence_problems(_EQ_SOURCE, compiled, alone, files)) == [
-        "services.vault-agent.environment.ENV: only in the compiled file",
-        "services.vault-agent.environment.ENVIRONMENT: only in the base file",
+    other = base.replace(marker, "      ENVIRONMENT: production\n")
+    assert equivalence_problems(_EQ_SOURCE, compiled, other, files) == [
+        "services.vault-agent.environment.ENVIRONMENT: compiled '${ENV}' != base 'production'"
     ]
 
 

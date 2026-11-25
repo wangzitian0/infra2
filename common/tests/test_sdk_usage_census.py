@@ -865,7 +865,8 @@ def test_live_infra2_repository_census_contract() -> None:
     assert metrics["M1"]["total_public"] >= 50
     assert metrics["M1"]["prod_used"] >= 20
     assert metrics["M1"]["missing_imports"]["prod"] == []
-    assert metrics["M2"]["total_keys"] >= 12
+    # #1823 N1 retired the aliases ENV, APP_ENV and IMAGE_TAG: 9 names remain.
+    assert metrics["M2"]["total_keys"] >= 9
     assert (
         metrics["M2"]["prod_used"],
         metrics["M2"]["test_only"],

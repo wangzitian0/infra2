@@ -54,7 +54,7 @@ def _generate_compose_yaml(
 {mid}
     environment:
 {db_env}      PORT: "{port}"
-      ENV: {env_val}
+      ENVIRONMENT: {env_val}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${{OTEL_EXPORTER_OTLP_ENDPOINT:-}}
       OTEL_SERVICE_NAME: {otel_svc}
       OTEL_RESOURCE_ATTRIBUTES: ${{OTEL_RESOURCE_ATTRIBUTES:-}}
@@ -103,7 +103,7 @@ def _generate_compose_yaml(
       VAULT_ADDR: ${{VAULT_ADDR}}
       VAULT_ROLE_ID: ${{VAULT_ROLE_ID:-}}
       VAULT_SECRET_ID: ${{VAULT_SECRET_ID:-}}
-      ENV: ${{ENV}}
+      ENVIRONMENT: ${{ENV}}
       CONFIGURATION_SHA256: ${{CONFIGURATION_SHA256:-}}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro

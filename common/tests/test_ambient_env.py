@@ -1,10 +1,10 @@
 """`clear_telemetry_env` keeps the telemetry variables of a developer shell out of the app tests.
 
-In its default mode, `init_service` reads the tier, the service name and the version. It checks
-each alias pair. Two names of one pair with different values stop a strict start with
-`EnvironmentConflictError`, with or without an endpoint. The identity mode of the todo app skips
-the tier variables and still checks `SERVICE_VERSION` with `IMAGE_TAG`. The helper removes every
-variable and alias that the SDK contract declares, and every name that starts with `OTEL_`.
+In its default mode, `init_service` reads the tier, the service name and the version.
+The infra2-sdk retires the aliases `ENV`, `APP_ENV` and `IMAGE_TAG` (infra2#1823 N1): the SDK
+does not read them, so a value of a retired name in the shell cannot stop a strict start.
+The helper removes every variable and alias that the SDK contract declares, and every name
+that starts with `OTEL_`.
 It does not touch other variables, such as `REDIS_HOST` (#1209, #1238).
 These tests take the names from the contract. An SDK release that adds a name needs no edit
 here. A release that drops a name checked by
@@ -42,12 +42,15 @@ def _declared_names() -> list[str]:
     return sorted({*declared, *aliases})
 
 
+_RETIRED = ("ENV", "APP_ENV", "IMAGE_TAG")
+
+
 def test_the_contract_declares_the_names_these_tests_rely_on() -> None:
     """The cases below come from the contract. A read that gave no name would leave them
-    with nothing to check."""
+    with nothing to check. The contract declares no retired name, not even as an alias."""
     declared = _declared()
-    assert {"ENV", "APP_ENV"} <= set(declared["ENVIRONMENT"])
-    assert "IMAGE_TAG" in declared["SERVICE_VERSION"]
+    assert {"ENVIRONMENT", "SERVICE_VERSION"} <= set(declared)
+    assert [name for name in _RETIRED if name in _declared_names()] == []
 
 
 @pytest.mark.parametrize("name", [*_declared_names(), "OTEL_NOT_IN_THE_CONTRACT"])
@@ -90,15 +93,16 @@ def test_the_helper_reads_the_contract_and_keeps_no_list_of_its_own(
     assert [name for name in others if os.environ.get(name) != "kept"] == []
 
 
-def test_a_shell_alias_cannot_conflict_with_the_tier_a_test_sets(
+def test_a_retired_shell_alias_cannot_change_the_tier_a_test_sets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With `APP_ENV=production` left in the shell, `ENV=local_test` makes
-    `strict_environment_from_env` raise `EnvironmentConflictError`."""
-    monkeypatch.setenv("APP_ENV", "production")
-
+    """With `APP_ENV=production` and `ENV=production` left in the shell,
+    `ENVIRONMENT=local_test` gives the tier `local_test`: the SDK reads no retired name."""
     clear_telemetry_env(monkeypatch)
-    monkeypatch.setenv("ENV", "local_test")
+    # The helper removes only contract names, so the retired names stay in the shell.
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("ENVIRONMENT", "local_test")
 
     # GitHub Actions maps `local_test` to `github_ci`; the test states the mapping it checks.
     environment = strict_environment_from_env(github_actions=False)
@@ -115,21 +119,20 @@ class _Providers:
     [{}, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1"}],
     ids=["no-endpoint", "endpoint"],
 )
-def test_a_shell_version_alias_cannot_stop_a_strict_start(
+def test_a_retired_shell_version_alias_cannot_stop_a_strict_start(
     monkeypatch: pytest.MonkeyPatch, settings: dict[str, str]
 ) -> None:
-    """`SERVICE_VERSION` and `IMAGE_TAG` with different values stop a strict start with
-    `EnvironmentConflictError`. SDK 3.4.0 and later check them also when no endpoint is set."""
+    """`SERVICE_VERSION` and the retired `IMAGE_TAG` with different values do not stop a
+    strict start, with or without an endpoint: the SDK does not read `IMAGE_TAG`."""
     import infra2_sdk.runtime.otel as sdk_otel
 
     monkeypatch.setattr(
         sdk_otel, "configure_telemetry", lambda _settings, **kw: _Providers()
     )
-    monkeypatch.setenv("SERVICE_VERSION", "1.0.0")
-    monkeypatch.setenv("IMAGE_TAG", "2.0.0")
-
     clear_telemetry_env(monkeypatch)
-    monkeypatch.setenv("ENV", "local_test")
+    monkeypatch.setenv("IMAGE_TAG", "2.0.0")
+    monkeypatch.setenv("SERVICE_VERSION", "1.0.0")
+    monkeypatch.setenv("ENVIRONMENT", "local_test")
     for key, value in settings.items():
         monkeypatch.setenv(key, value)
     # FastAPI reads OTEL_PROPAGATORS when it is imported, so the import follows the helper.

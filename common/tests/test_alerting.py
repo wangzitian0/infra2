@@ -1309,7 +1309,7 @@ def test_alerting_bridge_serves_with_a_bad_otel_value(
     }
     env.update(
         {
-            "ENV": environment,
+            "ENVIRONMENT": environment,
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1",
             "OTEL_SERVICE_NAME": "platform-alerting",
             "OTEL_RESOURCE_ATTRIBUTES": attributes,
