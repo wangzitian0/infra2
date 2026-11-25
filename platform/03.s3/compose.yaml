@@ -5,7 +5,7 @@ services:
     container_name: platform-s3-vault-agent${ENV_SUFFIX}
     restart: always
     mem_limit: 128m
-    mem_reservation: 32m
+    cpu_shares: 256
     entrypoint:
       - sh
       - -c
@@ -28,8 +28,8 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      ENV: ${ENV}
       ENVIRONMENT: ${ENV}
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
       # Cache-bust (#628): secrets.ctmpl is a single-file bind mount, so a checkout that
       # rewrites it leaves the running agent on the old inode, and Compose only recreates
       # a service whose resolved config changed. The hash covers the template, so a
@@ -61,7 +61,7 @@ services:
           fi
       interval: 30s
       timeout: 5s
-      retries: 3
+      retries: 12
       start_period: 10s
 
   s3:
@@ -79,21 +79,35 @@ services:
     depends_on:
       - vault-agent
     environment:
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_HEALTH_ENDPOINT_ENABLE: "true"
     entrypoint:
       - sh
       - -c
       - |
-        # Wait for secrets file to be rendered by vault-agent
-        while [ ! -f /secrets/.env ]; do
-          echo "Waiting for secrets..."
-          sleep 1
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
+          sleep 2
+          waited=$$((waited + 2))
         done
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-        # Root credentials exported for generic S3, RustFS, and MinIO backends
+        exec "$$@"
+      - --
+    # Root credentials exported for generic S3, RustFS, and MinIO backends
+    command:
+      - sh
+      - -c
+      - |
         ROOT_USER="$${MINIO_ROOT_USER:-admin}"
         ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD}"
         export MINIO_ROOT_USER="$$ROOT_USER"

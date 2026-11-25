@@ -1,6 +1,7 @@
 services:
   vault-agent:
     mem_limit: 128m
+    cpu_shares: 256
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
     container_name: platform-prefect-vault-agent${ENV_SUFFIX}
@@ -27,8 +28,8 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      ENV: ${ENV}
       ENVIRONMENT: ${ENV}
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
       # Cache-bust (#628): secrets.ctmpl is a single-file bind mount, so a checkout that
       # rewrites it leaves the running agent on the old inode, and Compose only recreates
       # a service whose resolved config changed. The hash covers the template, so a
@@ -60,7 +61,7 @@ services:
           fi
       interval: 30s
       timeout: 5s
-      retries: 3
+      retries: 12
       start_period: 10s
 
   prefect-server:
@@ -83,22 +84,33 @@ services:
       - sh
       - -c
       - |
-        # Wait for secrets file to be rendered by vault-agent
-        MAX_WAIT=60; WAITED=0
-        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
-          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
           sleep 2
-          WAITED=$$((WAITED+2))
+          waited=$$((waited + 2))
         done
-        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-        # Construct DATABASE_URL with password from secrets
+        exec "$$@"
+      - --
+    # Construct DATABASE_URL with password from secrets
+    command:
+      - sh
+      - -c
+      - |
         export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
         export PREFECT_REDIS_MESSAGING_PASSWORD="$${REDIS_PASSWORD}"
         exec prefect server start --no-services
     environment:
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       ENV_SUFFIX: ${ENV_SUFFIX}
       PREFECT_SERVER_API_HOST: 0.0.0.0
       # Enable flow_runs + orphaned logs vacuum alongside default events (#1694/ops hygiene).
@@ -157,28 +169,41 @@ services:
     mem_limit: 1g
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     depends_on:
+      vault-agent:
+        condition: service_started
       prefect-server:
         condition: service_healthy
     entrypoint:
       - sh
       - -c
       - |
-        # Wait for secrets file
-        MAX_WAIT=60; WAITED=0
-        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
-          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
           sleep 2
-          WAITED=$$((WAITED+2))
+          waited=$$((waited + 2))
         done
-        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-        # Construct DATABASE_URL with password from secrets
+        exec "$$@"
+      - --
+    # Construct DATABASE_URL with password from secrets
+    command:
+      - sh
+      - -c
+      - |
         export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
         export PREFECT_REDIS_MESSAGING_PASSWORD="$${REDIS_PASSWORD}"
         exec prefect server services start
     environment:
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       ENV_SUFFIX: ${ENV_SUFFIX}
       # Prefect 3 defaults DB_VACUUM_ENABLED to {"events"} only, leaving flow_runs and logs unpruned.
       PREFECT_SERVER_SERVICES_DB_VACUUM_ENABLED: "events,flow_runs"

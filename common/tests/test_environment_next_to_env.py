@@ -57,7 +57,9 @@ def test_scope_is_not_empty() -> None:
     files = _plain_compose_files()
     assert len(files) >= 15, [str(p.relative_to(ROOT)) for p in files]
     with_env = [p for p in files if "ENV: ${ENV" in p.read_text(encoding="utf-8")]
-    assert len(with_env) >= 10, [str(p.relative_to(ROOT)) for p in with_env]
+    # The platform sidecars set ENVIRONMENT only, as the compiled sidecar does (#1822
+    # step A), so fewer files set ENV. 6 files still set it (measured).
+    assert len(with_env) >= 6, [str(p.relative_to(ROOT)) for p in with_env]
 
 
 @pytest.mark.parametrize(
