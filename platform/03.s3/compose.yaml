@@ -67,11 +67,9 @@ services:
   s3:
     # S3-compatible Object Storage service (currently powered by RustFS 1.0.0 engine)
     # Built with mc embedded to preserve 100% compatibility with shared tasks and scripts (#930)
-    build:
-      context: ../..
-      dockerfile: platform/03.s3/Dockerfile
-    pull_policy: build
-    image: platform-s3:${CONFIGURATION_SHA256:-}
+    # CI builds platform/03.s3/Dockerfile and pushes it to GHCR (#1822): a raw compose has no
+    # checkout to build. The tag is the hash of the Dockerfile (common/deploy/platform_images.py).
+    image: ghcr.io/wangzitian0/infra2-s3:cf98f82b3ac4d47559a305f6900f5c4c@sha256:0000000000000000000000000000000000000000000000000000000000000000
     container_name: platform-s3${ENV_SUFFIX}
     restart: always
     mem_limit: 2g

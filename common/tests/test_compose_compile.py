@@ -235,8 +235,16 @@ def test_real_stacks_classify_as_measured() -> None:
     assert todo.source_type == "raw"
     assert any(
         "`build:`" in r
-        for r in raw_ineligibility(load_stack("platform/03.s3/compose.yaml").compiled)
+        for r in raw_ineligibility(
+            load_stack("bootstrap/06.iac_runner/compose.yaml").compiled
+        )
     )
+    # CI publishes the S3 image (#1822): only the vault-agent mounts block raw now.
+    assert [
+        r
+        for r in raw_ineligibility(load_stack("platform/03.s3/compose.yaml").compiled)
+        if not r.startswith("services.vault-agent mounts ")
+    ] == []
     assert (
         raw_ineligibility(load_stack("platform/21.portal/compose.yaml").compiled) == []
     )

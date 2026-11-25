@@ -137,6 +137,23 @@ gates:
     # (#1645); it gates nothing, and it holds no secret.
     blocks_merge: false
     failure_semantics: The CI post record of a commit on main is not written or not uploaded.
+  - id: infra_ci.platform_image_tags
+    stage: github_ci.merge_authority
+    task_category: image_publish
+    workflow: .github/workflows/platform-images.yml
+    job: matrix
+    # Computes the GHCR tag of each platform image from its input files (#1822).
+    blocks_merge: false
+    failure_semantics: A platform image input file is missing, or the matrix of common/deploy/platform_images.py cannot be computed.
+  - id: infra_ci.platform_image_publish
+    stage: github_ci.merge_authority
+    task_category: image_publish
+    workflow: .github/workflows/platform-images.yml
+    job: publish
+    # Not a required context yet: promoting it to blocks_merge needs a ruleset context in
+    # the same change. The offline unit test test_platform_images.py blocks a stale tag.
+    blocks_merge: false
+    failure_semantics: A platform image fails to build or push, the compose pins a digest that is not the GHCR digest of the tag, or the tag does not pull without credentials.
   - id: infra_ci.app_image_imports
     stage: github_ci.merge_authority
     task_category: image_import
