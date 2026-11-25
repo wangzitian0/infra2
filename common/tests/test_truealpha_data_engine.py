@@ -285,7 +285,7 @@ FIRST_RELEASE_WITH_IMAGE_ENTRYPOINT = (0, 2, 144)
 def test_the_pinned_truealpha_release_carries_the_image_entrypoint():
     """The compose runs /app/dagster-entrypoint.sh from the image, with no bind mount.
 
-    A pin below v0.2.144 would start each Dagster role on a missing script.
+    A release_tag below v0.2.144 would start each Dagster role on a missing script.
     """
     repos = yaml.safe_load((ROOT / "harness/repos.yaml").read_text(encoding="utf-8"))
     (tag,) = [r["release_tag"] for r in repos["repositories"] if r["id"] == "truealpha"]
