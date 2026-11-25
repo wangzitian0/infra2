@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+import httpx
 import yaml
 
 from common.core.constants import (
@@ -3415,16 +3417,14 @@ def _read_runner_health(runner_url: str) -> dict[str, object]:
     last_error = ""
     for attempt in range(1, RUNNER_HEALTH_ATTEMPTS + 1):
         try:
-            try:
-                with urllib.request.urlopen(url, timeout=10) as response:
-                    raw = response.read()
-            except urllib.error.HTTPError as exc:
-                raw = exc.read()
-            body = json.loads(raw.decode("utf-8", "replace"))
+            # httpx, not urllib: Cloudflare answers 403 with an HTML page to the urllib
+            # User-Agent, so the body is not JSON (staging v3.1.177). A 503 body is read.
+            response = httpx.get(url, timeout=10.0)
+            body = json.loads(response.content.decode("utf-8", "replace"))
             if isinstance(body, dict):
                 return body
             last_error = f"body is {type(body).__name__}, not an object"
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, httpx.HTTPError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
         if attempt < RUNNER_HEALTH_ATTEMPTS:
             time.sleep(5)

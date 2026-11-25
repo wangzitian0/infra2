@@ -21,7 +21,6 @@ A runner that reports ``task_sdk=ref_lock`` runs each task under the ref lock an
 from __future__ import annotations
 
 import argparse
-import json
 import tomllib
 from pathlib import Path
 
@@ -121,20 +120,29 @@ def test_runner_sdk_locked_version_reads_the_ref_lock() -> None:
 
 def test_runner_sdk_health_reads_degraded_body(monkeypatch) -> None:
     """A 503 runner body still gives its ``sdk_version``."""
-    import io
-    import urllib.error
+    import httpx
 
     def degraded(url, timeout):
-        raise urllib.error.HTTPError(
-            url,
-            503,
-            "degraded",
-            {},
-            io.BytesIO(json.dumps({"sdk_version": "8.5.0"}).encode()),
-        )
+        return httpx.Response(503, json={"sdk_version": "8.5.0"})
 
-    monkeypatch.setattr(reconcile.urllib.request, "urlopen", degraded)
+    monkeypatch.setattr(reconcile.httpx, "get", degraded)
     assert reconcile._read_runner_health(URL) == {"sdk_version": "8.5.0"}
+
+
+def test_runner_sdk_health_read_does_not_use_urllib(monkeypatch) -> None:
+    """Replay of v3.1.177: Cloudflare answers the urllib User-Agent with a 403 HTML page."""
+    import httpx
+
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("urllib reached: Cloudflare refuses its User-Agent")
+
+    monkeypatch.setattr(reconcile.urllib.request, "urlopen", blocked)
+    monkeypatch.setattr(
+        reconcile.httpx,
+        "get",
+        lambda url, timeout: httpx.Response(200, json={"git_sha": "x"}),
+    )
+    assert reconcile._read_runner_health(URL) == {"git_sha": "x"}
 
 
 def test_runner_sdk_refusal_stops_before_any_deploy_unit(monkeypatch, tmp_path) -> None:
