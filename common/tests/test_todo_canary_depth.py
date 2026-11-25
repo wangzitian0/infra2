@@ -968,3 +968,63 @@ def test_probe_health_gate_skips_the_sdk_check_for_a_release_without_a_pin(
         probe.main(
             ["https://x.example", "--gate", "HEAD"], pin_reader=lambda _ref: "9.9.9"
         )
+
+
+def test_probe_health_retries_transient_http_zero_and_fails_when_exhausted(
+    monkeypatch,
+) -> None:
+    """Transient HTTP 0 timeouts retry up to HEALTH_POLL_MAX_ATTEMPTS within smoke budget."""
+    probe = _load("probe_health_retry", SERVICE_DIR / "probe_health.py")
+    assert probe.HEALTH_POLL_MAX_ATTEMPTS == 3
+    worst_case_seconds = (
+        probe.HEALTH_POLL_MAX_ATTEMPTS * probe.GATE_REQUEST_TIMEOUT_SECONDS
+        + (probe.HEALTH_POLL_MAX_ATTEMPTS - 1) * probe.HEALTH_POLL_RETRY_SECONDS
+    )
+    assert worst_case_seconds < 60
+
+    calls = 0
+
+    def _transient_get(timeout: float = 10.0):
+        def _get(_url: str) -> tuple[int, str]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return 0, "timed out"
+            return 200, json.dumps({"ok": True, "service": "platform/todo"})
+
+        return _get
+
+    monkeypatch.setattr(probe, "default_http_get", _transient_get)
+    assert (
+        probe.main(
+            [
+                "https://x.example",
+                "--require-service",
+                "platform/todo",
+                "--retry-interval",
+                "0",
+            ]
+        )
+        == 0
+    )
+    assert calls == 2
+
+    calls = 0
+
+    def _always_zero_get(timeout: float = 10.0):
+        def _get(_url: str) -> tuple[int, str]:
+            nonlocal calls
+            calls += 1
+            return 0, "timed out"
+
+        return _get
+
+    monkeypatch.setattr(probe, "default_http_get", _always_zero_get)
+    with pytest.raises(RuntimeError, match="after 3 attempts"):
+        probe.main(["https://x.example", "--retry-interval", "0"])
+    assert calls == 3
+
+    with pytest.raises(SystemExit):
+        probe.main(["https://x.example", "--attempts", "0"])
+    with pytest.raises(SystemExit):
+        probe.main(["https://x.example", "--retry-interval", "-1"])
