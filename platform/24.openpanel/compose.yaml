@@ -21,6 +21,7 @@ services:
     container_name: platform-openpanel-vault-agent${ENV_SUFFIX}
     restart: always
     mem_limit: 128m
+    cpu_shares: 256
     entrypoint:
       - sh
       - -c
@@ -43,7 +44,6 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      ENV: ${ENV}
       ENVIRONMENT: ${ENV}
       # Cache-bust (#628): secrets.ctmpl is a single-file bind mount, so a checkout that
       # rewrites it leaves the running agent on the old inode, and Compose only recreates
@@ -78,7 +78,7 @@ services:
           fi
       interval: 30s
       timeout: 5s
-      retries: 3
+      retries: 12
       start_period: 10s
 
   # Dedicated ClickHouse, version-matched to OpenPanel v2 (see header note).
@@ -145,26 +145,35 @@ services:
       - sh
       - -c
       - |
-        # Wait for secrets file to be rendered by vault-agent
-        MAX_WAIT=60; WAITED=0
-        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
-          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
           sleep 2
-          WAITED=$$((WAITED+2))
+          waited=$$((waited + 2))
         done
-        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-
-        # Wait for shared postgres to be ready (fail fast after max attempts)
+        exec "$$@"
+      - --
+    # Wait for shared postgres to be ready (fail fast after max attempts)
+    # Apply DB migrations (Postgres via Prisma + ClickHouse), then start the API
+    command:
+      - sh
+      - -c
+      - |
         node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: postgres unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(5432, 'platform-postgres${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for postgres... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
-
-        # Apply DB migrations (Postgres via Prisma + ClickHouse), then start the API
         echo 'Running migrations...'
         CI=true pnpm -r run migrate:deploy
         exec pnpm start
     environment: &op-env
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       NODE_ENV: production
       SELF_HOSTED: "true"
       NEXT_PUBLIC_SELF_HOSTED: "true"
@@ -217,23 +226,32 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     depends_on:
+      vault-agent:
+        condition: service_started
       op-api:
         condition: service_healthy
     entrypoint:
       - sh
       - -c
       - |
-        MAX_WAIT=60; WAITED=0
-        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
-          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
           sleep 2
-          WAITED=$$((WAITED+2))
+          waited=$$((waited + 2))
         done
-        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-        exec node .output/server/index.mjs
+        exec "$$@"
+      - --
+    command: [node, .output/server/index.mjs]
     environment: *op-env
     volumes:
       - secrets:/secrets:ro
@@ -267,23 +285,32 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     depends_on:
+      vault-agent:
+        condition: service_started
       op-api:
         condition: service_healthy
     entrypoint:
       - sh
       - -c
       - |
-        MAX_WAIT=60; WAITED=0
-        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
-          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
           sleep 2
-          WAITED=$$((WAITED+2))
+          waited=$$((waited + 2))
         done
-        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-        exec node dist/index.js
+        exec "$$@"
+      - --
+    command: [node, dist/index.js]
     environment: *op-env
     volumes:
       - secrets:/secrets:ro

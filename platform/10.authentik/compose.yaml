@@ -5,6 +5,7 @@ services:
     container_name: platform-authentik-vault-agent${ENV_SUFFIX}
     restart: always
     mem_limit: 128m
+    cpu_shares: 256
     entrypoint:
       - sh
       - -c
@@ -27,8 +28,8 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      ENV: ${ENV}
       ENVIRONMENT: ${ENV}
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
       # Cache-bust (#628): secrets.ctmpl is a single-file bind mount, so a checkout that
       # rewrites it leaves the running agent on the old inode, and Compose only recreates
       # a service whose resolved config changed. The hash covers the template, so a
@@ -60,7 +61,7 @@ services:
           fi
       interval: 30s
       timeout: 5s
-      retries: 3
+      retries: 12
       start_period: 10s
 
   server:
@@ -74,16 +75,26 @@ services:
       - sh
       - -c
       - |
-        # Wait for secrets file to be rendered by vault-agent
-        while [ ! -f /secrets/.env ]; do
-          echo "Waiting for secrets..."
-          sleep 1
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
+          sleep 2
+          waited=$$((waited + 2))
         done
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-        exec ak server
+        exec "$$@"
+      - --
+    command: [ak, server]
     environment:
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
@@ -119,16 +130,26 @@ services:
       - sh
       - -c
       - |
-        # Wait for secrets file to be rendered by vault-agent
-        while [ ! -f /secrets/.env ]; do
-          echo "Waiting for secrets..."
-          sleep 1
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
+          sleep 2
+          waited=$$((waited + 2))
         done
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
-        exec ak worker
+        exec "$$@"
+      - --
+    command: [ak, worker]
     environment:
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
@@ -158,6 +179,8 @@ services:
     restart: "no"
     mem_limit: 256m
     depends_on:
+      vault-agent:
+        condition: service_started
       server:
         condition: service_healthy
       worker:
@@ -166,11 +189,30 @@ services:
       - sh
       - -c
       - |
+        set -e
+        waited=0
+        max_wait="300"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
+          echo "Waiting for secrets file..."
+          sleep 2
+          waited=$$((waited + 2))
+        done
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
         set -a
         . /secrets/.env
         set +a
+        exec "$$@"
+      - --
+    command:
+      - sh
+      - -c
+      - |
         /init-token.sh
     environment:
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
