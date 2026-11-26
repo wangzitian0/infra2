@@ -28,7 +28,7 @@ flowchart TB
 
 ### 关键决策 (Architecture Decision)
 
-- **静态凭据**: 以 Vault KV 为准，部署时注入到 Dokploy Env。
+- **运行时凭据**: 以 Vault KV 为准，部署时由 AppRole `vault-agent` 边车渲染到容器内存盘 `/secrets/.env`（不写入 Dokploy Env）。
 - **平台共享**: PostgreSQL/Redis 为平台服务复用。
 
 ---

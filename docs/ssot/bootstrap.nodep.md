@@ -11,7 +11,7 @@
 |------|----------|----------|------|
 | **Dokploy** | 官方脚本 | Web UI | ✅ Active |
 | **1Password Connect** | Docker Compose | Dokploy | ✅ Active |
-| **Vault** | Docker Compose | Dokploy | ⏭️ Planned |
+| **Vault** | Docker Compose | Dokploy | ✅ Active |
 | **主机防火墙**（nftables `inet infra2_hostfw`） | `bootstrap/01.dokploy_install/hostfw/hostfw.sh install` | systemd `infra2-hostfw.service` | ✅ Active（2026-09-17） |
 
 ---
@@ -137,7 +137,7 @@ Infra-022 T1.3 / #724。2026-09-17 审计发现：Dokploy UI（3000/tcp）和单
 | 组件 | 当前版本 | 安装日期 | 操作人 |
 |------|----------|----------|--------|
 | Dokploy | v0.29.8 | 2026-06-12 | AI Agent |
-| 1Password Connect | v1.8.1 (pinned) | 2026-05-25 | AI Agent |
+| 1Password Connect | v1.8.2 (pinned) | 2026-05-25 | AI Agent |
 | Vault | v1.15.4 (pinned) | 2026-05-25 | AI Agent |
 | 主机防火墙 | `hostfw.nft` v1（nftables 1.0.9, Ubuntu 24.04） | 2026-09-17 | AI Agent（owner 批准） |
 

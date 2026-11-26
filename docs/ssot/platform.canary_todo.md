@@ -1,7 +1,7 @@
 # Canary Todo SSOT
 
 > **SSOT Key**: `platform.canary_todo`
-> **Definition**: Canary Todo (`platform/30.todo`) is a synthetic service at `todo.zitian.party`. It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres login of the app role with a session temporary-table write/read/delete roundtrip, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
+> **Definition**: Canary Todo (`platform/30.todo`) is a standard application deployed at `todo.zitian.party` whose source code lives in `infra2-sdk` (`canary/todo/`). It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres login of the app role with a session temporary-table write/read/delete roundtrip, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
 > **Scope**: Canary Todo is the one Canary of infra2 (#1477): no CI job, schedule or deploy step deploys an App to prove infra2.
 
 ---
@@ -16,7 +16,7 @@
 | Container topology | `platform/30.todo/compose.yaml` | `x-infra2` source (#1822 Slice 2): the app container with `x-vault`, `x-routes` and all four `x-capabilities` (`s3`, `otel`, `openpanel` with `script: true`, `browser_otel`). `OPENPANEL_HEALTH_URL` targets internal OpenPanel liveness while `OPENPANEL_API_URL` serves client analytics. The compile adds the vault-agent sidecar and the Traefik labels; the deploy uploads the compiled text as Dokploy `sourceType=raw`. `preview.compose.yaml` mirrors all capability variables, creates `canary_todo_capability` for throwaway Postgres, and is validated with `compose.yaml` by `infra-ci.yml` (`validate-compose`). |
 | Image | `ghcr.io/wangzitian0/infra2-canary-todo:vX.Y.Z@sha256:...` | infra2-sdk `release.yml` builds it from `canary/todo` at tag `vX.Y.Z` and installs the SDK from the same source, so the tag is the SDK version the Canary proves. The `todo` service of `platform/30.todo/compose.yaml` holds the one pin; `common/deploy/canary_pin.py` is its one reader. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role |
-| Secret & env contract | `platform/30.todo/env.manifest.json` | Enforced at startup via `assert_environment`. `common/security/secrets_render.py` renders the Vault Agent template from it at deploy time and generates the committed `vault-policy.hcl` |
+| Secret & env contract | `platform/30.todo/env.manifest.json` | Enforced at startup via `infra2_sdk.config.assert_env` against `CanarySettings` (`canary/todo/canary_settings.py`). `common/security/secrets_render.py` renders the Vault Agent template from `env.manifest.json` at deploy time and generates the committed `vault-policy.hcl` |
 | Runtime verification hooks | `platform/30.todo/runtime-hooks.manifest.json` | schema v3 runtime verification hooks (5 checks: `smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`), executed by `tools/reconcile_iac_inputs.py` |
 | Observability alerts | `platform/30.todo/alert_rules.json` | SigNoz v5 PromQL alert rules (`CanaryTodoProbeFailures`, `CanaryTodoTelemetryAbsent`), discovered by `common/observability_dashboards.py` |
 | Observability dashboard | `platform/30.todo/dashboard.json` | SigNoz v5 dashboard definition discovered by `common/observability_dashboards.py` |
@@ -44,7 +44,7 @@ Each check reports one of three states:
 
 | Check | Passes when | `fail` when | `unconfigured` when |
 |-------|-------------|-------------|---------------------|
-| `redis` | `AUTH`, `PING`, `SETEX`, `GET` (same random value), `DEL` all succeed | `-NOAUTH`, `-WRONGPASS`, any other error reply, a different value on `GET` | No `REDIS_PASSWORD` |
+| `redis` | `AUTH`, `PING`, `SETEX`, `GET` (same random value), `DEL` all succeed | `-NOAUTH`, `-WRONGPASS`, any other error reply, a different value on `GET` | `REDIS_URL` missing or lacks password |
 | `postgres` | Login with `DATABASE_URL` (role `todo_app`), `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped temporary table `canary_todo_probe` `CREATE` / `INSERT` / `SELECT` / `DELETE` roundtrip all succeed | Any server `E` (ErrorResponse), a failed login, or a roundtrip mismatch | `DATABASE_URL` is not set |
 | `s3` | `PUT`, `GET` (same body) and `DELETE` of `canary/<random>` in bucket `platform-canary` succeed | A denied or failed request, a different body | No bucket, access key or secret key |
 
@@ -91,7 +91,7 @@ A deploy restart therefore clears as soon as subsequent healthy probe ticks land
 
 ## 3A. Runtime Hooks & Mount Fingerprints
 
-- **Startup environment validation**: `validate_startup_environment()` in infra2-sdk `canary/todo/app.py` calls `assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)` during `main()` startup so missing required variables in `platform/30.todo/env.manifest.json` fail closed before Uvicorn binds.
+- **Startup environment validation**: `validate_startup_environment()` in infra2-sdk `canary/todo/app.py` calls `assert_env(EnvironmentManifest.from_model(CanarySettings, source="canary/todo"), environ=environ, require_injected=True)` during `main()` startup so missing required variables fail closed before Uvicorn binds.
 - **Template fingerprint** (#1822 Slice 2): `platform/30.todo/compose.yaml` is an `x-infra2` source. The compiled `vault-agent` sidecar holds the config and the template inline (`VAULT_AGENT_HCL`, `VAULT_SECRETS_TEMPLATE`) and labels them `infra2.vault.config.sha256` and `infra2.vault.template.sha256`. `CONFIGURATION_SHA256` hashes the compiled text, so a template change recreates the sidecar. Git holds no `secrets.ctmpl` or `vault-agent.hcl` for this stack: the deploy renders the template from `env.manifest.json` and compiles both into the sidecar. `vault-policy.hcl` stays committed. A rollback redeploys an older release tag with its own files.
 - **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the schema v3 verification contract: 5 checks, each in the cells of its train slot (`smoke` in the three `*.operation` cells; `preview_gate` in `preview.post`; `staging_gate` in `staging.post`; `prod_gate` in `prod.post`; `scheduled_audit` in `scheduled_audit`). `staging_gate` and `prod_gate` pass only when the `/api/health` body has `canary.ok` true and `git_sha` equal to the commit of `APP_VERSION_REF`. A verdict older than 180 s fails the gate. `smoke` reads the HTTP status only. The manifest is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
 - **Dashboard & custom OTel metrics**: `platform/30.todo/dashboard.json` defines the SigNoz v5 dashboard discovered by `common/observability_dashboards.py`, charting `canary.probe.duration_ms` and `canary.probe.outcomes`, plus four LLM panels: `todo-llm-token-usage` (`gen_ai.client.token.usage.sum`), `todo-llm-operation-duration` (`gen_ai.client.operation.duration.bucket`), `todo-llm-cost-by-call-site` (`chat` span `operation.cost`) and `todo-llm-tokens-by-call-site` (`chat` span `gen_ai.usage.*_tokens`). `common/tests/test_observability_dashboards.py` pins the panel list.
@@ -102,9 +102,9 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 
 | Variable | Source class | Origin | Operator action |
 |----------|--------------|--------|-----------------|
-| `REDIS_PASSWORD` | `runtime`, `provided_by` | Vault `platform/<env>/redis` key `password` | None |
+| `REDIS_URL` | `runtime`, `composed_from` | Composed in Vault Agent template from `platform/<env>/redis` `password` and `platform-redis<suffix>` | None |
 | `DATABASE_URL` | `runtime`, `store_key`, `composed_from` | Vault key `TODO_POSTGRES_PASSWORD` (its `store_key`) holds a password generated once; `TodoDeployer` sets it on role `todo_app` at each supply. The rendered Vault Agent template composes the URL from it, role `todo_app` and host `platform-postgres<suffix>`; only the URL enters the process. The Canary reads only this name for Postgres | None |
-| `S3_ACCESS_KEY`, `S3_SECRET_KEY` (Vault keys `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY`) | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
+| `S3_ACCESS_KEY`, `S3_SECRET_KEY` | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
 | `LLM_API_KEY` | `human`, `empty_ok` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | `uv run invoke env.set LLM_API_KEY=<KEY> --project=platform --env=<env> --service=todo --credential-type=root_vars` |
 | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_SMALL_MODEL` | `code`, `empty_ok` | `LlmSettings` defaults in `infra2_sdk.llm` | Optional compose override |
 
@@ -118,7 +118,7 @@ The policy lets the canary read only `platform/<env>/todo` and `platform/<env>/r
 
 1. `DEPLOY_ENV=<env> uv run invoke vault.setup-approle --project=platform --service=todo` (needs `VAULT_ROOT_TOKEN`). It creates the AppRole and policy, and injects `VAULT_ROLE_ID` and `VAULT_SECRET_ID` into the Dokploy compose env.
 2. On the VPS host, create the canary bucket and its scoped key: `DEPLOY_ENV=<env> uv run invoke s3.shared.create-app-bucket --bucket-name=platform-canary --access-key=<AK> --secret-key=<SK> --lifecycle-days=1`.
-3. Store the same key: `uv run invoke env.set CANARY_S3_ACCESS_KEY=<AK> --project=platform --env=<env> --service=todo --credential-type=root_vars`, and the same for `CANARY_S3_SECRET_KEY`.
+3. Store the same key: `uv run invoke env.set S3_ACCESS_KEY=<AK> --project=platform --env=<env> --service=todo --credential-type=root_vars`, and the same for `S3_SECRET_KEY`.
 
 Without step 3 the `s3` check reports `unconfigured`, with the names of the missing variables. The probe stays red (P2) and the deploy still succeeds.
 
@@ -162,7 +162,7 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 - Put metered external capabilities on dedicated SSO-protected endpoints exercised at low frequency by `tools/canary_verify.py` (never inside the 60 s probe loop).
 - Bound LLM summary runs with `UsageLimits`, single-layer `RetryOnModelErrors` (vendor `max_retries=0`), and `redact_llm_error`.
 - Keep the probe target, the compose container name, and the app route equal. `test_probe_target_matches_the_compose_container_port_and_app_route` guards this.
-- Keep the Dockerfile installing the `infra2-sdk` wheel and its runtime extras (`fastapi,postgres,s3,http,pydantic-ai`) from `uv.lock` (`test_each_image_installs_the_locked_requirement` and `test_the_image_installs_the_sdk_otel_extra_requirements_as_plain_pins` guard this).
+- Keep the Dockerfile installing `infra2-sdk` and its canary dependency group (`uv sync --locked --group canary`, covering `fastapi`, `postgres`, `s3`, `http`, `llm`) from `uv.lock`.
 
 ### Do not
 - Do not route `/api/canary/status` without SSO. `test_only_the_health_path_is_served_without_sso` evaluates the real Traefik rules.

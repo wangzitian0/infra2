@@ -1,7 +1,7 @@
 # Vault 数据库接入 SSOT
 
 > **SSOT Key**: `db.vault`
-> **核心定义**: 定义应用通过 Vault 获取数据库凭据的接入方式（Dokploy + 环境变量）。
+> **核心定义**: 定义应用通过 AppRole `vault-agent` 边车获取数据库凭据的接入方式（渲染至 `/secrets/.env` tmpfs，不进 Dokploy Env）。
 
 ---
 
@@ -10,8 +10,8 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **Vault KV** | `secret/<project>/<env>/<service>` | 数据库凭据路径 |
-| **环境工具** | [`tools/env_tool.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_tool.py) | 读写远端 |
-| **部署入口** | Dokploy App Env | 应用运行时变量注入 |
+| **环境工具** | [`tools/env_tool.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_tool.py) | 远端只读/break-glass 读写 |
+| **运行时注入** | `vault-agent` sidecar (`VAULT_ROLE_ID` / `VAULT_SECRET_ID`) | 渲染至 `/secrets/.env` tmpfs |
 
 ---
 
@@ -19,8 +19,10 @@
 
 ```mermaid
 graph TD
-    VAULT[Vault KV] --> ENV[Dokploy Env]
-    ENV --> APP[Application]
+    OP[1Password human secrets] --> SUPPLY[common/security/supply.py]
+    SUPPLY --> VAULT[Vault KV]
+    VAULT --> AGENT[vault-agent tmpfs /secrets/.env]
+    AGENT --> APP[Application]
 ```
 
 ---
@@ -59,15 +61,12 @@ graph TD
 
 - **触发条件**: 应用需要数据库访问
 - **步骤**:
-    1. 在 Vault 中写入敏感凭据（示例）：
-       ```bash
-       vault kv put secret/platform/<env>/<app> PG_USER=... PG_PASS=... PG_DB=...
-       ```
-    2. 使用 env_tool 验证已写入：
+    1. 在 `env.manifest.json`（或应用 manifest）声明数据库密钥的 `source`（`runtime` 自动生成或 `human` 从 1Password 复制），部署时由 `common/security/supply.py` 写入 Vault（不手工 `vault kv put`）。
+    2. 使用 `env_tool` 验证已写入：
        ```bash
        invoke env.get PG_PASS --project=platform --env=<env> --service=<service>
        ```
-    3. 在 Dokploy App 环境变量中设置非敏感值（如 `PG_HOST`, `PG_PORT`），并注入 `PG_USER/PG_PASS/PG_DB`。
+    3. 非敏感变量（如 `PG_HOST`、`PG_PORT`）通过 Compose / Dokploy 注入；密码由 `vault-agent` 渲染到 `/secrets/.env`，禁止将密码明文写入 Dokploy App Env。
 
 ### SOP-002: 排查“Permission Denied”
 

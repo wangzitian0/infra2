@@ -13,7 +13,7 @@
 | **部署任务** | [`platform/03.clickhouse/deploy.py`](../../platform/03.clickhouse/deploy.py) | `ClickHouseDeployer` |
 | **服务端配置** | [`platform/03.clickhouse/config.xml`](../../platform/03.clickhouse/config.xml) | 集群与内存上限模板 |
 
-- **用途**: SigNoz 可观测性平台的存储后端 (Logs, Metrics, Traces)。
+- **用途**: SigNoz 可观测性平台的存储后端 (Logs, Metrics, Traces)。（OpenPanel 另行在 `platform/24.openpanel` 中部署独立的 `op-ch` ClickHouse 实例。）
 - **架构**: 单节点 ClickHouse + ZooKeeper (协调)，仅供 SigNoz 内网使用。
 
 ---

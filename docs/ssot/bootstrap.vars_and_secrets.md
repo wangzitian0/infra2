@@ -52,7 +52,7 @@ CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分
 
 每个服务读到的每个变量都在它的 manifest（`env.manifest.json` / app 的 `required-env.generated.json`，
 contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secret_supply`
-（`common/security/supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
+（`common/security/supply.py`，经 `common/security/backends.py` `SecretsResolver`）按声明把 store 填齐——
 **Vault 只有这一个写入者，没有人手工往 Vault 里敲值。**
 
 > Each stack keeps its baseline manifest in `env.manifest.json`. At deploy time the receiver fetches the App release manifest from the deployed release commit and renders the Vault Agent template dynamically (`VAULT_SECRETS_TEMPLATE`, #1320). See §1.5 and §1.6.

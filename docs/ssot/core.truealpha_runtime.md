@@ -18,11 +18,8 @@
 
 - Staging and Production use different Postgres instances, raw buckets/credentials,
   Vault paths, Dagster metadata rows, API ledgers, data directories, and loopback ports.
-- Staging runs only the immutable TOPT acceptance canary: 20 issuers and 21 selected
-  U.S. equity instruments from accession `000207169126012475`.
-- Production uses a separately approved release/scope and remains shadow until the
-  application repository records graduation. A Staging scope cannot run under
-  `APP_ENV=production`.
+- Staging runs the immutable TOPT acceptance canary and sentinels.
+- Production graduated (`2026-07-27`) and runs TOPT + QQQ scopes with a separately approved release. A Staging scope cannot run under `ENVIRONMENT=production`.
 - The daemon is the sole recurring-run authority. Host scripts are diagnostics and
   cannot satisfy scheduled-run evidence.
 
@@ -31,8 +28,8 @@
 All three Dagster roles (`dagster-code-server`, `dagster-daemon`, and `dagster-webserver`)
 must run the same full OCI digest. Deploy fails closed unless Vault supplies:
 
-- `DATA_ENGINE_IMAGE_DIGEST` as `sha256:<64 lowercase hex>`;
-- `RELEASE_MANIFEST_ID` as `release-manifest:<64 lowercase hex>`;
+- `IMAGE_DIGEST` as `sha256:<64 lowercase hex>`;
+- `RELEASE_ID` as `release-manifest:<64 lowercase hex>`;
 - `CAPTURE_APPROVED_BY` as the recorded scope decision;
 - all required source/object-storage credentials.
 
@@ -63,8 +60,7 @@ to the promoted digest; recording a Dokploy config hash alone is insufficient.
 Every container has an explicit memory ceiling and CPU weight. Staging and Production
 use the same memory ceiling (`1536m` per Dagster role), so staging rehearses the
 production run mix. Staging has the lower CPU weight (`512`; Production `1024`).
-`20.data_engine/compose.yaml` is the one source of the memory ceiling; `deploy.py` sets the CPU weight. The deployment queue allows one capture run at a time to prevent
-OpenD/source budget contention.
+`20.data_engine/compose.yaml` is the one source of the memory ceiling; `deploy.py` sets the CPU weight. `dagster.yaml` caps `max_concurrent_runs: 2` to prevent OpenD/source budget contention.
 
 ## 6. The Proof
 
@@ -74,7 +70,6 @@ docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-code-server-staging
 docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' truealpha-dagster-code-server-staging
-docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check
 ```
 
 Required assertions:
@@ -83,7 +78,7 @@ Required assertions:
 2. The daemon heartbeat is current, code-server is healthy, and schedule metadata persists after restart.
 3. Postgres contains Dagster runtime tables only in `dagster`, never `public`.
 4. OpenD, Postgres, and Dagster UI are unreachable on non-loopback host interfaces.
-5. A missing digest/release/approval/credential or wrong `APP_ENV` blocks execution.
+5. A missing digest/release/approval/credential or wrong `ENVIRONMENT` blocks execution.
 
 ## Used By
 

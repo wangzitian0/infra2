@@ -1,10 +1,10 @@
-"""Compile a stack compose file with infra2-sdk and decide its Dokploy source type (#1822).
+"""Compile a stack compose file with ``common.deploy.compose_rules`` and decide its Dokploy source type (#1822).
 
 A compose file that has a top-level ``x-infra2`` key is a short source. The deploy
-compiles it with ``infra2_sdk.rules.compile_compose`` into plain Docker Compose YAML.
+compiles it with ``common.deploy.compose_rules.compile_compose`` into plain Docker Compose YAML.
 A compose file without that key is a plain file. For a plain file, ``compile_stack``
-returns the input text unchanged (the same bytes). The SDK compiler cannot do this
-itself: it requires ``x-infra2`` and it writes the YAML again in its own format.
+returns the input text unchanged (the same bytes). The compiler requires ``x-infra2``
+and rewrites the YAML in its own format.
 
 Rules:
 
@@ -87,7 +87,7 @@ def compile_stack(
         raise ComposeSourceError(f"mode must be one of {MODES}, not {mode!r}")
     if not has_x_infra2(text):
         return text
-    # Imported here: only an x-infra2 stack needs the SDK 4.x compiler (infra2#1822).
+    # Imported here: only an x-infra2 stack uses the compose_rules compiler (infra2#1822).
     from common.deploy.compose_rules import ComposeCompileError, compile_compose
 
     try:
