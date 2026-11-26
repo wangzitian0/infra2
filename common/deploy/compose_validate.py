@@ -51,6 +51,11 @@ CI_COMPOSE_ENV: dict[str, str] = {
     "OP_CONNECT_TOKEN": "dummy-op-connect-token",
     "OP_VAULT_ID": "dummy-op-vault-id",
     "OP_ITEM_ID": "dummy-op-item-id",
+    "REDIS_PASSWORD": "dummy-redis-password",
+    "POSTGRES_ADMIN_PASSWORD": "dummy-postgres-admin-password",
+    "TODO_POSTGRES_PASSWORD": "dummy-todo-postgres-password",
+    "S3_ACCESS_KEY": "dummy-storage-access-key",
+    "S3_SECRET_KEY": "dummy-storage-secret-key",
 }
 
 

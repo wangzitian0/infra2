@@ -1,0 +1,35 @@
+{
+  "$comment": "Config-as-code SigNoz alert rules for Canary Todo (platform/todo). Applied idempotently by `invoke fr-observability.shared.apply-alerts`, routing alerts to the shared Feishu bridge channel.",
+  "runbook_url": "https://github.com/wangzitian0/infra2/blob/main/docs/ssot/platform.canary_todo.md#2-what-each-check-proves",
+  "service_id": "platform/todo",
+  "rules": [
+    {
+      "signal": "metrics",
+      "alert_name": "CanaryTodoProbeFailures",
+      "service_name": "platform-todo",
+      "severity": "error",
+      "threshold": 0,
+      "threshold_unit": "count",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "sum(increase({\"canary.probe.outcomes\",\"service.name\"=\"platform-todo\",\"deployment.environment.name\"=\"{env}\",\"canary.check\"=~\"^(postgres|redis|s3)$\",\"canary.status\"=~\"^(fail|unconfigured)$\"}[5m]))",
+      "summary": "platform-todo gating probe (postgres, redis, or s3) reported fail or unconfigured within 5 minutes. Severity P1."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "CanaryTodoTelemetryAbsent",
+      "service_name": "platform-todo",
+      "severity": "error",
+      "threshold": 0,
+      "threshold_unit": "",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "absent_over_time({\"canary.probe.outcomes\",\"service.name\"=\"platform-todo\",\"deployment.environment.name\"=\"{env}\"}[10m])",
+      "summary": "platform-todo reported no canary.probe.outcomes metric for 10 minutes: the Canary service or its OTLP export stopped. Severity P1."
+    }
+  ]
+}

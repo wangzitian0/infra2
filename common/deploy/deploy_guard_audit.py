@@ -319,6 +319,7 @@ ALL_GUARD_KEYS = (
     "guard:production-marker-lag",
     "guard:app-hooks-manifest",
     "guard:dokploy-autodeploy",
+    "guard:canary-verify-staging",
 )
 SCHEDULED_AUDIT_STEP_KEY = "guard:scheduled-app-audit"
 

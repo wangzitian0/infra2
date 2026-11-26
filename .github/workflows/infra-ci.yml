@@ -186,7 +186,7 @@ jobs:
         run: |
           set -e
           echo "🔍 Validating compose files..."
-          find . -name "compose.yaml" -type f -print0 | sort -z | xargs -0 python3 -m tools.compose_compile validate
+          find . \( -name "compose.yaml" -o -name "*.compose.yaml" \) -type f -print0 | sort -z | xargs -0 python3 -m tools.compose_compile validate
           echo "✅ All compose files are valid"
 
       - name: Trivy vulnerability and config scan

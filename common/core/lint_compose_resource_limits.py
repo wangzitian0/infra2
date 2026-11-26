@@ -39,6 +39,7 @@ COMPOSE_NAMES = (
     "compose.yml",
     "docker-compose.yaml",
     "docker-compose.yml",
+    "preview.compose.yaml",
 )
 _IMAGE_LINE_RE = re.compile(r"^\s*image:\s*(\S+)\s*$")
 _DEFAULT_TAG_EXPANSION_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]*)\}")

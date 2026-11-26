@@ -264,6 +264,8 @@ _EXPECTED_RULES = {
     ),
     "PlatformAlertingErrorLogs": ("threshold_rule", "error", 5, "4", "15m0s", ""),
     "PlatformTodoErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
+    "CanaryTodoProbeFailures": ("promql_rule", "error", 0.0, "1", "5m0s", "count"),
+    "CanaryTodoTelemetryAbsent": ("promql_rule", "error", 0.0, "1", "5m0s", ""),
 }
 # Every rule has a staging twin named `<rule>Staging` (#1649).
 _ALL_RULE_NAMES = set(_EXPECTED_RULES) | {f"{name}Staging" for name in _EXPECTED_RULES}
@@ -402,7 +404,17 @@ _APP_METRICS: dict[str, dict[str, set[str]]] = {
     "finance.storage_sweep.failure": {},
     # #1816: `_emitted` reads the outcome values from the pinned ClassifyOutcome enum.
     "finance.statement_classification.outcome": {},
-    "canary.probe.outcomes": {"canary.status": {"pass", "fail", "unconfigured"}},
+    "canary.probe.outcomes": {
+        "canary.check": {
+            "postgres",
+            "redis",
+            "s3",
+            "signoz",
+            "openpanel",
+            "authentik",
+        },
+        "canary.status": {"pass", "fail", "unconfigured"},
+    },
 }
 
 
@@ -683,6 +695,7 @@ def test_http_rules_read_only_the_stable_http_metric() -> None:
             "db.pool.size",
         ),
         ("TrueAlphaAppTelemetryAbsent", "truealpha-app", "15m", "process.uptime"),
+        ("CanaryTodoTelemetryAbsent", "platform-todo", "10m", "canary.probe.outcomes"),
     ],
 )
 def test_backend_telemetry_absence_is_expressed_in_promql(
@@ -700,6 +713,7 @@ def test_backend_telemetry_absence_is_expressed_in_promql(
     assert set(absent) == {
         "FinanceReportBackendTelemetryAbsent",
         "TrueAlphaAppTelemetryAbsent",
+        "CanaryTodoTelemetryAbsent",
     }
     promql = absent[rule]
     assert re.fullmatch(
@@ -3248,6 +3262,7 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
         "truealpha/truealpha/observability/*",
         "platform/12.alerting/alert_rules.json",
         "platform/12.alerting/dashboard.json",
+        "platform/30.todo/alert_rules.json",
         "platform/30.todo/dashboard.json",
         "common/alerting/*",
         "common/observability_dashboards.py",

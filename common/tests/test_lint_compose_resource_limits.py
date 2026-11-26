@@ -141,14 +141,16 @@ def test_multi_document_yaml_reads_every_document(tmp_path):
 
 
 def test_every_compose_spelling_is_discovered():
-    # The first version scanned only */compose.yaml, so a docker-compose.yml or
-    # a repo-root compose.yaml was invisible.
+    # The first version scanned only */compose.yaml, so a docker-compose.yml,
+    # preview.compose.yaml, or a repo-root compose.yaml was invisible.
     assert set(lint.COMPOSE_NAMES) == {
         "compose.yaml",
         "compose.yml",
         "docker-compose.yaml",
         "docker-compose.yml",
+        "preview.compose.yaml",
     }
+    assert "platform/30.todo/preview.compose.yaml" in lint._tracked_composes()
 
 
 def test_the_real_repository_is_compliant_against_its_baseline():
