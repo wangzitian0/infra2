@@ -35,6 +35,7 @@ from packaging.requirements import Requirement
 
 from common.core import registry as reg
 from common.deploy.deployer import Deployer
+from common.deploy.platform_images import PLATFORM_IMAGES
 from common.tests.ambient_env import clear_telemetry_env
 from common.tests.compose_env import compose_services, container_env, raw_environment
 
@@ -161,13 +162,30 @@ def _meta(app: Path):
 
 
 def _app_service(app: Path) -> str:
-    """The compose service that builds the image of this app."""
+    """The compose service that runs this app from the image of its Dockerfile.
+
+    The service builds the Dockerfile, or pins the image that CI publishes from it
+    (#1822). When more services run the image, the app service runs `/app/<app>`.
+    """
     dockerfile = f"{app.parent.relative_to(ROOT).as_posix()}/Dockerfile"
-    (name,) = [
-        name
+    published = {
+        image.repository
+        for image in PLATFORM_IMAGES.values()
+        if image.dockerfile == dockerfile
+    }
+    runs_image = {
+        name: service
         for name, service in compose_services(app.parent / "compose.yaml").items()
         if (service.get("build") or {}).get("dockerfile") == dockerfile
-    ]
+        or str(service.get("image") or "").split(":", 1)[0] in published
+    }
+    if len(runs_image) > 1:
+        runs_image = {
+            name: service
+            for name, service in runs_image.items()
+            if f"/app/{app.name}" in str(service.get("command") or "")
+        }
+    (name,) = runs_image
     return name
 
 

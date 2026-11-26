@@ -605,6 +605,8 @@ A raw Dokploy compose (`sourceType="raw"`) has no checkout, so a platform stack 
 - `.github/workflows/platform-images.yml` runs on each pull request and each push to `main`. It builds and pushes each tag that GHCR does not have, and it never pushes a tag again.
 - The `publish` job prints the pin and fails when the compose digest is not the GHCR digest of the tag, or when the tag does not pull without credentials. Set a new GHCR package to public once.
 - Flow for a Dockerfile edit: change the file and the tag, push the branch, then copy the printed `pin:` line into the compose.
+- The alerting image (`platform/12.alerting/Dockerfile`) copies `uv.lock`, `common` and `tools`. An edit of one of these files gives a new alerting tag, and the PR must update the pin by the same flow.
+- The tag hashes the files on disk. An untracked file below a copied directory changes the local tag; CI hashes a clean checkout.
 
 ## 6. 设计约束 (Dos & Don'ts)
 

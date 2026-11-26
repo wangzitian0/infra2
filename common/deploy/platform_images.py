@@ -63,6 +63,14 @@ PLATFORM_IMAGES: dict[str, PlatformImage] = {
             compose="platform/03.s3/compose.yaml",
             services=("s3",),
         ),
+        PlatformImage(
+            key="alerting",
+            repository=f"{REGISTRY}/infra2-alerting",
+            dockerfile="platform/12.alerting/Dockerfile",
+            context=".",
+            compose="platform/12.alerting/compose.yaml",
+            services=("feishu-alert-bridge", "infra-probe-runner"),
+        ),
     )
 }
 

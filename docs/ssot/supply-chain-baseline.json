@@ -33,7 +33,6 @@
     "platform/11.signoz/compose.yaml::otel-collector",
     "platform/11.signoz/compose.yaml::schema-migrator",
     "platform/11.signoz/compose.yaml::signoz",
-    "platform/12.alerting/compose.yaml::infra-probe-runner",
     "platform/12.alerting/compose.yaml::vault-agent",
     "platform/23.prefect/compose.yaml::vault-agent",
     "platform/24.openpanel/compose.yaml::op-ch",

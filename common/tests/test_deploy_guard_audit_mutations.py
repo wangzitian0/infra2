@@ -263,9 +263,11 @@ def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_f
         composes, root=tmp_path
     )
     assert (
-        "platform/12.alerting: has Dockerfile but config hash reads 0 inputs"
+        "platform/30.todo: has Dockerfile but config hash reads 0 inputs"
         in canary_hits
     )
+    # Alerting has no `build:`: the hash reads the inputs of its CI-built image (#1822).
+    assert not any(h.startswith("platform/12.alerting:") for h in canary_hits)
     assert (
         "bootstrap/06.iac_runner: has Dockerfile but config hash reads 0 inputs"
         in canary_hits

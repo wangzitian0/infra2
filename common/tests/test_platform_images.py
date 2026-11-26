@@ -227,6 +227,51 @@ def test_the_real_s3_hash_reads_the_dockerfile_without_the_vault_mounts() -> Non
     ]
 
 
+def test_the_real_alerting_hash_reads_the_image_inputs_without_the_vault_mounts() -> None:
+    """Measured on this tree: both alerting services give the image input files only."""
+    from common.deploy import config_hash
+
+    image = pi.PLATFORM_IMAGES["alerting"]
+    compose = ROOT / image.compose
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+    text = yaml.safe_dump({"services": {n: services[n] for n in image.services}})
+    assert config_hash._compose_artifact_files(str(compose), text) == pi.input_files(
+        image
+    )
+
+
+def test_the_alerting_tag_covers_each_tracked_file_that_the_dockerfile_copies() -> None:
+    """The Dockerfile copies uv.lock, tools/sdk_requirement.py, app.py, common and tools.
+
+    The repository has no .dockerignore, so the build copies each tracked file below
+    these paths. git (not the hash code) lists them.
+    """
+    import subprocess
+
+    image = pi.PLATFORM_IMAGES["alerting"]
+    copied = ["uv.lock", "tools/sdk_requirement.py", "platform/12.alerting/app.py"]
+    copied += ["common", "tools"]
+    assert not (ROOT / ".dockerignore").exists()
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", *copied],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    ).stdout.split()
+    inputs = {p.relative_to(ROOT).as_posix() for p in pi.input_files(image)}
+    assert len(tracked) > 400
+    assert set(tracked) <= inputs
+    assert "platform/12.alerting/Dockerfile" in inputs
+    outside = {
+        p
+        for p in inputs - {image.dockerfile}
+        if not any(p == c or p.startswith(c + "/") for c in copied)
+    }
+    assert outside == set()
+
+
 # --- the CI matrix and workflow ---------------------------------------------------------
 
 
