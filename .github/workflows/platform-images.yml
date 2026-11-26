@@ -2,22 +2,32 @@ name: Platform Images
 
 # CI builds each image of common/deploy/platform_images.py and pushes it to GHCR (#1822).
 # A raw Dokploy compose has no checkout, so a stack cannot build its image at deploy time.
-# The tag is the hash of the image input files. A tag that is on GHCR is not pushed again,
-# so a tag holds one image. The compose pins <tag>@sha256:<digest>; this job fails when
-# the pinned digest is not the GHCR digest of the tag, and prints the correct pin.
+# An `inputs` image: the tag is the hash of the image input files; the compose pins
+# <tag>@sha256:<digest>; this job fails when the pinned digest is not the GHCR digest of
+# the tag, and prints the correct pin.
+# A `commit` image: the tag is the full commit SHA of the checkout. A push to main and a
+# manual run publish it; a pull request does not. The deploy waits for the tag of the
+# commit that it deploys. A manual run with `ref` publishes the tag of an older commit.
+# A tag that is on GHCR is not pushed again, so a tag holds one image.
 # This workflow writes images only. It deploys nothing and changes no environment.
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit, branch or tag to build (default: the workflow ref)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  # Do not cancel a running push: a cancelled run can leave a tag without its check.
-  group: platform-images-${{ github.ref }}
+  # One group per commit: GitHub replaces a pending run of a group with a newer one,
+  # and each main commit needs its own commit tag. A running push is never cancelled.
+  group: platform-images-${{ github.ref }}-${{ inputs.ref || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -27,8 +37,11 @@ jobs:
     timeout-minutes: 5
     outputs:
       images: ${{ steps.matrix.outputs.images }}
+      sha: ${{ steps.matrix.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - name: Install uv
         uses: astral-sh/setup-uv@v8.3.2
         with:
@@ -36,10 +49,17 @@ jobs:
           cache-dependency-glob: "uv.lock"
       - name: Compute the image tags from the input files
         id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          images="$(uv run --locked python -m common.deploy.platform_images matrix)"
+          sha="$(git rev-parse HEAD)"
+          # A pull request merge ref is not a deploy commit: it gets no commit tag.
+          commit="$sha"
+          if [ "$EVENT_NAME" = "pull_request" ]; then commit=""; fi
+          images="$(uv run --locked python -m common.deploy.platform_images matrix --commit "$commit")"
           echo "$images"
           echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
   publish:
     name: Publish ${{ matrix.key }}
@@ -61,8 +81,12 @@ jobs:
       CONTEXT: ${{ matrix.context }}
       COMPOSE: ${{ matrix.compose }}
       PINNED_DIGEST: ${{ matrix.pinned_digest }}
+      KIND: ${{ matrix.kind }}
+      SHA: ${{ needs.matrix.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.matrix.outputs.sha }}
       - name: Build and push the tag when it is not on GHCR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,12 +98,16 @@ jobs:
           fi
           docker build --platform linux/amd64 \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.revision=${SHA}" \
             -f "$DOCKERFILE" -t "$IMAGE" "$CONTEXT"
           docker push "$IMAGE"
       - name: The compose pins the GHCR digest of the tag
         run: |
           digest="$(docker buildx imagetools inspect "$IMAGE" | awk '/^Digest:/ {print $2; exit}')"
+          if [ "$KIND" = "commit" ]; then
+            echo "published: $IMAGE@$digest (the compose names the commit tag; no pin)" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           echo "pin: $IMAGE@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$digest" != "$PINNED_DIGEST" ]; then
             echo "::error file=$COMPOSE::$COMPOSE pins '${PINNED_DIGEST:-none}'. Set the image to $IMAGE@$digest"

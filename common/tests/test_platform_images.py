@@ -183,6 +183,107 @@ def test_no_stack_compose_builds_a_published_dockerfile() -> None:
     assert found == []
 
 
+# --- the commit-tagged image ------------------------------------------------------------
+
+
+def _commit_tree(tmp_path: Path, monkeypatch, service: str) -> pi.PlatformImage:
+    image = pi.PlatformImage(
+        "t",
+        "ghcr.io/x/t",
+        "svc/Dockerfile",
+        ".",
+        "svc/compose.yaml",
+        ("app",),
+        tag_kind="commit",
+    )
+    _tree(tmp_path, "FROM a\nCOPY lib /app/lib\n", {"lib/m.py": "x = 1\n"})
+    (tmp_path / "svc" / "compose.yaml").write_text(
+        "services:\n  app:\n" + service, encoding="utf-8"
+    )
+    monkeypatch.setattr(pi, "PLATFORM_IMAGES", {"t": image})
+    return image
+
+
+def test_the_commit_tag_is_the_deploy_ref_and_stops_compose_without_it() -> None:
+    assert pi.COMMIT_TAG == "${INFRA_IAC_REF:?}"
+    image = pi.PLATFORM_IMAGES["alerting"]
+    assert image.tag_kind == "commit"
+    assert image.commit_ref == "ghcr.io/wangzitian0/infra2-alerting:${INFRA_IAC_REF:?}"
+    assert set(pi.pinned_refs(image).values()) == {image.commit_ref}
+
+
+def test_a_copied_file_change_needs_no_commit_pin_edit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The defect of an input tag (#2055): a copied file edit failed the check."""
+    _commit_tree(tmp_path, monkeypatch, '    image: "ghcr.io/x/t:${INFRA_IAC_REF:?}"\n')
+    assert pi.pin_problems(tmp_path) == []
+    (tmp_path / "lib" / "m.py").write_text("x = 2\n", encoding="utf-8")
+    assert pi.pin_problems(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "image_line",
+    [
+        "    image: ghcr.io/x/t:latest\n",
+        "    image: ghcr.io/x/t:${INFRA_IAC_REF:-latest}\n",  # a fallback tag
+        "    image: ghcr.io/x/t:${INFRA_IAC_REF}\n",  # an empty ref pulls `t:`
+        "    image: ghcr.io/x/t:${INFRA_IAC_REF:?}@" + DIGEST + "\n",
+        "    image: ghcr.io/x/other:${INFRA_IAC_REF:?}\n",
+    ],
+)
+def test_a_commit_image_that_is_not_the_commit_ref_is_a_problem(
+    tmp_path: Path, monkeypatch, image_line: str
+) -> None:
+    _commit_tree(tmp_path, monkeypatch, image_line)
+    [problem] = pi.pin_problems(tmp_path)
+    assert problem.endswith("is not ghcr.io/x/t:${INFRA_IAC_REF:?}")
+
+
+def test_a_commit_image_service_that_builds_is_a_problem(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _commit_tree(
+        tmp_path,
+        monkeypatch,
+        '    build: .\n    image: "ghcr.io/x/t:${INFRA_IAC_REF:?}"\n',
+    )
+    assert pi.pin_problems(tmp_path) == [
+        "svc/compose.yaml service 'app' has `build:`; CI publishes ghcr.io/x/t"
+    ]
+
+
+def test_an_unknown_tag_kind_raises() -> None:
+    with pytest.raises(ValueError, match="tag_kind 'latest'"):
+        pi.PlatformImage("t", "r", "d", ".", "c", ("a",), tag_kind="latest")
+
+
+def test_the_deploy_waits_for_the_commit_image_of_alerting_only() -> None:
+    """deploy_v2 waits for these repositories at the deploy commit (ServiceSpec)."""
+    from common.deploy.contract import all_service_keys, service_spec
+
+    waits = {
+        key: service_spec(key).image_repositories
+        for key in all_service_keys()
+        if service_spec(key).iac_pinned and service_spec(key).image_repositories
+    }
+    assert waits == {"platform/alerting": ("ghcr.io/wangzitian0/infra2-alerting",)}
+    assert pi.commit_image_repositories("platform/s3") == ()
+
+
+def test_the_ghcr_retention_never_deletes_a_platform_image() -> None:
+    """A rollback to an older release pulls the commit tag of that release.
+
+    The retention keeps a main commit tag only in the `<7 hex>` form, so a platform
+    package in its list would lose each 40-hex tag after the window.
+    """
+    from common.deploy.ghcr_retention import PACKAGES
+
+    packages = {i.repository.rsplit("/", 1)[1] for i in pi.PLATFORM_IMAGES.values()}
+    assert packages == {"infra2-s3", "infra2-alerting"}
+    assert packages.isdisjoint(PACKAGES)
+
+
 # --- the config hash reads the image input files ---------------------------------------
 
 
@@ -227,23 +328,102 @@ def test_the_real_s3_hash_reads_the_dockerfile_without_the_vault_mounts() -> Non
     ]
 
 
+def test_the_real_alerting_hash_reads_the_image_inputs_without_the_vault_mounts() -> (
+    None
+):
+    """Measured on this tree: both alerting services give the image input files only.
+
+    An edit of a copied file changes the config hash, so the deploy recreates the stack
+    with the new commit tag. The tag is not in the hash: the compose text is constant.
+    """
+    from common.deploy import config_hash
+
+    image = pi.PLATFORM_IMAGES["alerting"]
+    compose = ROOT / image.compose
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+    text = yaml.safe_dump({"services": {n: services[n] for n in image.services}})
+    files = config_hash._compose_artifact_files(str(compose), text)
+    assert files == pi.input_files(image)
+    assert len(files) > 400
+
+
+def test_the_alerting_hash_covers_each_tracked_file_that_the_dockerfile_copies() -> (
+    None
+):
+    """The Dockerfile copies uv.lock, tools/sdk_requirement.py, app.py, common and tools.
+
+    The repository has no .dockerignore, so the build copies each tracked file below
+    these paths. git (not the hash code) lists them.
+    """
+    import subprocess
+
+    image = pi.PLATFORM_IMAGES["alerting"]
+    copied = ["uv.lock", "tools/sdk_requirement.py", "platform/12.alerting/app.py"]
+    copied += ["common", "tools"]
+    assert not (ROOT / ".dockerignore").exists()
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", *copied],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    ).stdout.split()
+    inputs = {p.relative_to(ROOT).as_posix() for p in pi.input_files(image)}
+    assert len(tracked) > 400
+    assert set(tracked) <= inputs
+    assert "platform/12.alerting/Dockerfile" in inputs
+    outside = {
+        p
+        for p in inputs - {image.dockerfile}
+        if not any(p == c or p.startswith(c + "/") for c in copied)
+    }
+    assert outside == set()
+
+
 # --- the CI matrix and workflow ---------------------------------------------------------
 
 
 def test_the_matrix_has_one_row_per_image() -> None:
-    rows = pi.build_matrix()
+    commit = "e" * 40
+    rows = pi.build_matrix(commit=commit)
     assert [r["key"] for r in rows] == list(pi.PLATFORM_IMAGES)
     for row in rows:
         image = pi.PLATFORM_IMAGES[row["key"]]
-        [ref] = set(pi.pinned_refs(image).values())
-        assert row == {
+        common = {
             "key": image.key,
-            "image": f"{image.repository}:{pi.expected_tag(image)}",
             "dockerfile": image.dockerfile,
             "context": image.context,
             "compose": image.compose,
+        }
+        if image.tag_kind == "commit":
+            assert row == {
+                **common,
+                "kind": "commit",
+                "image": f"{image.repository}:{commit}",
+                "pinned_digest": "",
+            }
+            continue
+        [ref] = set(pi.pinned_refs(image).values())
+        assert row == {
+            **common,
+            "kind": "inputs",
+            "image": f"{image.repository}:{pi.expected_tag(image)}",
             "pinned_digest": image.pin_re.match(ref)["digest"],
         }
+
+
+def test_a_matrix_without_a_commit_has_no_commit_image() -> None:
+    """A pull request passes no commit: its merge ref is never a deploy commit."""
+    rows = pi.build_matrix()
+    assert [r["key"] for r in rows] == ["s3"]
+    assert [r["key"] for r in pi.build_matrix(commit="e" * 40)] == ["s3", "alerting"]
+
+
+@pytest.mark.parametrize("commit", ["e" * 39, "v3.2.34", "main", "E" * 39 + "g"])
+def test_a_matrix_commit_that_is_not_a_full_sha_raises(commit: str) -> None:
+    with pytest.raises(ValueError, match="full 40-hex SHA"):
+        pi.build_matrix(commit=commit)
 
 
 def test_two_different_digests_give_no_pinned_digest(
@@ -272,5 +452,31 @@ def test_the_workflow_publishes_the_matrix_rows() -> None:
     )
     assert publish["permissions"] == {"contents": "read", "packages": "write"}
     assert publish["env"]["PINNED_DIGEST"] == "${{ matrix.pinned_digest }}"
+    assert publish["env"]["KIND"] == "${{ matrix.kind }}"
     # PyYAML reads the `on:` key as True.
     assert set(workflow[True]) == {"pull_request", "push", "workflow_dispatch"}
+
+
+def test_the_workflow_gives_each_commit_its_own_concurrency_group() -> None:
+    """GitHub cancels a pending run when a newer run joins its group.
+
+    A group per ref left a main commit without its commit tag when three pushes came
+    close together; the deploy of that commit then had no image.
+    """
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    group = workflow["concurrency"]["group"]
+    assert "github.sha" in group and "inputs.ref" in group
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+
+
+def test_the_workflow_passes_no_commit_on_a_pull_request() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    [step] = [s for s in workflow["jobs"]["matrix"]["steps"] if s.get("id") == "matrix"]
+    run = step["run"]
+    assert 'matrix --commit "$commit"' in run
+    assert 'if [ "$EVENT_NAME" = "pull_request" ]; then commit=""; fi' in run
+    # The publish job builds the same commit that the matrix read.
+    publish = workflow["jobs"]["publish"]
+    [checkout] = [s for s in publish["steps"] if "checkout" in s.get("uses", "")]
+    assert checkout["with"]["ref"] == "${{ needs.matrix.outputs.sha }}"
+    assert publish["env"]["SHA"] == "${{ needs.matrix.outputs.sha }}"

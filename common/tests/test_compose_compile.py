@@ -246,6 +246,14 @@ def test_real_stacks_classify_as_measured() -> None:
             load_stack("bootstrap/06.iac_runner/compose.yaml").compiled
         )
     )
+    # CI publishes the alerting image (#1822): only the vault-agent mounts block raw now.
+    assert [
+        r
+        for r in raw_ineligibility(
+            load_stack("platform/12.alerting/compose.yaml").compiled
+        )
+        if not r.startswith("services.vault-agent mounts ")
+    ] == []
     # CI publishes the S3 image and the template is inline (#1822 step B): raw-eligible.
     s3 = load_stack("platform/03.s3/compose.yaml")
     assert raw_ineligibility(s3.compiled) == []

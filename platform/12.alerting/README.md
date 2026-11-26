@@ -36,6 +36,12 @@ uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-r
 uv run invoke alerting.status
 ```
 
+The image: CI builds `Dockerfile` on each push to `main` and pushes
+`ghcr.io/wangzitian0/infra2-alerting:<full commit SHA>`. The bridge and the probe runner run
+`infra2-alerting:${INFRA_IAC_REF:?}`, the commit that the deploy issues. `deploy_v2` waits for
+that tag and stops when it does not come. If the push run of a commit failed, run
+`gh workflow run platform-images.yml -f ref=<sha>`. Rules: `docs/ssot/ops.pipeline.md` §5.4.
+
 1Password root vars are the long-lived source of truth. During
 `alerting.pre-compose`, the deployer mirrors those fields into
 `secret/platform/{env}/alerting` so the vault-agent can render runtime secrets.

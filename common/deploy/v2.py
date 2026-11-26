@@ -315,6 +315,15 @@ def _deploy_platform(
         service=service, env=type_spec.env, code_version=iac_sha, iac_ref=iac_sha
     )
     validate_deploy_target(target, spec)  # enforces prod_only / env legality
+    # A commit-tagged platform image (common.deploy.platform_images) must exist at the
+    # deploy commit before the runner pulls it. CI pushes it on each push to main.
+    if spec.image_repositories:
+        _wait_for_image_dependencies(
+            spec,
+            iac_sha,
+            timeout=opt.image_wait_seconds,
+            poll_seconds=opt.image_poll_seconds,
+        )
     # RL-DATA-1 applies to platform prod too: a prod deploy must carry an explicit
     # code_reviewed signal (deny-by-default), same as the app path — a prod platform service
     # (e.g. postgres) sits on real prod data.
@@ -589,6 +598,16 @@ def _deploy_platform_batch(
             enforce_data_lane_red_lines(target, code_reviewed=opt.code_reviewed)
         )
         targets.append(target)
+    # Wait for every commit-tagged platform image before the runner deploys any service.
+    for service in services:
+        spec = service_spec(service)
+        if spec.image_repositories:
+            _wait_for_image_dependencies(
+                spec,
+                iac_sha,
+                timeout=opt.image_wait_seconds,
+                poll_seconds=opt.image_poll_seconds,
+            )
 
     env = "production" if type_spec.env == "prod" else "staging"
     url = dep.iac_runner_url or os.getenv("IAC_RUNNER_URL", "")
@@ -1156,6 +1175,8 @@ def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -
             code_reviewed=True if args.code_reviewed else None,
             wait=not args.no_wait,
             timeout=args.timeout,
+            image_wait_seconds=args.image_wait_seconds,
+            image_poll_seconds=args.image_poll_seconds,
         ),
         deps=DeployDeps(
             iac_runner_url=os.getenv("IAC_RUNNER_URL", ""),
