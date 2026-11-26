@@ -64,7 +64,7 @@ services:
     # CI builds platform/12.alerting/Dockerfile and pushes it to GHCR (#1822): a raw compose
     # has no checkout to build. The tag is the hash of the Dockerfile and of each file that it
     # copies (common/deploy/platform_images.py). infra-probe-runner runs the same image.
-    image: ghcr.io/wangzitian0/infra2-alerting:893c6ebf37c3fb409a4d1dc5f9a0989b@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: ghcr.io/wangzitian0/infra2-alerting:893c6ebf37c3fb409a4d1dc5f9a0989b@sha256:3093a581cdca8198274e6713ec9a1b099af0f9724c6864d8bc8a8344d47d0203
     container_name: platform-alerting${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
@@ -152,7 +152,7 @@ services:
   # services below, deleted in the #543 merge) in one low-footprint process.
   # See tools/infra_probe_runner.py + common/observability/watchers/resident.py.
   infra-probe-runner:
-    image: ghcr.io/wangzitian0/infra2-alerting:893c6ebf37c3fb409a4d1dc5f9a0989b@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: ghcr.io/wangzitian0/infra2-alerting:893c6ebf37c3fb409a4d1dc5f9a0989b@sha256:3093a581cdca8198274e6713ec9a1b099af0f9724c6864d8bc8a8344d47d0203
     container_name: platform-alerting-probes${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
