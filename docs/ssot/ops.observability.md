@@ -91,6 +91,16 @@ owner 批准的当前 head SHA，才能满足 `AGENTS.md` 的生产权限边界�
    - 严禁将 97 个容器的全部 stdout 日志未经筛选倾泻至 ClickHouse，防止单机线程池与磁盘 I/O 恶化。
    - 以端到端合成金丝雀（如 `infra_observability_roundtrip_canary` 与 Canary Todo）的物理通畅自证整条链路（API → Redis → Worker → DB/ClickHouse），跑通即通过。
 
+4. **L0–L4 跨仓库看板与遥测分层契约 (Dashboard & Telemetry Boundary)**:
+   > CI 与基础设施看板归属于 `infra2`；运行时业务与数据质量真相归属于业务应用自身（`truealpha` Q02 决议）。
+
+   | Layer | Plane & Owner | Canonical Surface | Scope (Owns) | Explicit Non-Scope (Does Not Own) |
+   |-------|---------------|-------------------|--------------|-----------------------------------|
+   | **L0–L1** | CI & Delivery (`infra2`) | `infra2` Watchdog / `StageRecord` / GitHub Actions | CI step results, image digest/release train state, Cloudflare edge heartbeat, VPS availability ledger | TrueAlpha factor/backtest/datahub metrics, UI card checks |
+   | **L2** | Infra & APM Telemetry (`infra2`) | SigNoz (`platform/11.signoz`) + OTLP Collector | Container CPU/memory, HTTP/DB span latency, structured OTLP logs, `alert_rules.json` thresholds | Analytical business correctness, Postgres `mart` facts |
+   | **L3** | App Runtime Ops & Settings (`truealpha`) | `/admin`, `/admin/datahub`, `/admin/settings` + admin MCP (`MCP_BEARER_TOKEN`) | Live Ops queues (`ops.*`: triggers, rollbacks, nightly verdicts), manual `<BacktestTriggerButton />`, DataHub coverage/confidence/`critical (fact)` invariants, read-only `environment_contract` settings | Container-host CPU/memory metrics, CI workflow status, R&D construction progress matrices |
+   | **L4** | Quantitative Research (`truealpha`) | `/research/rankings`, `/research/backtest`, `/research/entities/*` + readonly MCP (`MCP_READONLY_TOKEN`) | Published `mart.served_head` rankings, backtest curves, company/ETF/supply-chain research | Operational trigger controls, un-evaluated `not_evaluated` noise, raw/staging rows |
+
 ---
 
 ## 2. 信号模型与时间尺度分层 (Signal model & cadence tiers)
