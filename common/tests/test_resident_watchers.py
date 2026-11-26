@@ -25,6 +25,13 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
 
 
+def _deployed_compose() -> dict:
+    """The compiled stack that the deploy uploads (x-infra2, #1822 step B)."""
+    from common.deploy.compose_compile import load_stack
+
+    return yaml.safe_load(load_stack(COMPOSE).compiled)
+
+
 @pytest.fixture(autouse=True)
 def _production_probe_environment(monkeypatch):
     """The runner has no default environment (#1208). The runner-loop tests choose one."""
@@ -307,7 +314,7 @@ def test_compose_has_single_resident_sidecar_with_watcher_env() -> None:
     """#543 operator decision locked in compose: the two watcher services are
     gone; the probe-runner service carries their env triads (continuity), the
     read-only docker socket, and the resource budget (ops.standards §5.2)."""
-    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    compose = _deployed_compose()
     services = compose["services"]
 
     assert "container-breakdown-watch" not in services
@@ -394,7 +401,7 @@ def test_probe_runner_state_files_live_on_a_persistent_volume() -> None:
     runner with empty `paged` / `failing_since` state. Every state file of the
     probes service must resolve under a writable, non-tmpfs mount of that same
     service, and the healthcheck must watch the same file the loop touches."""
-    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    compose = _deployed_compose()
     runner = compose["services"]["infra-probe-runner"]
     env = runner["environment"]
 

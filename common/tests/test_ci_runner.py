@@ -141,9 +141,9 @@ def test_ci_runner_compose_gate_validates_compiled_x_infra2_text(monkeypatch) ->
         for rel in by_rel
         if not has_x_infra2((ROOT / rel).read_text(encoding="utf-8"))
     ]
-    # 13 plain files on 2026-11-26 (measured), after platform/10.authentik moved to
+    # 12 plain files on 2026-11-26 (measured), after platform/12.alerting moved to
     # x-infra2 (#1822). The gate also validates the preview and template files.
-    assert len(plain) >= 13
+    assert len(plain) >= 12
     for rel in plain:
         assert by_rel[rel][0] == ["docker", "compose", "-f", rel, "config"], rel
 

@@ -3,10 +3,12 @@
 The locked infra2-sdk reads only ENVIRONMENT; infra2#1823 N1 retired the aliases ENV and
 APP_ENV. The SDK Vault template reads `env "ENVIRONMENT"`. A container that has only ENV
 gets no environment tier, and a vault-agent renders `secret/data/<project>//<service>`.
-This guard fails when a hand-written compose service sets ENV without ENVIRONMENT.
+This guard fails when a deployed compose service sets ENV without ENVIRONMENT.
 
-Scope: every plain compose file under the deploy roots. A compiled x-infra2 stack gets
-its vault-agent from the infra2-sdk compiler, so the SDK tests govern that sidecar.
+Scope: the deployed text of every compose file under the deploy roots: a plain file, or
+the compiled text of an x-infra2 source. The compiler writes the vault-agent sidecar,
+but the source writes the other services (for example the alerting probe runner, which
+gates its watchers on ENV), so the guard reads them after the compile.
 """
 
 from __future__ import annotations
@@ -16,21 +18,24 @@ from pathlib import Path
 import pytest
 import yaml
 
-from common.deploy.compose_compile import has_x_infra2
+from common.deploy.compose_compile import has_x_infra2, load_stack
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_ROOTS = ("bootstrap", "platform", "finance_report", "truealpha")
 
 
-def _plain_compose_files() -> list[Path]:
+def _compose_files() -> list[Path]:
     found = []
     for top in COMPOSE_ROOTS:
         for path in sorted((ROOT / top).rglob("*compose*.yaml")):
             if "tests" in path.relative_to(ROOT).parts:
                 continue
-            if not has_x_infra2(path.read_text(encoding="utf-8")):
-                found.append(path)
+            found.append(path)
     return found
+
+
+def _deployed_text(path: Path) -> str:
+    return load_stack(path).compiled
 
 
 def _environment(spec: dict) -> dict[str, str]:
@@ -54,22 +59,27 @@ def env_without_environment(text: str) -> list[str]:
 
 
 def test_scope_is_not_empty() -> None:
-    files = _plain_compose_files()
-    # 14 plain files on 2026-11-26 (measured), after platform/10.authentik moved to
-    # x-infra2 (#1822 step B).
-    assert len(files) >= 14, [str(p.relative_to(ROOT)) for p in files]
-    with_env = [p for p in files if "ENV: ${ENV" in p.read_text(encoding="utf-8")]
+    files = _compose_files()
+    # Measured 2026-11-26, after platform/12.alerting moved to x-infra2 (#1822 step B):
+    # 26 files, 13 of them x-infra2 sources.
+    assert len(files) >= 26, [str(p.relative_to(ROOT)) for p in files]
+    x_infra2 = [p for p in files if has_x_infra2(p.read_text(encoding="utf-8"))]
+    assert len(x_infra2) >= 13, [str(p.relative_to(ROOT)) for p in x_infra2]
+    with_env = [p for p in files if "ENV: ${ENV" in _deployed_text(p)]
     # The platform sidecars set ENVIRONMENT only, as the compiled sidecar does (#1822
-    # step A), so fewer files set ENV. 5 files still set it (measured 2026-11-26, after
-    # platform/10.authentik moved to x-infra2).
-    assert len(with_env) >= 5, [str(p.relative_to(ROOT)) for p in with_env]
+    # step A), so fewer files set ENV. 6 deployed files still set it, 2 of them compiled
+    # (platform/10.authentik and platform/12.alerting).
+    assert len(with_env) >= 6, [str(p.relative_to(ROOT)) for p in with_env]
+    assert {"platform/10.authentik", "platform/12.alerting"} <= {
+        p.parent.relative_to(ROOT).as_posix() for p in with_env if p in x_infra2
+    }
 
 
 @pytest.mark.parametrize(
-    "path", _plain_compose_files(), ids=lambda p: str(p.relative_to(ROOT))
+    "path", _compose_files(), ids=lambda p: str(p.relative_to(ROOT))
 )
 def test_every_env_service_sets_environment(path: Path) -> None:
-    assert env_without_environment(path.read_text(encoding="utf-8")) == []
+    assert env_without_environment(_deployed_text(path)) == []
 
 
 def test_guard_rejects_env_only_service() -> None:
