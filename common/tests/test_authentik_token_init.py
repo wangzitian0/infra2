@@ -96,7 +96,9 @@ exit 0
 """
 
 
-def _run(tmp_path: Path, env: dict[str, str]) -> tuple[subprocess.CompletedProcess, str]:
+def _run(
+    tmp_path: Path, env: dict[str, str]
+) -> tuple[subprocess.CompletedProcess, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "python"
