@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import stat
 import subprocess
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import pytest
 import yaml
 
 from common.deploy.compose_compile import load_stack, raw_ineligibility
@@ -55,8 +60,9 @@ def test_token_init_mounts_nothing_from_the_checkout() -> None:
 def test_every_shell_dollar_is_escaped_for_compose() -> None:
     # A single `$` is a Compose interpolation: `$ENV` would become the host value.
     script = _source_script()
-    # 16 escaped `$` on 2026-11-26 (measured).
-    assert script.count("$$") >= 16
+    # 14 escaped `$` on 2026-11-26 (measured), after the failure path stopped
+    # printing the token.
+    assert script.count("$$") >= 14
     unescaped = re.sub(r"\$\$", "", script)
     assert unescaped.count(SUFFIX_REF) == 1
     assert "$" not in unescaped.replace(SUFFIX_REF, "")
@@ -138,3 +144,95 @@ def test_the_script_uses_production_when_env_is_unset(tmp_path: Path) -> None:
     result, vault_write = _run(tmp_path, {})
     assert result.returncode == 0, result.stderr
     assert "/v1/secret/data/platform/production/authentik" in vault_write
+
+
+# --- the Vault write fails: the token never reaches the container log -------------------
+
+ROOT_TOKEN = "ak-root-SECRET-" + "q" * 40
+
+# `python -m manage shell` prints the token; the first `python -` (readiness wait) exits
+# 0; the second `python -` (the Vault write) runs in the real interpreter.
+REAL_VAULT_PYTHON = """#!/bin/sh
+if [ "$1" = "-m" ]; then
+  cat > /dev/null
+  printf '%s' "$ROOT_TOKEN"
+  exit 0
+fi
+if [ ! -e "$CAPTURE/ready" ]; then
+  cat > /dev/null
+  : > "$CAPTURE/ready"
+  exit 0
+fi
+exec "$REAL_PYTHON" "$@"
+"""
+
+
+class _EchoHandler(BaseHTTPRequestHandler):
+    """A Vault that refuses the write and echoes the request body (with the token)."""
+
+    status = 403
+
+    def do_PATCH(self) -> None:  # noqa: N802 - http.server API
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        self.send_response(self.status)
+        self.end_headers()
+        self.wfile.write(b'{"errors":["permission denied"],"echo":' + body + b"}")
+
+    def log_message(self, *_args) -> None:
+        return None
+
+
+def _closed_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _run_failed_write(tmp_path: Path, vault_addr: str) -> subprocess.CompletedProcess:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "python"
+    fake.write_text(REAL_VAULT_PYTHON, encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    return subprocess.run(
+        ["sh", "-c", _container_script()],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "CAPTURE": str(capture),
+            "REAL_PYTHON": sys.executable,
+            "ROOT_TOKEN": ROOT_TOKEN,
+            "VAULT_INIT_TOKEN": "vault-tok",
+            "VAULT_INIT_ADDR": vault_addr,
+            "ENV": "staging",
+        },
+    )
+
+
+@pytest.mark.parametrize("status", [403, 500])
+def test_a_refused_vault_write_never_prints_the_token(tmp_path: Path, status) -> None:
+    handler = type("Handler", (_EchoHandler,), {"status": status})
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = _run_failed_write(tmp_path, f"http://127.0.0.1:{server.server_port}")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert result.returncode == 1
+    output = result.stdout + result.stderr
+    assert ROOT_TOKEN not in output and "permission denied" not in output
+    assert f"CRITICAL: Failed to store token to Vault (HTTP {status})" in result.stderr
+    assert "Token was generated but not persisted" in result.stderr
+
+
+def test_an_unreachable_vault_never_prints_the_token(tmp_path: Path) -> None:
+    result = _run_failed_write(tmp_path, f"http://127.0.0.1:{_closed_port()}")
+    assert result.returncode == 1
+    assert ROOT_TOKEN not in result.stdout + result.stderr
+    assert "CRITICAL: Failed to store token to Vault (URLError)" in result.stderr

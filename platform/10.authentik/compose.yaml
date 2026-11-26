@@ -312,8 +312,9 @@ services:
           VAULT_URL="$${VAULT_INIT_ADDR:-https://vault.zitian.party}"
           ENV_NAME="$${ENV:-production}"
 
-          # Use Python urllib to call Vault HTTP API (curl not available in container)
-          "$$PYTHON_BIN" - << PYTHON
+          # Use Python urllib to call Vault HTTP API (curl not available in container).
+          # `if` keeps `set -e` from exiting before the fixed failure message.
+          if "$$PYTHON_BIN" - << PYTHON
         import os
         import sys
         import json
@@ -334,28 +335,26 @@ services:
             method="PATCH"
         )
 
+        # The container log keeps stdout and stderr: print a fixed message and the HTTP
+        # status only, never the token, the response body or the exception text.
         try:
             with urllib.request.urlopen(req) as response:
                 status = response.status
-                if status not in (200, 204):
-                    print(f"❌ CRITICAL: Failed to store token to Vault (HTTP {status})", file=sys.stderr)
-                    print(response.read().decode('utf-8'), file=sys.stderr)
-                    sys.exit(1)
         except urllib.error.HTTPError as e:
-            print(f"❌ CRITICAL: Failed to store token to Vault (HTTP {e.code})", file=sys.stderr)
-            print(e.read().decode('utf-8'), file=sys.stderr)
-            sys.exit(1)
+            status = e.code
         except Exception as e:
-            print(f"❌ CRITICAL: Failed to store token to Vault: {e}", file=sys.stderr)
+            print(f"CRITICAL: Failed to store token to Vault ({type(e).__name__})", file=sys.stderr)
+            sys.exit(1)
+        if status not in (200, 204):
+            print(f"CRITICAL: Failed to store token to Vault (HTTP {status})", file=sys.stderr)
             sys.exit(1)
         PYTHON
-
-          if [ $$? -ne 0 ]; then
-            echo "Token was generated but not persisted:" >&2
-            echo "  $${TOKEN}" >&2
+          then
+            echo "Root token stored to Vault successfully"
+          else
+            echo "Token was generated but not persisted; run create-root-token --force" >&2
             exit 1
           fi
-          echo "Root token stored to Vault successfully"
         fi
 
         echo "Root token initialization complete"
