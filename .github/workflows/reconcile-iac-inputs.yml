@@ -526,7 +526,8 @@ jobs:
     needs: [pre, operation, post]
     # Reads the results and records of the three jobs. It holds only the delivery secrets of
     # the alert, so a refusal in `pre` (which holds no secret) still reaches the owner.
-    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    # Successful schedule/sync-only runs skip alert; failed sync runs still report here.
+    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && ((github.event_name != 'schedule' && !inputs.sync_app_releases) || needs.operation.result == 'failure') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

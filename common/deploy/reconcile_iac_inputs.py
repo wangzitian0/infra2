@@ -1484,13 +1484,17 @@ def sync_sdk_pins(
     needs_canary_bump = bool(
         target_sdk and version_key(f"v{target_sdk}") > version_key(f"v{current_sdk}")
     )
-    verified = (
-        set(verified_versions)
-        if verified_versions is not None
-        else verified_sdk_versions(
-            repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
+    if verified_versions is not None:
+        verified = set(verified_versions)
+    elif needs_canary_bump or not target_sdk:
+        # Target SDK is newer than the Canary pin (cannot be verified yet) or unknown;
+        # skip the 30-day artifact scan and fail closed.
+        verified = set()
+    else:
+        verified = verified_sdk_versions(
+            repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2"),
+            wanted={target_sdk},
         )
-    )
     canary_verified = bool(target_sdk and target_sdk in verified)
     held_apps = [] if canary_verified else sorted(APP_SOURCES.keys())
     eligible_apps = sorted(APP_SOURCES.keys()) if canary_verified else []
