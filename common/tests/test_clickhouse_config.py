@@ -57,26 +57,8 @@ def test_platform_clickhouse_users_async_insert() -> None:
     assert log_threads is not None and log_threads.text == "0"
 
 
-def test_openpanel_clickhouse_bounds() -> None:
-    config_path = ROOT / "platform/24.openpanel/clickhouse/clickhouse-config.xml"
-    assert config_path.exists()
-    cfg_root = ET.fromstring(config_path.read_text(encoding="utf-8"))
-
-    pool_elem = cfg_root.find("background_schedule_pool_size")
-    assert pool_elem is not None
-    assert int(pool_elem.text) <= 64
-
-    user_path = ROOT / "platform/24.openpanel/clickhouse/clickhouse-user-config.xml"
-    assert user_path.exists()
-    usr_root = ET.fromstring(user_path.read_text(encoding="utf-8"))
-
-    profile = usr_root.find("profiles/default")
-    assert profile is not None
-
-    async_insert = profile.find("async_insert")
-    wait_insert = profile.find("wait_for_async_insert")
-    assert async_insert is not None and async_insert.text == "1"
-    assert wait_insert is not None and wait_insert.text == "1"
+# The op-ch ClickHouse bounds are in test_openpanel_clickhouse_files.py: the files
+# are inline in the OpenPanel compose (#1822).
 
 
 def test_authentik_resource_and_healthcheck_limits() -> None:

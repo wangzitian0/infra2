@@ -87,9 +87,92 @@ services:
     container_name: platform-openpanel-ch${ENV_SUFFIX}
     restart: unless-stopped
     # cgroup hard cap on the shared, swapless 8-core host. Sits ABOVE ClickHouse's
-    # own max_server_memory_usage (2 GiB, in clickhouse-config.xml) so CH rejects an
+    # own max_server_memory_usage (2 GiB, in op-config.xml below) so CH rejects an
     # oversized query/merge before the kernel OOM-kills the container (or a neighbor).
     mem_limit: 2560m
+    # The three ClickHouse files are inline: a raw Dokploy stack has no checkout to
+    # bind-mount from (#1822). The wrapper writes each file, then runs the image
+    # entrypoint with no arguments, as the image default does. The image entrypoint
+    # runs init-db.sh only when the data dir has no `data` sub-directory, so an
+    # existing op-ch never runs it again. The text has no `$`, so Compose changes nothing.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /etc/clickhouse-server/config.d /etc/clickhouse-server/users.d /docker-entrypoint-initdb.d
+        cat > /etc/clickhouse-server/config.d/op-config.xml <<'XML'
+        <clickhouse>
+            <logger>
+                <level>warning</level>
+                <console>true</console>
+            </logger>
+            <keep_alive_timeout>10</keep_alive_timeout>
+            <!-- Stop all the unnecessary logging -->
+            <query_thread_log remove="remove"/>
+            <query_log remove="remove"/>
+            <text_log remove="remove"/>
+            <trace_log remove="remove"/>
+            <metric_log remove="remove"/>
+            <asynchronous_metric_log remove="remove"/>
+            <session_log remove="remove"/>
+            <part_log remove="remove"/>
+            <listen_host>0.0.0.0</listen_host>
+            <interserver_listen_host>0.0.0.0</interserver_listen_host>
+            <interserver_http_host>op-ch</interserver_http_host>
+            <!-- Single-node; kept for upstream parity -->
+            <macros>
+                <shard>1</shard>
+                <replica>replica1</replica>
+                <cluster>openpanel_cluster</cluster>
+            </macros>
+            <!-- NOTE: do NOT cap background_pool_size here. ClickHouse rejects startup
+                 (Code 36) when number_of_free_entries_in_pool_to_execute_mutation (20)
+                 exceeds background_pool_size * background_merges_mutations_concurrency_ratio.
+                 The per-query max_threads cap (users.d/op-user-config.xml) is the safe
+                 CPU lever; background-merge tuning needs the free-entries setting lowered
+                 in tandem and is intentionally left at default. -->
+
+            <!-- Bound lightweight background thread pool size (default 512 is excessive for single-node) -->
+            <background_schedule_pool_size>32</background_schedule_pool_size>
+
+            <!-- Hard server-wide memory cap (absolute bytes). Without this, ClickHouse
+                 defaults max_server_memory_usage to ~90% of TOTAL host RAM — i.e. op-ch
+                 believes it owns almost the whole shared 8-core box. With no swap (by
+                 choice), a single heavy merge/query then trips the kernel OOM killer,
+                 which can kill an unrelated container (Dokploy, prod). Cap op-ch's own
+                 accounting at 2 GiB so it rejects/spills oversized work instead of
+                 growing into the host. The compose mem_limit (2.5g) is the cgroup
+                 backstop above this; keep mem_limit > this value so CH fails its own
+                 query before the kernel OOM-kills the container. -->
+            <max_server_memory_usage>2147483648</max_server_memory_usage>
+        </clickhouse>
+        XML
+        cat > /etc/clickhouse-server/users.d/op-user-config.xml <<'XML'
+        <clickhouse>
+            <profiles>
+                <default>
+                    <log_queries>0</log_queries>
+                    <log_query_threads>0</log_query_threads>
+                    <!-- Rightsize: cap per-query parallelism (default auto = 8 = all
+                         cores) on the shared host. Validated on 25.10.2.65. -->
+                    <max_threads>2</max_threads>
+                    <!-- Batch inserts on the server side to eliminate tiny parts and merge amplification -->
+                    <async_insert>1</async_insert>
+                    <wait_for_async_insert>1</wait_for_async_insert>
+                </default>
+            </profiles>
+        </clickhouse>
+        XML
+        cat > /docker-entrypoint-initdb.d/init-db.sh <<'SH'
+        #!/bin/bash
+        set -e
+        clickhouse client -n <<-EOSQL
+            CREATE DATABASE IF NOT EXISTS openpanel;
+        EOSQL
+        SH
+        chmod 755 /docker-entrypoint-initdb.d/init-db.sh
+        exec /entrypoint.sh
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: "1"
     volumes:
@@ -97,9 +180,6 @@ services:
       # A Dokploy-managed named volume is recreated with a new hash on redeploy and
       # silently wipes the event schema; the bind mount survives redeploys.
       - ${DATA_PATH}/op-ch:/var/lib/clickhouse
-      - ./clickhouse/clickhouse-config.xml:/etc/clickhouse-server/config.d/op-config.xml:ro
-      - ./clickhouse/clickhouse-user-config.xml:/etc/clickhouse-server/users.d/op-user-config.xml:ro
-      - ./clickhouse/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     networks:
       - dokploy-network
     healthcheck:
