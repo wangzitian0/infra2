@@ -14,7 +14,7 @@
 | **Authentik 部署** | [`platform/10.authentik/compose.yaml`](../../platform/10.authentik/compose.yaml) | SSO 服务定义 |
 | **部署任务** | [`platform/10.authentik/deploy.py`](../../platform/10.authentik/deploy.py) | pre-compose / composing / post-compose |
 | **共享任务** | [`platform/10.authentik/shared_tasks.py`](../../platform/10.authentik/shared_tasks.py) | SSO 应用自动化 |
-| **Token 初始化** | [`platform/10.authentik/init-token.sh`](../../platform/10.authentik/init-token.sh) | Root Token 创建 |
+| **Token 初始化** | [`platform/10.authentik/compose.yaml`](../../platform/10.authentik/compose.yaml) `token-init` 的 `command` | Root Token 创建（脚本内联，无 checkout 挂载，#1822） |
 
 ---
 
@@ -229,7 +229,7 @@ curl -I https://home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 | 问题 | 可能原因 | 解决方案 |
 |------|---------|---------|
 | "Token not found in Vault" | Root Token 未创建 | `invoke authentik.shared.create-root-token` |
-| 401 Unauthorized on API | Token 过期或无效 | 在 Authentik 删除 `root-automation` token，再运行 `invoke authentik.shared.create-root-token --force`（`init-token.sh` 重用已存在的 token） |
+| 401 Unauthorized on API | Token 过期或无效 | 在 Authentik 删除 `root-automation` token，再运行 `invoke authentik.shared.create-root-token --force`（token-init 脚本重用已存在的 token） |
 | 403 Forbidden after login | 用户不在允许的组 | 将用户加入组或检查策略配置 |
 | Forward Auth 不生效 | Traefik 配置错误 | 检查 compose labels 和 Traefik logs |
 | 重定向循环 | 域名配置不匹配 | 检查 external_host 与实际域名 |

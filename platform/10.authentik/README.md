@@ -14,7 +14,7 @@ Identity Provider for Single Sign-On across platform services using vault-init p
 
 | File | Purpose |
 |------|---------|
-| `compose.yaml` | Docker Compose (vault-agent + server + worker) |
+| `compose.yaml` | Docker Compose (vault-agent + server + worker + token-init with its inline script) |
 | `deploy.py` | AuthentikDeployer with custom pre-compose |
 | `shared_tasks.py` | Health check status() |
 | `vault-agent.hcl` | Vault agent configuration |
@@ -100,7 +100,7 @@ Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables
   - No exposed ports
   - Health: `ak healthcheck`
 - **token-init**: One-time root token creation (`platform-authentik-token-init${ENV_SUFFIX}`)
-  - Runs `init-token.sh` via `/bin/sh` and waits for `platform-authentik-server` `/-/health/live/`
+  - Runs its inline `command` script via `/bin/sh` (no checkout mount, #1822) and waits for `platform-authentik-server` `/-/health/live/`
   - Stores `root_token` in Vault when `VAULT_INIT_TOKEN` is provided
 
 ## Initial Setup
