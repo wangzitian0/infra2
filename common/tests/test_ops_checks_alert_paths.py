@@ -30,6 +30,8 @@ def test_the_weekly_digest_pages_when_it_fails() -> None:
         alert["if"].startswith("failure()")
         and "INFRA2_STABILITY_REPORT_DRY_RUN" in alert["if"]
     )
+    assert "promotion-reminder" not in alert["if"]
+    assert "0 13 * * *" not in alert["if"]
     assert "deliver_out_of_band_alert" in alert["run"]
     assert (
         digest["env"]["INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID"]
@@ -63,8 +65,8 @@ def test_watchdog_daily_positive_stability_report_has_no_ssh_key_if_guard() -> N
     )
 
 
-def test_the_daily_report_runs_after_a_failed_watchdog_with_its_outcome() -> None:
-    """#1433: a paged day still gets its report, marked red from the watchdog outcome."""
+def test_the_daily_report_runs_only_after_a_successful_watchdog() -> None:
+    """Daily positive stability report runs only when watchdog and prior steps succeed."""
     steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["watchdog"][
         "steps"
     ]
@@ -74,11 +76,44 @@ def test_the_daily_report_runs_after_a_failed_watchdog_with_its_outcome() -> Non
     watchdog = steps[names.index("Run watchdog")]
     report = steps[names.index(report_name)]
     assert watchdog["id"] == "watchdog"
-    assert report["if"] == "${{ !cancelled() }}"
+    assert report["if"] == "${{ success() }}"
     assert (
         report["env"]["INFRA2_WATCHDOG_OUTCOME"]
         == "${{ steps." + watchdog["id"] + ".outcome }}"
     )
+
+
+def test_ops_checks_hook_duration_report_wires_page_dedup_alert_and_resolve() -> None:
+    """hook-duration-report opens/closes a dedup GitHub Issue on failure/recovery without Feishu secrets."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    job = jobs["hook-duration-report"]
+    assert job["permissions"] == {
+        "contents": "read",
+        "actions": "read",
+        "issues": "write",
+    }
+    assert "secrets." not in yaml.safe_dump(job)
+    steps = _steps(job)
+    names = [step.get("name") for step in job["steps"]]
+    alert = steps["Alert on failure"]
+    resolve = steps["Resolve alert on recovery"]
+    assert (
+        names.index("Report hook durations")
+        < names.index("Alert on failure")
+        < names.index("Resolve alert on recovery")
+    )
+    assert (
+        alert["if"]
+        == "failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)"
+    )
+    assert (
+        resolve["if"]
+        == "success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)"
+    )
+    assert 'job="ops-checks.hook-duration-report"' in alert["run"]
+    assert "dedup_page(" in alert["run"]
+    assert 'job="ops-checks.hook-duration-report"' in resolve["run"]
+    assert "resolve_page_state(" in resolve["run"]
 
 
 def test_ops_checks_audit_job_runs_on_ubuntu_24_04_for_playwright() -> None:

@@ -59,14 +59,6 @@ gates:
     job: validate-vault-agent
     blocks_merge: true
     failure_semantics: vault-agent.hcl is missing required settings.
-  - id: infra_ci.vault_policy
-    stage: github_ci.merge_authority
-    task_category: vault_policy
-    workflow: .github/workflows/infra-ci.yml
-    job: validate-vault-policy
-    # Advisory job in infra-ci.yml; not listed in GitHub branch protection required checks.
-    blocks_merge: false
-    failure_semantics: vault-policy.hcl syntax is invalid (advisory only; does not block merge).
   - id: infra_ci.deployer_classes
     stage: github_ci.merge_authority
     task_category: deployer_contract

@@ -973,20 +973,18 @@ def test_audit_flags_self_contradicting_gate(monkeypatch) -> None:
         "_blocking_gates",
         lambda: [
             {
-                "id": "infra_ci.vault_policy",
+                "id": "infra_ci.lint_python",
                 "workflow": "wf.yml",
-                "job": "validate-vault-policy",
+                "job": "lint-python",
             }
         ],
     )
-    monkeypatch.setattr(
-        cgra, "_job_display_name", lambda *_a: "Validate Vault Policy Syntax"
-    )
+    monkeypatch.setattr(cgra, "_job_display_name", lambda *_a: "Lint Python Code")
     monkeypatch.setattr(cgra, "_defanged", lambda *_a: ["Run ruff check"])
     monkeypatch.setattr(
         cgra,
         "_live_required_contexts",
-        lambda *_a, **_kw: ({"Validate Vault Policy Syntax"}, {1}),
+        lambda *_a, **_kw: ({"Lint Python Code"}, {1}),
     )
 
     monkeypatch.setattr(cgra, "_ruleset_posture", lambda *_a, **_kw: _HEALTHY_POSTURE)
@@ -996,7 +994,7 @@ def test_audit_flags_self_contradicting_gate(monkeypatch) -> None:
     # reader who has to open the workflow to find out is one step
     # further from fixing it.
     assert result["self_contradicting_gates"] == [
-        "infra_ci.vault_policy (Run ruff check)"
+        "infra_ci.lint_python (Run ruff check)"
     ]
 
 
@@ -1575,3 +1573,20 @@ def test_text_inside_a_block_scalar_is_not_a_declaration() -> None:
         _wf(BLOCK_SCALAR_LOOKALIKE), "gate", BLOCK_SCALAR_LOOKALIKE
     )
     assert found == ["Run something risky"], found
+
+
+def test_production_lock_holding_workflows_declare_bounded_timeouts() -> None:
+    """Every job in deploy.yml and apply-observability.yml sets timeout-minutes <= 60."""
+    expected_jobs = {
+        ".github/workflows/deploy.yml": {"deploy", "bootstrap"},
+        ".github/workflows/apply-observability.yml": {"apply"},
+    }
+    for rel, required in expected_jobs.items():
+        doc = yaml.safe_load((ROOT / rel).read_text(encoding="utf-8"))
+        jobs = doc["jobs"]
+        assert required <= set(jobs), f"{rel} missing expected jobs {required}"
+        for job_id, job in jobs.items():
+            timeout = job.get("timeout-minutes")
+            assert isinstance(timeout, int) and 1 <= timeout <= 60, (
+                f"{rel}:{job_id} timeout-minutes={timeout!r} must be in [1, 60]"
+            )
