@@ -14,7 +14,7 @@ services:
     # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
     # is the one reader of this line.
     # Staging soak trigger: prove the locked Canary image before app rollout.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.12.0@sha256:dd1073541088128873d46030eb280335e1b0423c4e5207278af3b762946bd8a4
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.0@sha256:ec62302213a62f521266089bfb6044a339fb03c6fd4958933c33d768899a63f1
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
     cpu_shares: 512
