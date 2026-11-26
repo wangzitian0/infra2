@@ -928,7 +928,7 @@ def verify_canary(
         f'for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do set -- $gen_ai_metrics_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 5; gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}); done ;; esac && '
         f'printf "%s\\n" "$gen_ai_metrics_out" && '
         f'echo "=== WORKER ===" && '
-        f'{{ worker_out=$(docker exec {container} sh -c \'if [ -f /app/worker.py ]; then python3 /app/worker.py --once --health-url http://127.0.0.1:8000/readyz --service-name platform-todo-worker; else printf "{{\\"status\\":\\"unsupported\\"}}\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$worker_out" $?; }} && '
+        f'{{ worker_out=$(docker exec {container} sh -c \'if [ -f /app/worker.py ]; then python3 /app/worker.py --once --health-url http://127.0.0.1:8000/readyz; else printf "{{\\"status\\":\\"unsupported\\"}}\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$worker_out" $?; }} && '
         f'echo "=== SCHEMA_CHECK ===" && '
         f'{{ schema_out=$(docker exec {container} sh -c \'if [ -f /app/canary_schema.py ]; then [ -f /secrets/.env ] && {{ set -a; . /secrets/.env; set +a; }}; if python3 -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)" infra2_sdk.storage >/dev/null 2>&1; then PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}/app" python3 -m infra2_sdk.storage check-schema --metadata canary_schema:METADATA --db-url "$DATABASE_URL" --label platform/todo; else python3 -m infra2_sdk.runtime.schema_check --app-path /app --metadata canary_schema:METADATA --db-url "$DATABASE_URL" --label platform/todo; fi; else printf "UNSUPPORTED\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$schema_out" $?; }}'
     )

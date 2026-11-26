@@ -1639,6 +1639,11 @@ def test_app_peer_remote_script_uses_readyz_and_passes_valid_shell_syntax() -> N
     assert len(captured) == 1
     script = captured[0]
     assert "http://127.0.0.1:8000/readyz" in script
+    assert (
+        "python3 /app/worker.py --once --health-url http://127.0.0.1:8000/readyz"
+        in script
+    )
+    assert "--service-name" not in script
     assert "--app-path /app" in script
     assert "--metadata canary_schema:METADATA" in script
     assert '--db-url "$DATABASE_URL"' in script
