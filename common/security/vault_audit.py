@@ -70,13 +70,8 @@ class VaultService:
     # (${ENV_SUFFIX} placeholders, resolved per audit env) -- declared on the
     # owning service's SecretsFacet, formerly the MOUNT_EXEMPT_CONTAINERS const.
     mount_exempt_containers: tuple[str, ...] = ()
-    # (#526/#542) optional vault:true fields reported (never failed) on
-    # populated-ness -- formerly the OPTIONAL_INERT_FIELD_WATCHLIST const.
-    optional_inert_fields: tuple[str, ...] = ()
     # A preview alias stack (common.security.registry marks it preview).
     ephemeral: bool = False
-    # Legacy compose names for backward-compatibility fallback during migration (#954, #958)
-    legacy_dokploy_services: tuple[str, ...] = ()
 
     @property
     def auth_env_keys(self) -> tuple[str, ...]:
@@ -155,7 +150,6 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
         id=facet.service_id or meta.service_id,
         project=meta.project,
         dokploy_service=meta.service,
-        legacy_dokploy_services=getattr(meta, "legacy_compose_names", ()),
         compose_path=compose_path,
         vault_agent_config_path=agent_config,
         secret_template_path=template,
@@ -170,7 +164,6 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
         min_token_ttl_hours=facet.min_token_ttl_hours,
         auth_method=facet.auth_method,
         mount_exempt_containers=tuple(facet.mount_exempt_containers),
-        optional_inert_fields=tuple(facet.optional_inert_fields),
         ephemeral=_is_preview_stack(compose_dir),
     )
 
@@ -354,15 +347,7 @@ def classify_deployed_template(
     the container differs from main (form or hash), the check compares the
     container with ``served_ref``. It fails when the container matches neither.
     """
-    import sys
-
-    mod = sys.modules.get("common.security.vault_self_refresh_audit")
-    release_sha_fn = (
-        getattr(mod, "_release_template_sha256", _release_template_sha256)
-        if mod
-        else _release_template_sha256
-    )
-    release_sha256 = release_sha_fn(service)
+    release_sha256 = _release_template_sha256(service)
     # An x-infra2 stack ships the template inside its compiled compose (infra2#1822).
     release_compiled = _compose_is_x_infra2(service)
     release_form = "compiled" if release_compiled else "hand-written"
@@ -569,32 +554,6 @@ def classify_rendered_env(
     )
 
 
-def classify_optional_field_inertness(
-    service: VaultService,
-    field_name: str,
-    rendered_env_text: str | None,
-) -> CheckResult:
-    populated = bool(parse_env(rendered_env_text or "").get(field_name))
-    if populated:
-        return _result(
-            service,
-            f"optional-field-inertness::{field_name}",
-            "info",
-            "P3",
-            f"{field_name} is populated (dependent feature active)",
-            {"field": field_name, "populated": True},
-        )
-    return _result(
-        service,
-        f"optional-field-inertness::{field_name}",
-        "info",
-        "P3",
-        f"{field_name} is unset/empty in the rendered secrets file "
-        "(dependent feature is inert)",
-        {"field": field_name, "populated": False},
-    )
-
-
 def classify_vault_agent_logs(service: VaultService, logs: str) -> CheckResult:
     lower_logs = logs.lower()
     matches = [
@@ -754,12 +713,6 @@ def audit_from_observations(
                 served_ref,
             )
         )
-        for field_name in service.optional_inert_fields:
-            results.append(
-                classify_optional_field_inertness(
-                    service, field_name, str(obs.get("rendered_env_text", ""))
-                )
-            )
         results.append(
             classify_vault_agent_logs(service, str(obs.get("vault_agent_logs", "")))
         )

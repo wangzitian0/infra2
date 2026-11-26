@@ -124,7 +124,7 @@ def test_the_registry_table_is_readable_without_the_sdk() -> None:
         "for name in ('infra2_sdk', 'infra2_sdk.runtime', 'infra2_sdk.runtime.config_schema'):\n"
         "    sys.modules[name] = None\n"
         "from common.security.registry import SERVICES\n"
-        "from common.security.vault_self_refresh_audit import load_inventory\n"
+        "from common.security.vault_audit import load_inventory\n"
         "print(len(SERVICES), sum(s.ephemeral for s in load_inventory()))\n"
     )
     result = subprocess.run(

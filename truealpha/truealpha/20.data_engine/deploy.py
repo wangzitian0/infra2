@@ -198,7 +198,7 @@ class DataEngineDeployer(Deployer):
     def ensure_runtime_secrets(cls, c=None, *, env: str | None = None) -> bool:
         secrets = cls.secrets_backend(env=env)
         # From the PROCESS environment, not cls.env(): Deployer.env() is the curated
-        # deployment config (common.common.get_env — 1Password init vars plus a fixed set
+        # deployment config (common.core.environ.get_env — 1Password init vars plus a fixed set
         # of os.environ keys), and the runner's per-deploy DEPLOY_VERSION_REF is not in
         # that set. The first live run of #630 (2026-09-07, infra2 run 34107133379)
         # reported success with the pin silently skipped for exactly this reason.

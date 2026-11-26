@@ -1,8 +1,6 @@
-"""Read-only Vault self-refresh audit helpers and live collection adapters.
+"""Read-only Vault self-refresh audit live collection adapters and reporting.
 
-Pure classifiers and data models are defined in ``common.security.vault_audit``;
-this module provides live collection adapters and maintains full backward
-compatibility by re-exporting all audit interfaces and symbols.
+Pure classifiers and data models live in ``common.security.vault_audit``.
 """
 
 from __future__ import annotations
@@ -14,81 +12,15 @@ import shlex
 import subprocess
 from typing import Any
 
-from common.core.constants import REPO_ROOT
 from common.deploy.compose_compile import COMPILED_TEMPLATE_PATH, VAULT_TEMPLATE_LABEL
 from common.security.vault_audit import (
-    CheckResult,
     DEFAULT_LOG_SINCE,
-    ERROR_LOG_PATTERNS,
     PREVIEW_STACK_SKIPPED,
-    RESTART_RECENCY_WINDOW_SECONDS,
-    SECRET_KEYS,
     VaultService,
-    audit_from_observations,
-    classify_container,
-    classify_deployed_template,
-    classify_optional_field_inertness,
-    classify_rendered_env,
-    classify_token,
-    classify_vault_agent_logs,
-    discover_vault_agent_compose_paths,
-    inventory_compose_paths,
-    inventory_ids_not_in_production,
-    load_inventory,
-    parse_env,
-    redact,
-    vault_path_template,
-    _is_preview_stack,
-    _is_secret_key,
-    _looks_like_vault_token,
-    _preview_stack_dirs,
-    _preview_stack_skipped,
-    _release_template_sha256,
     _resolve_env_suffix,
-    _result,
-    _safe_excerpt,
     _vault_addr_from_env,
-    _vault_service_from_facet,
+    parse_env,
 )
-
-__all__ = [
-    "CheckResult",
-    "DEFAULT_LOG_SINCE",
-    "ERROR_LOG_PATTERNS",
-    "PREVIEW_STACK_SKIPPED",
-    "RESTART_RECENCY_WINDOW_SECONDS",
-    "SECRET_KEYS",
-    "VaultService",
-    "audit_from_observations",
-    "classify_container",
-    "classify_deployed_template",
-    "classify_optional_field_inertness",
-    "classify_rendered_env",
-    "classify_token",
-    "classify_vault_agent_logs",
-    "collect_live_observations",
-    "discover_vault_agent_compose_paths",
-    "inventory_compose_paths",
-    "inventory_ids_not_in_production",
-    "load_inventory",
-    "parse_env",
-    "redact",
-    "REPO_ROOT",
-    "vault_path_template",
-    "verify_vault_token",
-    "write_report",
-    "_is_preview_stack",
-    "_is_secret_key",
-    "_looks_like_vault_token",
-    "_preview_stack_dirs",
-    "_preview_stack_skipped",
-    "_release_template_sha256",
-    "_resolve_env_suffix",
-    "_result",
-    "_safe_excerpt",
-    "_vault_addr_from_env",
-    "_vault_service_from_facet",
-]
 
 
 def verify_vault_token(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -131,15 +63,6 @@ def collect_live_observations(
             project_name=service.project,
             env_name=env,
         )
-        if compose is None and service.legacy_dokploy_services:
-            for legacy_name in service.legacy_dokploy_services:
-                compose = client.find_compose_by_name(
-                    legacy_name,
-                    project_name=service.project,
-                    env_name=env,
-                )
-                if compose is not None:
-                    break
         env_text = compose.get("env", "") if compose else ""
         if service.auth_method == "approle":
             token_lookup = None
@@ -156,37 +79,10 @@ def collect_live_observations(
             )
         vault_agent_name = _resolve_env_suffix(service.vault_agent_container, env)
         agent_state = _remote_container_state(vps_host, vault_agent_name)
-        if agent_state.get("status") == "missing" and service.legacy_dokploy_services:
-            for legacy_name in service.legacy_dokploy_services:
-                candidate_agent = _resolve_env_suffix(
-                    service.vault_agent_container.replace(
-                        service.dokploy_service, legacy_name
-                    ),
-                    env,
-                )
-                candidate_state = _remote_container_state(vps_host, candidate_agent)
-                if candidate_state.get("status") != "missing":
-                    vault_agent_name = candidate_agent
-                    agent_state = candidate_state
-                    break
 
         app_names = [_resolve_env_suffix(name, env) for name in service.app_containers]
-        app_states = []
-        for name in app_names:
-            st = _remote_container_state(vps_host, name)
-            if st.get("status") == "missing" and service.legacy_dokploy_services:
-                for legacy_name in service.legacy_dokploy_services:
-                    candidate_app = _resolve_env_suffix(
-                        name.replace(service.dokploy_service, legacy_name),
-                        env,
-                    )
-                    candidate_st = _remote_container_state(vps_host, candidate_app)
-                    if candidate_st.get("status") != "missing":
-                        st = candidate_st
-                        break
-            app_states.append(st)
+        app_states = [_remote_container_state(vps_host, name) for name in app_names]
 
-        inert_fields = service.optional_inert_fields
         template_form, template_sha256 = _remote_template_identity(
             vps_host, vault_agent_name
         )
@@ -196,11 +92,6 @@ def collect_live_observations(
             "rendered_env": _remote_secret_file_state(vps_host, vault_agent_name),
             "deployed_template_form": template_form,
             "deployed_template_sha256": template_sha256,
-            "rendered_env_text": (
-                _remote_secret_file_text(vps_host, vault_agent_name)
-                if inert_fields
-                else ""
-            ),
             "vault_agent_logs": _remote_container_logs(
                 vps_host, vault_agent_name, since=log_since
             ),

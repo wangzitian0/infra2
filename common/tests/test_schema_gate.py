@@ -468,13 +468,21 @@ def _run_launcher(cwd: Path, argv: list[str], stdin: str, pythonpath: Path | Non
     )
 
 
-def _stub_sdk(root: Path, schema_check_source: str | None) -> Path:
-    runtime = root / "stub" / "infra2_sdk" / "runtime"
+def _stub_sdk(
+    root: Path,
+    schema_check_source: str | None = None,
+    *,
+    storage_source: str | None = None,
+) -> Path:
+    sdk_dir = root / "stub" / "infra2_sdk"
+    runtime = sdk_dir / "runtime"
     runtime.mkdir(parents=True)
-    (runtime.parent / "__init__.py").write_text("")
+    (sdk_dir / "__init__.py").write_text("")
     (runtime / "__init__.py").write_text("")
     if schema_check_source is not None:
         (runtime / "schema_check.py").write_text(schema_check_source)
+    if storage_source is not None:
+        (sdk_dir / "storage.py").write_text(storage_source)
     return root / "stub"
 
 
@@ -555,6 +563,35 @@ def test_launcher_keeps_the_return_code_of_main(tmp_path, code):
     result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
     assert result.returncode == code, result.stderr
     assert "NOT EVALUATED" not in result.stderr
+
+
+def test_launcher_prefers_storage_check_schema_on_v410_sdk(tmp_path):
+    """When infra2_sdk.storage is present (v4.10+), _LAUNCHER invokes `check-schema`."""
+    stub = _stub_sdk(
+        tmp_path,
+        "def main(argv):\n    raise AssertionError('legacy runtime should not run')\n",
+        storage_source=(
+            "import json\ndef main(argv):\n    print(json.dumps(argv))\n    return 0\n"
+        ),
+    )
+    spec_argv = sg.schema_check_argv(
+        "finance_report/app", sg._SCHEMA_CHECK_SPECS["finance_report/app"]
+    )
+    url = "postgresql+asyncpg://u:p@h:5432/db"
+    result = _run_launcher(tmp_path, spec_argv, f"{url}\n", stub)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ["check-schema", *spec_argv, "--db-url", url]
+
+
+def test_launcher_maps_storage_main_exception_to_not_evaluated(tmp_path):
+    """An uncaught exception in storage.main (v4.10+) maps to EXIT_NOT_EVALUATED."""
+    stub = _stub_sdk(
+        tmp_path,
+        storage_source="def main(argv):\n    raise RuntimeError('storage boom')\n",
+    )
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "storage.main raised RuntimeError" in result.stderr
 
 
 def test_launcher_with_the_installed_sdk_and_no_url_is_not_evaluated(tmp_path):

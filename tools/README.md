@@ -348,14 +348,6 @@ logs, and container state for every service in the facet-derived inventory
 (#542: each service Deployer's `SecretsFacet` declarations ->
 `common/security/vault_audit.load_inventory`).
 
-It also reports (never fails on) whether any field in a service's
-`optional_inert_fields` SecretsFacet entry (`common/core/facets.py`) is
-actually populated in the rendered secrets file, not just wired -- e.g.
-a field that can have a valid `secrets.ctmpl` render line while Vault still
-holds no value, silently leaving the feature it unlocks inert (#526). No
-service declares such a field since finance_report deleted `LLM_ENCRYPTION_KEYS`. These show up as `INFO P3
-<service>::optional-field-inertness::<FIELD>` lines in the report.
-
 ```bash
 # Live production audit
 invoke vault-audit.self-refresh

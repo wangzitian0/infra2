@@ -383,18 +383,9 @@ def find_remote_compose(
     service: str,
     project_name: str,
     env_name: str = "production",
-    legacy_names: tuple[str, ...] = (),
 ) -> dict | None:
-    """Find Dokploy compose record by current service name or legacy names."""
-    existing = client.find_compose_by_name(service, project_name, env_name=env_name)
-    if not existing:
-        for legacy_name in legacy_names:
-            existing = client.find_compose_by_name(
-                legacy_name, project_name, env_name=env_name
-            )
-            if existing:
-                break
-    return existing
+    """Find Dokploy compose record by current service name."""
+    return client.find_compose_by_name(service, project_name, env_name=env_name)
 
 
 def upsert_github_compose(
