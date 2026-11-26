@@ -95,14 +95,13 @@ _SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
     ),
 }
 
-# Runs in the target image as ``python3 -c _LAUNCHER <spec options>``. It reads the
-# database URL from stdin and calls the SDK CLI with an explicit ``--db-url``. An image
 # This launcher tries ``infra2_sdk.storage`` (`check-schema` subcommand, v4.10+)
 # first, then falls back to ``infra2_sdk.runtime.schema_check`` (v4.9.x). An image
 # without either exits EXIT_NOT_EVALUATED. Any other import failure, and an exception
 # that escapes ``main``, also exit EXIT_NOT_EVALUATED: no comparison ran, so the result
 # is not BLOCKED. The return code of ``main`` (0, 1 or 3) and SystemExit pass unchanged.
 _LAUNCHER = f"""\
+import importlib
 import sys
 _use_storage = False
 try:
@@ -139,7 +138,30 @@ if not _use_storage:
 db_url = sys.stdin.readline().strip()
 try:
     if _use_storage:
-        code = storage.main(["check-schema", *sys.argv[1:], "--db-url", db_url])
+        imports = []
+        pass_argv = []
+        raw_argv = sys.argv[1:]
+        idx = 0
+        while idx < len(raw_argv):
+            if raw_argv[idx] == "--import" and idx + 1 < len(raw_argv):
+                imports.append(raw_argv[idx + 1])
+                idx += 2
+                continue
+            pass_argv.append(raw_argv[idx])
+            idx += 1
+        for mod in imports:
+            try:
+                importlib.import_module(mod)
+            except Exception as exc:
+                print(
+                    "NOT EVALUATED - deploy blocked: cannot import "
+                    + repr(mod)
+                    + ": "
+                    + repr(exc),
+                    file=sys.stderr,
+                )
+                sys.exit({EXIT_NOT_EVALUATED})
+        code = storage.main(["check-schema", *pass_argv, "--db-url", db_url])
     else:
         code = schema_check.main([*sys.argv[1:], "--db-url", db_url])
 except Exception as exc:
@@ -296,6 +318,7 @@ def _read_database_url(
 
 
 _DB_PASSWORD_RE = re.compile(r"://([^:@\s]+):([^@\s]+)@")
+_ROLLBACK_CLASS_RE = re.compile(r"^(?:\[[^\]]+\]\s+)?ROLLBACK_CLASS:\s+(\S+)")
 
 
 def _sanitize_db_url(text: str) -> str:
@@ -391,9 +414,9 @@ def run_schema_gate(
     # exactly when an operator most wants the class, so the exception carries it.
     rollback_class = ""
     for line in (result.stdout or "").splitlines():
-        line = line.strip()
-        if line.startswith("ROLLBACK_CLASS: "):
-            rollback_class = line.split(":", 1)[1].strip()
+        match = _ROLLBACK_CLASS_RE.match(line.strip())
+        if match:
+            rollback_class = match.group(1)
     if result.returncode != EXIT_OK:
         verdict = verdict_for_exit(result.returncode)
         suffix = f" (ROLLBACK_CLASS: {rollback_class})" if rollback_class else ""

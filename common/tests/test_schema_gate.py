@@ -565,22 +565,75 @@ def test_launcher_keeps_the_return_code_of_main(tmp_path, code):
     assert "NOT EVALUATED" not in result.stderr
 
 
+def _create_stub_imports(root: Path, modules: tuple[str, ...]) -> None:
+    """Create minimal importable modules under ``root`` for dotted paths."""
+    for mod in modules:
+        parts = mod.split(".")
+        cur = root
+        for pkg in parts[:-1]:
+            cur = cur / pkg
+            cur.mkdir(parents=True, exist_ok=True)
+            init = cur / "__init__.py"
+            if not init.exists():
+                init.write_text("", encoding="utf-8")
+        (cur / f"{parts[-1]}.py").write_text("LOADED = True\n", encoding="utf-8")
+
+
 def test_launcher_prefers_storage_check_schema_on_v410_sdk(tmp_path):
-    """When infra2_sdk.storage is present (v4.10+), _LAUNCHER invokes `check-schema`."""
+    """When infra2_sdk.storage is present (v4.10+), _LAUNCHER imports --import modules then calls `check-schema`."""
+    spec = sg._SCHEMA_CHECK_SPECS["finance_report/app"]
     stub = _stub_sdk(
         tmp_path,
         "def main(argv):\n    raise AssertionError('legacy runtime should not run')\n",
         storage_source=(
-            "import json\ndef main(argv):\n    print(json.dumps(argv))\n    return 0\n"
+            "import json, sys\n"
+            "def main(argv):\n"
+            "    loaded = {m: (m in sys.modules) for m in (\n"
+            "        'src.counter.extension.sql',\n"
+            "        'src.identity.extension.sql',\n"
+            "        'src.orm_registry',\n"
+            "        'src.platform.extension.sql',\n"
+            "    )}\n"
+            "    print(json.dumps({'argv': argv, 'loaded': loaded}))\n"
+            "    return 0\n"
         ),
     )
-    spec_argv = sg.schema_check_argv(
-        "finance_report/app", sg._SCHEMA_CHECK_SPECS["finance_report/app"]
-    )
+    _create_stub_imports(stub, spec.imports)
+    spec_argv = sg.schema_check_argv("finance_report/app", spec)
     url = "postgresql+asyncpg://u:p@h:5432/db"
     result = _run_launcher(tmp_path, spec_argv, f"{url}\n", stub)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == ["check-schema", *spec_argv, "--db-url", url]
+    payload = json.loads(result.stdout)
+    assert all(payload["loaded"].values())
+    assert "--import" not in payload["argv"]
+    assert payload["argv"] == [
+        "check-schema",
+        "--metadata",
+        spec.metadata,
+        "--label",
+        "finance_report/app",
+        "--db-url",
+        url,
+    ]
+
+
+def test_launcher_storage_fails_closed_when_import_module_missing(tmp_path):
+    """If an --import ORM module cannot be imported under v4.10+, exit EXIT_NOT_EVALUATED without calling storage.main."""
+    stub = _stub_sdk(
+        tmp_path,
+        storage_source=(
+            "def main(argv):\n    raise AssertionError('storage.main must not run')\n"
+        ),
+    )
+    result = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x", "--import", "nonexistent_orm_module"],
+        "postgresql://h/db\n",
+        stub,
+    )
+    assert result.returncode == sg.EXIT_NOT_EVALUATED == 3
+    assert "NOT EVALUATED" in result.stderr
+    assert "cannot import" in result.stderr
 
 
 def test_launcher_maps_storage_main_exception_to_not_evaluated(tmp_path):
@@ -592,6 +645,51 @@ def test_launcher_maps_storage_main_exception_to_not_evaluated(tmp_path):
     result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
     assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
     assert "storage.main raised RuntimeError" in result.stderr
+
+
+def test_launcher_with_installed_sdk_accepts_finance_report_spec_argv(tmp_path):
+    """Real installed infra2_sdk.storage check-schema accepts schema_check_argv without argparse exit 2."""
+    spec = sg._SCHEMA_CHECK_SPECS["finance_report/app"]
+    orm_root = tmp_path / "app"
+    orm_root.mkdir()
+    _create_stub_imports(orm_root, spec.imports)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            sg._LAUNCHER,
+            *sg.schema_check_argv("finance_report/app", spec),
+        ],
+        input="\n",
+        text=True,
+        capture_output=True,
+        cwd=orm_root,
+        timeout=60,
+    )
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "DATABASE_URL is required" in result.stderr
+
+
+def test_run_schema_gate_parses_v411_labeled_rollback_class_pass_and_blocked():
+    """Accept v4.11 labeled ROLLBACK_CLASS output on both pass and blocked exits."""
+    pass_runner = FakeRunner(
+        [
+            _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
+            _ok(stdout="[finance_report/app] ROLLBACK_CLASS: A pending=0\n"),
+        ]
+    )
+    assert sg.run_schema_gate(**_gate_kwargs(runner=pass_runner, timeout=5)) == "A"
+
+    blocked_runner = FakeRunner(
+        [
+            _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
+            _fail(1, stdout="[finance_report/app] ROLLBACK_CLASS: C pending=2\n"),
+        ]
+    )
+    with pytest.raises(sg.SchemaGateError) as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=blocked_runner, timeout=5))
+    assert exc_info.value.verdict == sg.VERDICT_BLOCKED
+    assert "(ROLLBACK_CLASS: C)" in str(exc_info.value)
 
 
 def test_launcher_with_the_installed_sdk_and_no_url_is_not_evaluated(tmp_path):
