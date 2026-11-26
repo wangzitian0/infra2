@@ -426,6 +426,30 @@ def required_mount_fingerprint_vars(compose_content: str) -> list[str]:
     )
 
 
+def _platform_image_inputs(compose_file: Path, image_ref: object) -> list[Path]:
+    """Dockerfile and copied files of the CI-built platform image that a service pins (#1822).
+
+    The service has no `build:`, but CI builds the image from files in this repository
+    (`common/deploy/platform_images.py`). An edit of those files changes the hash.
+    The root is the checkout that holds the compose file. An image that is not in
+    PLATFORM_IMAGES gives no files.
+    """
+    from common.deploy.platform_images import PLATFORM_IMAGES, input_files
+
+    ref = str(image_ref or "")
+    compose = compose_file.resolve()
+    for image in PLATFORM_IMAGES.values():
+        if not ref.startswith(image.repository + ":"):
+            continue
+        depth = len(Path(image.compose).parts)
+        if compose.as_posix().endswith("/" + image.compose):
+            root = compose.parents[depth - 1]
+        else:
+            root = _REPO_ROOT
+        return input_files(image, root)
+    return []
+
+
 def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Path]:
     try:
         import yaml
@@ -478,6 +502,8 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
                 files.extend(_iter_path_files(dockerfile))
                 if context_dir:
                     files.extend(_dockerfile_copy_sources(dockerfile, context_dir))
+        else:
+            files.extend(_platform_image_inputs(compose_file, service.get("image")))
 
         for source in _bind_mount_sources(service):
             if _host_mount_name(source) is not None and _HOST_DATA_VAR_RE.match(source):

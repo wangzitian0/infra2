@@ -255,6 +255,7 @@ entries:
       - common/tests/test_compose_compile.py
       - common/tests/test_compose_validate.py
       - common/tests/test_ghcr_retention.py
+      - common/tests/test_platform_images.py
   ops.e2e:
     owner: docs/ssot/ops.e2e-regressions.md
     summary: 部署验证、E2E 测试
