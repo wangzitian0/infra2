@@ -37,6 +37,8 @@ from common.deploy.evidence import (
     verify_production_evidence,
 )
 from common.deploy.stage_hooks import (
+    FORBIDDEN_HOOK_ENV_NAMES,
+    FORBIDDEN_HOOK_ENV_PREFIXES,
     HookRunResult,
     load as load_sdk_manifest,
     load_hooks_manifest,
@@ -44,8 +46,6 @@ from common.deploy.stage_hooks import (
     run_cell,
 )
 from infra2_sdk.delivery import (
-    FORBIDDEN_HOOK_ENV_NAMES,
-    FORBIDDEN_HOOK_ENV_PREFIXES,
     RuntimeHooksManifest,
     resolve_check_cells,
 )

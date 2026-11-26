@@ -1430,9 +1430,8 @@ def test_app_peer_pillar_passes_on_460_and_enforces_fail_closed() -> None:
     assert "unsupported" in missing_460.app_peer.summary
 
 
-def test_schema_check_command_supports_both_v49_and_v410_sdk(tmp_path: Path) -> None:
-    """Emitted SCHEMA_CHECK shell selects infra2_sdk.storage check-schema on v4.10+ and
-    falls back to infra2_sdk.runtime.schema_check on v4.9.x without passing --app-path to storage."""
+def test_schema_check_command_uses_storage_check_schema(tmp_path: Path) -> None:
+    """Emitted SCHEMA_CHECK shell runs infra2_sdk.storage check-schema without passing --app-path."""
     import os
     import re
     import sys
@@ -1443,7 +1442,7 @@ def test_schema_check_command_supports_both_v49_and_v410_sdk(tmp_path: Path) -> 
             traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
             logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
             environment="staging",
-            sdk="4.10.2",
+            sdk="4.12.0",
         ),
     )
     assert len(commands) == 1
@@ -1469,11 +1468,10 @@ def test_schema_check_command_supports_both_v49_and_v410_sdk(tmp_path: Path) -> 
     py_shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
     py_shim.chmod(0o755)
 
-    # Case 1: v4.10+ SDK with infra2_sdk.storage (no --app-path accepted)
-    sdk410 = tmp_path / "sdk410"
-    (sdk410 / "infra2_sdk").mkdir(parents=True)
-    (sdk410 / "infra2_sdk" / "__init__.py").write_text("")
-    (sdk410 / "infra2_sdk" / "storage.py").write_text(
+    sdk_stub = tmp_path / "sdk_stub"
+    (sdk_stub / "infra2_sdk").mkdir(parents=True)
+    (sdk_stub / "infra2_sdk" / "__init__.py").write_text("")
+    (sdk_stub / "infra2_sdk" / "storage.py").write_text(
         "import json, sys\n"
         "args = sys.argv[1:]\n"
         "assert args[0] == 'check-schema', args\n"
@@ -1481,52 +1479,19 @@ def test_schema_check_command_supports_both_v49_and_v410_sdk(tmp_path: Path) -> 
         "import canary_schema  # noqa: F401 - verifies PYTHONPATH includes app dir\n"
         "print(json.dumps(args))\n"
     )
-    res410 = subprocess.run(
+    res = subprocess.run(
         ["sh", "-c", rewritten_sh],
         capture_output=True,
         text=True,
         env={
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "PYTHONPATH": str(sdk410),
+            "PYTHONPATH": str(sdk_stub),
         },
         timeout=30,
     )
-    assert res410.returncode == 0, res410.stderr
-    assert json.loads(res410.stdout) == [
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == [
         "check-schema",
-        "--metadata",
-        "canary_schema:METADATA",
-        "--db-url",
-        "postgresql://u:p@h:5432/db",
-        "--label",
-        "platform/todo",
-    ]
-
-    # Case 2: v4.9.x SDK with infra2_sdk.runtime.schema_check
-    sdk49 = tmp_path / "sdk49"
-    (sdk49 / "infra2_sdk" / "runtime").mkdir(parents=True)
-    (sdk49 / "infra2_sdk" / "__init__.py").write_text("")
-    (sdk49 / "infra2_sdk" / "runtime" / "__init__.py").write_text("")
-    (sdk49 / "infra2_sdk" / "runtime" / "schema_check.py").write_text(
-        "import json, sys\n"
-        "args = sys.argv[1:]\n"
-        "assert '--app-path' in args, args\n"
-        "print(json.dumps(args))\n"
-    )
-    res49 = subprocess.run(
-        ["sh", "-c", rewritten_sh],
-        capture_output=True,
-        text=True,
-        env={
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "PYTHONPATH": str(sdk49),
-        },
-        timeout=30,
-    )
-    assert res49.returncode == 0, res49.stderr
-    assert json.loads(res49.stdout) == [
-        "--app-path",
-        str(app_dir),
         "--metadata",
         "canary_schema:METADATA",
         "--db-url",
@@ -1644,7 +1609,7 @@ def test_app_peer_remote_script_uses_readyz_and_passes_valid_shell_syntax() -> N
         in script
     )
     assert "--service-name" not in script
-    assert "--app-path /app" in script
+    assert "infra2_sdk.storage check-schema" in script
     assert "--metadata canary_schema:METADATA" in script
     assert '--db-url "$DATABASE_URL"' in script
     assert "--label platform/todo" in script

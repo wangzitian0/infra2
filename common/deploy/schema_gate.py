@@ -111,7 +111,7 @@ import sys
 _use_storage = False
 try:
     from infra2_sdk import storage
-    _use_storage = hasattr(storage, "main")
+    _use_storage = True
 except ImportError:
     storage = None
 except Exception as exc:
@@ -172,7 +172,33 @@ try:
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
-                code = storage.main(["check-schema", *rest, "--db-url", db_url, "--json"])
+                if callable(getattr(storage, "main", None)):
+                    code = storage.main(["check-schema", *rest, "--db-url", db_url, "--json"])
+                else:
+                    import runpy
+
+                    old_argv = sys.argv
+                    sys.argv = [
+                        "infra2_sdk.storage",
+                        "check-schema",
+                        *rest,
+                        "--db-url",
+                        db_url,
+                        "--json",
+                    ]
+                    sys.modules.pop("infra2_sdk.storage", None)
+                    try:
+                        try:
+                            runpy.run_module("infra2_sdk.storage", run_name="__main__")
+                            code = 0
+                        except SystemExit as exc:
+                            code = (
+                                int(exc.code)
+                                if isinstance(exc.code, int)
+                                else (1 if exc.code else 0)
+                            )
+                    finally:
+                        sys.argv = old_argv
         except BaseException:
             raw_out = buf.getvalue()
             if raw_out:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from infra2_sdk.config import EnvironmentTier, is_preview_alias
+from infra2_sdk.config import EnvironmentTier
 
 CANARY_SLOT = "canary-preview"
 _LOCAL_DEV_ALIASES = frozenset({"dev", "development", "local", "local_dev"})
@@ -31,6 +31,15 @@ def _canonicalize_preview_alias(cleaned: str) -> str:
         )
         return f"{match['prefix']}-{rest}"
     return cleaned
+
+
+def is_preview_alias(value: str) -> bool:
+    """Return True when ``value`` is a canonical or underscore preview slot alias."""
+    cleaned = str(value).strip().lower()
+    if not cleaned:
+        return False
+    alias = _canonicalize_preview_alias(cleaned)
+    return alias == CANARY_SLOT or bool(_PREVIEW_ALIAS_RE.match(alias))
 
 
 def to_environment_tier(value: str | EnvironmentTier) -> EnvironmentTier:

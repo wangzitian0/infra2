@@ -270,7 +270,7 @@ def _routing_tier(norm: str) -> str:
     A preview alias (``pr_5``, ``branch_main``, ``canary_preview``) keeps its slot token,
     so ``resolve_app_hostname`` builds ``{slug}-pr-5`` and not ``{slug}-preview``.
     """
-    from infra2_sdk.config import is_preview_alias
+    from common.deploy.routing import is_preview_alias
 
     if norm in ("production", "staging"):
         return norm
@@ -364,9 +364,7 @@ def otel_ingest_endpoint(env: dict | None = None) -> str:
     domain = (env or {}).get("INTERNAL_DOMAIN")
     if not domain:
         return ""
-    from infra2_sdk.telemetry import signal_endpoint
-
-    return signal_endpoint(f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}", "traces")
+    return f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}{OTLP_TRACES_PATH}"
 
 
 def normalize_env_name(value: str | None) -> str:

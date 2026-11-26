@@ -2894,7 +2894,7 @@ FAILOPEN_ID = {
 #: Env names the SDK reads outside the runtime contract: name -> (kind, SDK file that
 #: reads it). sdk_usage_census reads the same table.
 SDK_EXTRA_KEYS: dict[str, tuple[str, str]] = {
-    "GITHUB_ACTIONS": ("helper", "config.py"),
+    "GITHUB_ACTIONS": ("helper", "_core.py"),
     "GITHUB_TOKEN": ("tool-token", "delivery.py"),
 }
 SDK_IDENTITY_ONLY = {
@@ -2906,15 +2906,27 @@ SDK_IDENTITY_ONLY = {
 SDK_READ_VAULT = {"VAULT_ADDR", "VAULT_TOKEN", "VAULT_ROLE_ID", "VAULT_SECRET_ID"}
 
 
+def _shared_env_contract() -> dict:
+    """Load the canonical SDK ``data/shared_env.yaml`` contract."""
+    from importlib.resources import files
+
+    return (
+        yaml.safe_load(
+            files("infra2_sdk")
+            .joinpath("data/shared_env.yaml")
+            .read_text(encoding="utf-8")
+        )
+        or {}
+    )
+
+
 def sdk_vocabulary() -> dict[str, dict]:
-    """Read the SDK vocabulary via ``infra2_sdk.config.shared_env_contract()``.
+    """Read the SDK vocabulary from ``infra2_sdk/data/shared_env.yaml``.
 
     Raise ``ValueError`` when the contract names no variable: an analysis on an empty
     vocabulary reports no SDK finding and looks green (infra2#1857).
     """
-    from infra2_sdk.config import shared_env_contract
-
-    data = shared_env_contract()
+    data = _shared_env_contract()
     entries = (data.get("groups") or {}).get("runtime") or ()
     vocab: dict[str, dict] = {}
     for item in entries:
@@ -2925,7 +2937,7 @@ def sdk_vocabulary() -> dict[str, dict]:
         for alias in item.get("aliases") or ():
             vocab[alias] = {"kind": "alias", "canonical": canon}
     if not vocab:
-        raise ValueError("shared_env_contract() names no variable")
+        raise ValueError("shared_env.yaml names no variable")
     for name, (kind, _file) in SDK_EXTRA_KEYS.items():
         vocab.setdefault(name, {"kind": kind, "canonical": name})
     return vocab

@@ -442,12 +442,25 @@ def test_verdict_for_exit_maps_each_code(returncode, verdict):
 
 
 def test_exit_codes_equal_the_sdk_schema_check_codes():
-    from infra2_sdk import storage
-
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "infra2_sdk.storage",
+            "check-schema",
+            "--metadata",
+            "src.database:Base.metadata",
+            "--db-url",
+            "",
+            "--label",
+            "test",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert (sg.EXIT_OK, sg.EXIT_BLOCKED, sg.EXIT_NOT_EVALUATED) == (0, 1, 3)
-    assert sg.EXIT_OK == storage.EXIT_OK
-    assert sg.EXIT_BLOCKED == storage.EXIT_BLOCKED
-    assert sg.EXIT_NOT_EVALUATED == storage.EXIT_NOT_EVALUATED
+    assert proc.returncode == sg.EXIT_NOT_EVALUATED
 
 
 # --- _LAUNCHER: runs in the target image ------------------------------------------------

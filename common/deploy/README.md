@@ -18,7 +18,7 @@
 | `stack_presets.py` | App PostgreSQL/Redis stack presets; facts come from `common/core/stack_preset_facts.py` | `PostgresStackDeployer`, `RedisStackDeployer`, `stack_tasks()` |
 | `promote.py` | Staging & production promotion pipeline | `deploy()`, fixed environment orchestration |
 | `preview.py` | Dynamic preview stack lifecycle | `up()`, `down()`, preview slot routing |
-| `schema_gate.py` | Pre-deploy enum schema gate against live DB (`infra2_sdk.storage.check_schema` in the app image) | `SchemaCheckSpec`, `SchemaGateError`, `gate_applies()`, `run_schema_gate()` |
+| `schema_gate.py` | Pre-deploy enum schema gate against live DB (`python -m infra2_sdk.storage check-schema` in the app image) | `SchemaCheckSpec`, `SchemaGateError`, `gate_applies()`, `run_schema_gate()` |
 | `in_service.py` | Container health & liveness verification | `ContainerObservation`, `InServiceVerdict`, `expected_running_services()`, `parse_docker_ps()`, `in_service_verdict()`, `container_names()` |
 | `rollout.py` | Dokploy rollout polling & terminal status | `RolloutError`, `RolloutResult`, `wait_for_deployment()`, `TERMINAL_SUCCESS_STATUSES` |
 | `failure_snapshot.py` | Dokploy failure diagnosis & GitHub summary snapshot | `emit_failure_snapshot()`, `build_snapshot()`, `classify()` |
