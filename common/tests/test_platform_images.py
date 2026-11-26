@@ -457,26 +457,275 @@ def test_the_workflow_publishes_the_matrix_rows() -> None:
     assert set(workflow[True]) == {"pull_request", "push", "workflow_dispatch"}
 
 
-def test_the_workflow_gives_each_commit_its_own_concurrency_group() -> None:
+def test_each_publish_job_has_a_concurrency_group_per_resolved_image_tag() -> None:
     """GitHub cancels a pending run when a newer run joins its group.
 
-    A group per ref left a main commit without its commit tag when three pushes came
-    close together; the deploy of that commit then had no image.
+    A group per ref (or per `ref` input text) could drop the commit tag of a main commit
+    or of a manual run. The publish group is the image tag, which holds the full SHA
+    that the matrix resolved.
     """
     workflow = yaml.safe_load(WORKFLOW.read_text())
-    group = workflow["concurrency"]["group"]
-    assert "github.sha" in group and "inputs.ref" in group
-    assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert "concurrency" not in workflow
+    publish = workflow["jobs"]["publish"]
+    assert publish["concurrency"] == {
+        "group": "platform-image-${{ matrix.image }}",
+        "cancel-in-progress": False,
+    }
+    [row] = pi.build_matrix(commit="e" * 40, commit_only=True)
+    assert row["image"].endswith(":" + "e" * 40)
 
 
-def test_the_workflow_passes_no_commit_on_a_pull_request() -> None:
+def _run_matrix_step(
+    tmp_path: Path, event: str, ref_input: str = ""
+) -> tuple[list[str], str]:
+    """Run the `matrix` step script with fake `git` and `uv`; return the matrix args."""
     workflow = yaml.safe_load(WORKFLOW.read_text())
     [step] = [s for s in workflow["jobs"]["matrix"]["steps"] if s.get("id") == "matrix"]
-    run = step["run"]
-    assert 'matrix --commit "$commit"' in run
-    assert 'if [ "$EVENT_NAME" = "pull_request" ]; then commit=""; fi' in run
-    # The publish job builds the same commit that the matrix read.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "git").write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  "-C src rev-parse HEAD") echo ' + "a" * 40 + " ;;\n"
+        '  "diff --name-only"*) echo common/x.py ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "uv").write_text(
+        # uv run --locked python -m common.deploy.platform_images <args>
+        '#!/bin/sh\ncase "$*" in\n'
+        '  "run --locked python -m common.deploy.platform_images "*) ;;\n'
+        "  *) exit 9 ;;\nesac\n"
+        'shift 5\nprintf "%s\\n" "$@" > "$UV_ARGS"\necho "[]"\n',
+        encoding="utf-8",
+    )
+    for tool in ("git", "uv"):
+        (bin_dir / tool).chmod(0o755)
+    import os
+    import subprocess
+
+    out = tmp_path / "out"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "EVENT_NAME": event,
+        "REF_INPUT": ref_input,
+        "BASE_SHA": "b" * 40,
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(out),
+        "UV_ARGS": str(tmp_path / "args"),
+    }
+    subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env=env,
+        check=True,
+        timeout=60,
+        capture_output=True,
+        cwd=tmp_path,
+    )
+    args = (tmp_path / "args").read_text(encoding="utf-8").split()
+    return args, out.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("event", "ref_input", "expected"),
+    [
+        ("push", "", ["--commit", "a" * 40]),
+        ("workflow_dispatch", "", ["--commit", "a" * 40]),
+        # An older ref: this table builds only the commit image of that ref.
+        (
+            "workflow_dispatch",
+            "production/v3.2.12",
+            ["--commit", "a" * 40, "--commit-only"],
+        ),
+        ("pull_request", "", ["--check", "a" * 40, "--changed", "<tmp>/changed.txt"]),
+    ],
+)
+def test_the_matrix_step_passes_the_resolved_sha_for_each_event(
+    tmp_path: Path, event: str, ref_input: str, expected: list[str]
+) -> None:
+    args, output = _run_matrix_step(tmp_path, event, ref_input)
+    assert args == ["matrix", *[a.replace("<tmp>", str(tmp_path)) for a in expected]]
+    assert f"sha={'a' * 40}" in output.splitlines()
+    if event == "pull_request":
+        assert (tmp_path / "changed.txt").read_text() == "common/x.py\n"
+
+
+def test_the_workflow_reads_the_table_at_the_workflow_ref_and_builds_the_resolved_sha() -> (
+    None
+):
+    """A manual run for an older ref: the old tree has no `matrix --commit` (#2061 review)."""
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    steps = workflow["jobs"]["matrix"]["steps"]
+    checkouts = [s for s in steps if "checkout" in s.get("uses", "")]
+    assert [c.get("with") for c in checkouts] == [
+        None,
+        {"ref": "${{ inputs.ref || github.sha }}", "path": "src"},
+    ]
     publish = workflow["jobs"]["publish"]
-    [checkout] = [s for s in publish["steps"] if "checkout" in s.get("uses", "")]
-    assert checkout["with"]["ref"] == "${{ needs.matrix.outputs.sha }}"
+    checkouts = [s for s in publish["steps"] if "checkout" in s.get("uses", "")]
+    assert [c.get("with") for c in checkouts] == [
+        None,
+        {"ref": "${{ needs.matrix.outputs.sha }}", "path": "src"},
+    ]
+    builds = [s["run"] for s in publish["steps"] if "docker build " in s.get("run", "")]
+    assert len(builds) == 2
+    for run in builds:
+        assert '-f "src/$DOCKERFILE"' in run and '"src/$CONTEXT"' in run
+    [push] = [run for run in builds if "docker push" in run]
+    assert 'state="$(bash scripts/ghcr_tag_state.sh "$IMAGE")"' in push
+    assert push.index("ghcr_tag_state.sh") < push.index("docker build")
+    [check] = [
+        s
+        for s in publish["steps"]
+        if "docker build " in s.get("run", "") and "docker push" not in s["run"]
+    ]
+    assert check["if"] == "matrix.kind == 'check'"
     assert publish["env"]["SHA"] == "${{ needs.matrix.outputs.sha }}"
+
+
+# --- the matrix for a manual run and a pull request -------------------------------------
+
+
+def test_a_commit_only_matrix_has_the_commit_images_alone() -> None:
+    rows = pi.build_matrix(commit="e" * 40, commit_only=True)
+    assert [(r["key"], r["kind"], r["image"]) for r in rows] == [
+        ("alerting", "commit", "ghcr.io/wangzitian0/infra2-alerting:" + "e" * 40)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"commit_only": True}, "commit_only needs commit"),
+        ({"commit": "e" * 40, "check": "f" * 40}, "commit or check"),
+        ({"check": "main"}, "check must be a full 40-hex SHA"),
+    ],
+)
+def test_a_bad_matrix_request_raises(kwargs: dict, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        pi.build_matrix(**kwargs)
+
+
+def test_a_pull_request_that_changes_an_input_builds_the_commit_image() -> None:
+    check = "f" * 40
+    changed = frozenset({"common/deploy/platform_images.py", "docs/x.md"})
+    rows = pi.build_matrix(check=check, changed=changed)
+    assert [(r["key"], r["kind"], r["image"]) for r in rows] == [
+        ("s3", "inputs", rows[0]["image"]),
+        ("alerting", "check", f"ghcr.io/wangzitian0/infra2-alerting:check-{check}"),
+    ]
+    for path in (
+        "platform/12.alerting/Dockerfile",
+        "uv.lock",
+        "tools/sdk_requirement.py",
+    ):
+        assert [
+            r["key"] for r in pi.build_matrix(check=check, changed=frozenset({path}))
+        ] == [
+            "s3",
+            "alerting",
+        ]
+
+
+def test_a_pull_request_without_an_input_change_builds_no_commit_image() -> None:
+    changed = frozenset({"docs/x.md", "platform/03.s3/README.md", "repos/x"})
+    assert [r["key"] for r in pi.build_matrix(check="f" * 40, changed=changed)] == [
+        "s3"
+    ]
+    assert [r["key"] for r in pi.build_matrix(check="f" * 40, changed=frozenset())] == [
+        "s3"
+    ]
+
+
+def test_the_matrix_cli_reads_the_changed_file_list(tmp_path: Path, capsys) -> None:
+    import json
+
+    listing = tmp_path / "changed.txt"
+    listing.write_text("\nplatform/12.alerting/app.py\n", encoding="utf-8")
+    assert pi.main(["matrix", "--check", "f" * 40, "--changed", str(listing)]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["kind"] for r in rows] == ["inputs", "check"]
+
+
+# --- the GHCR tag state -----------------------------------------------------------------
+
+TAG_STATE = ROOT / "scripts" / "ghcr_tag_state.sh"
+
+
+def _tag_state(tmp_path: Path, manifest: str, token_ok: bool = True):
+    """Run scripts/ghcr_tag_state.sh with a fake `curl` that answers `manifest`."""
+    import os
+    import subprocess
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    token = 'echo \'{"token":"t"}\'' if token_ok else "exit 22"
+    (bin_dir / "curl").write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$CURL_LOG"\n'
+        'case "$*" in\n'
+        f"  *ghcr.io/token*) {token} ;;\n"
+        f"  *) {manifest} ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "curl").chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GHCR_USER": "u",
+        "GHCR_TOKEN": "p",
+        "CURL_LOG": str(tmp_path / "curl.log"),
+    }
+    return subprocess.run(
+        ["bash", str(TAG_STATE), "ghcr.io/o/n:" + "a" * 40],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize(("code", "state"), [("200", "present"), ("404", "absent")])
+def test_the_tag_state_is_present_or_absent_only_for_200_or_404(
+    tmp_path: Path, code: str, state: str
+) -> None:
+    result = _tag_state(tmp_path, f"printf {code}")
+    assert (result.returncode, result.stdout) == (0, state + "\n")
+    log = (tmp_path / "curl.log").read_text()
+    assert "scope=repository:o/n:pull" in log
+    assert "/v2/o/n/manifests/" + "a" * 40 in log
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    ["printf 401", "printf 403", "printf 500", "printf 429", "exit 7"],
+)
+def test_any_other_registry_answer_fails_instead_of_a_rebuild(
+    tmp_path: Path, manifest: str
+) -> None:
+    result = _tag_state(tmp_path, manifest)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "not 200 (present) or 404 (absent)" in result.stderr
+
+
+def test_a_refused_token_fails_the_tag_state(tmp_path: Path) -> None:
+    result = _tag_state(tmp_path, "printf 404", token_ok=False)
+    assert (result.returncode, result.stdout) == (1, "")
+    assert "refused a pull token" in result.stderr
+
+
+@pytest.mark.parametrize("image", ["docker.io/o/n:t", "ghcr.io/o/n", "ghcr.io/o/n:"])
+def test_a_malformed_image_is_refused(tmp_path: Path, image: str) -> None:
+    import subprocess
+
+    result = subprocess.run(
+        ["bash", str(TAG_STATE), image],
+        env={"PATH": "/usr/bin:/bin", "GHCR_USER": "u", "GHCR_TOKEN": "p"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 2
