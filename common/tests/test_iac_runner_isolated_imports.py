@@ -25,7 +25,10 @@ def _copy_dockerfile_app_layout(dest: Path) -> None:
         if not match:
             continue
         src_rel, dst_rel = match.groups()
-        if src_rel == "bootstrap/06.iac_runner/requirements.txt" or src_rel == "uv.lock":
+        if (
+            src_rel == "bootstrap/06.iac_runner/requirements.txt"
+            or src_rel == "uv.lock"
+        ):
             continue
         src = ROOT / src_rel
         target = dest / (Path(src_rel).name if dst_rel == "." else dst_rel)
@@ -36,11 +39,7 @@ def _copy_dockerfile_app_layout(dest: Path) -> None:
 def test_iac_runner_app_imports_without_repo_root(tmp_path: Path) -> None:
     """webhook_server and sync_runner must import in an isolated /app without common."""
     _copy_dockerfile_app_layout(tmp_path)
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in ("PYTHONPATH", "PYTHONHOME")
-    }
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
     env["PYTHONPATH"] = str(tmp_path)
     env["GIT_REPO_URL"] = "https://github.com/wangzitian0/infra2"
 

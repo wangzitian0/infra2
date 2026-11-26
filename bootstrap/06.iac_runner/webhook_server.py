@@ -54,6 +54,7 @@ def classify_ref(ref: str | int) -> str:
         "a 1-6 digit PR number, or a 7-40 hex commit sha"
     )
 
+
 app = FastAPI(
     title="Infra2 IaC Runner",
     description="GitOps deployment control plane webhook service",

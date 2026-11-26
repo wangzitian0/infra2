@@ -15,7 +15,7 @@
 #   IAC_RUNNER_IDLE_WAIT_SECONDS  wait limit in whole seconds (default 900)
 #   IAC_RUNNER_IDLE_POLL_SECONDS  seconds between polls (default 10)
 #
-# The wait never blocks the self-update: an unknown count or the limit continues.
+# An unknown count continues; reaching the limit fails closed (return 1).
 
 _IAC_RUNNER_IDLE_CONTAINER="iac-runner"
 
