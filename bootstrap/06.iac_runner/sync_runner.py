@@ -91,7 +91,7 @@ def _all_services() -> list[str]:
 
 
 _WAVE1_STATEFUL_SUFFIXES: frozenset[str] = frozenset(
-    {"postgres", "redis", "s3", "authentik", "prefect"}
+    {"vault", "postgres", "redis", "s3", "authentik", "prefect"}
 )
 
 

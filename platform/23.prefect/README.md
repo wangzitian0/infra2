@@ -186,16 +186,6 @@ invoke postgres.status
 ssh root@{VPS_HOST} docker exec platform-postgres psql -U postgres -c '\l' | grep prefect
 ```
 
-### Worker Not Picking Up Flows
-
-```bash
-# Check worker status
-ssh root@{VPS_HOST} docker logs platform-prefect-worker
-
-# Check API connectivity from worker
-ssh root@{VPS_HOST} docker exec platform-prefect-worker curl http://platform-prefect-server:4200/api/health
-```
-
 ### Cannot Access UI (404 or Auth Loop)
 
 ```bash
