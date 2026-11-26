@@ -86,8 +86,8 @@ wait_for_runner_idle() {
       return 0
     fi
     if [ "$elapsed" -ge "$limit" ]; then
-      echo "WARNING: runner still reports $count in-flight deploy(s) after ${elapsed}s; rebuilding anyway"
-      return 0
+      echo "ERROR: runner still reports $count in-flight deploy(s) after ${elapsed}s; aborting recreate" >&2
+      return 1
     fi
     sleep "$interval"
   done
