@@ -1155,6 +1155,7 @@ def _execute(job: str, step: str) -> int:
 #: job -> (alert step, resolve step)
 DEDUPED_JOBS = {
     "audit": ("Alert on confirmed failure", "Resolve the paged failures"),
+    "scheduled-app-audit": ("Alert on confirmed failure", "Resolve the paged failures"),
     "host-hygiene-schedule": ("Alert on failure", "Resolve the host-hygiene alert"),
     "facet-reconcile": ("Alert on confirmed findings", "Resolve the paged findings"),
     "vault-self-refresh-audit": (
@@ -1518,18 +1519,55 @@ def test_audit_steps_page_report_and_resolve(step_env, tmp_path) -> None:
     api, ch, monkeypatch = step_env
     alert, resolve = DEDUPED_JOBS["audit"]
     guard_report = tmp_path / "deploy-guard-audit-report.json"
+    monkeypatch.setenv(dga.REPORT_ENV, str(guard_report))
+
+    def write_state(*, summary="unmapped compose"):
+        checks = {k: {"status": "pass", "summary": k} for k in dga.STATIC_GUARD_KEYS}
+        if summary:
+            checks["guard:fanout-sufficiency"] = {
+                "status": "fail",
+                "summary": summary,
+            }
+        guard_report.write_text(json.dumps({"checks": checks}), encoding="utf-8")
+
+    def unproven():
+        guard_report.unlink(missing_ok=True)
+        assert _execute("audit", resolve) == 0
+
+    _assert_step_lifecycle(
+        "audit",
+        step_env,
+        set_state=lambda s: write_state(summary=s),
+        day1_str="unmapped compose",
+        day1_match="unmapped compose",
+        age=1,
+        day2_str="unmapped compose v2",
+        day2_day=2,
+        unproven_fn=unproven,
+        clean_fn=lambda: write_state(summary=""),
+        clean_step="resolve",
+        resolved_header="✅ [已恢复] 部署守卫审计",
+    )
+
+
+def test_scheduled_app_audit_steps_page_report_and_resolve(step_env, tmp_path) -> None:
+    import common.deploy.deploy_guard_audit as dga
+
+    api, ch, monkeypatch = step_env
+    alert, resolve = DEDUPED_JOBS["scheduled-app-audit"]
+    guard_report = tmp_path / "deploy-guard-audit-report.json"
     hook_report = tmp_path / "scheduled-audit-result.json"
     monkeypatch.setenv(dga.REPORT_ENV, str(guard_report))
     monkeypatch.setenv("SCHEDULED_AUDIT_RESULT", str(hook_report))
 
     def write_state(
-        *, guard_fail=False, hook_summary="verdict age 49h", skip_hooks=False
+        *, canary_fail=False, hook_summary="verdict age 49h", skip_hooks=False
     ):
-        checks = {k: {"status": "pass", "summary": k} for k in dga.ALL_GUARD_KEYS}
-        if guard_fail:
-            checks["guard:fanout-sufficiency"] = {
+        checks = {k: {"status": "pass", "summary": k} for k in dga.RUNTIME_GUARD_KEYS}
+        if canary_fail:
+            checks["guard:canary-verify-staging"] = {
                 "status": "fail",
-                "summary": "unmapped compose",
+                "summary": "canary staging down",
             }
         guard_report.write_text(json.dumps({"checks": checks}), encoding="utf-8")
         if skip_hooks:
@@ -1555,13 +1593,13 @@ def test_audit_steps_page_report_and_resolve(step_env, tmp_path) -> None:
 
     def unproven():
         write_state(hook_summary="", skip_hooks=True)
-        assert _execute("audit", resolve) == 0
-        write_state(guard_fail=True, hook_summary="verdict age 73h")
-        assert _execute("audit", alert) == 0
-        assert len(ch.pages) == 2 and "guard:fanout-sufficiency" in ch.pages[-1]
+        assert _execute("scheduled-app-audit", resolve) == 0
+        write_state(canary_fail=True, hook_summary="verdict age 73h")
+        assert _execute("scheduled-app-audit", alert) == 0
+        assert len(ch.pages) == 2 and "guard:canary-verify-staging" in ch.pages[-1]
 
     _assert_step_lifecycle(
-        "audit",
+        "scheduled-app-audit",
         step_env,
         set_state=lambda s: write_state(hook_summary=s),
         day1_str="verdict age 49h",
@@ -1570,9 +1608,9 @@ def test_audit_steps_page_report_and_resolve(step_env, tmp_path) -> None:
         day2_str="verdict age 73h",
         day2_day=2,
         unproven_fn=unproven,
-        clean_fn=lambda: write_state(guard_fail=False, hook_summary=""),
+        clean_fn=lambda: write_state(canary_fail=False, hook_summary=""),
         clean_step="resolve",
-        resolved_header="✅ [已恢复] 部署守卫与应用运行态审计",
+        resolved_header="✅ [已恢复] 应用运行态与 Canary 定时审计",
     )
 
 

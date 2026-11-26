@@ -70,13 +70,13 @@ def violations(workflow: dict) -> list[str]:
         found.append("the workflow default is not read-only: holds contents: write")
     if not _writes_contents(workflow, operation):
         found.append("operation cannot push the production marker")
-    for name in ("pre", "operation", "post"):
+    for name in ("pre", "operation", "post", "sync-inputs"):
         if jobs[name].get("permissions") is None:
             found.append(f"{name} sets no permissions of its own")
     allowed = contract.UNGATED_SECRET_LIMITS[(NAME, "post")]
     if _secrets(post) - allowed:
         found.append(f"post reads secrets {sorted(_secrets(post) - allowed)}")
-    for name in ("pre", "operation", "post", "alert"):
+    for name in ("pre", "operation", "post", "alert", "sync-inputs"):
         uses = [s.get("uses") for s in jobs[name]["steps"]]
         if SETUP not in uses:
             found.append(f"{name} does not use the train-setup action")
@@ -173,7 +173,7 @@ def test_the_layout_rules_fail_under_each_mutation(mutation, needle) -> None:
 def _runs(expression: str, **context: object) -> bool:
     """Would GitHub run a job with this `if:`? Evaluates the forms that the train uses."""
     expr = expression.strip().removeprefix("${{").removesuffix("}}").strip()
-    expr = re.sub(r"needs\.(\w+)\.result", r'_needs["\1"]', expr)
+    expr = re.sub(r"needs\.([\w-]+)\.result", r'_needs.get("\1", "")', expr)
     expr = re.sub(r"inputs\.(\w+)", r'_inputs.get("\1", "")', expr)
     expr = expr.replace("github.event_name", "_event").replace("!cancelled()", "True")
     expr = expr.replace("&&", " and ").replace("||", " or ")
@@ -215,19 +215,27 @@ def test_a_deploy_run_asks_the_owner_only_after_pre_passed(
         assert not _runs(run, needs={"pre": result}, **ctx), (label, result)
 
 
-def test_a_run_that_is_not_a_deploy_run_skips_pre_and_still_runs_operation() -> None:
+def test_a_run_that_is_not_a_deploy_run_skips_pre_and_still_runs_the_target_job() -> (
+    None
+):
     for event, inputs in (
         ("schedule", {}),
         ("workflow_dispatch", {"sync_app_releases": True}),
-        ("workflow_dispatch", {"run_hook_slot": "smoke"}),
     ):
         ctx = {"event": event, "inputs": inputs}
         assert not _runs(_if("pre"), **ctx), (event, inputs)
-        assert _runs(_if("operation"), needs={"pre": "skipped"}, **ctx)
-        assert not _runs(_if("operation"), needs={"pre": "failure"}, **ctx)
-        assert not _runs(_if("post"), needs={"operation": "success"}, **ctx), (
-            "a sync or a hook slot run has no post phase"
-        )
+        assert _runs(_if("sync-inputs"), **ctx), (event, inputs)
+        assert not _runs(_if("operation"), needs={"pre": "skipped"}, **ctx)
+        assert not _runs(_if("post"), needs={"operation": "skipped"}, **ctx)
+
+    hook_ctx = {"event": "workflow_dispatch", "inputs": {"run_hook_slot": "smoke"}}
+    assert not _runs(_if("pre"), **hook_ctx)
+    assert not _runs(_if("sync-inputs"), **hook_ctx)
+    assert _runs(_if("operation"), needs={"pre": "skipped"}, **hook_ctx)
+    assert not _runs(_if("operation"), needs={"pre": "failure"}, **hook_ctx)
+    assert not _runs(_if("post"), needs={"operation": "success"}, **hook_ctx), (
+        "a hook slot run has no post phase"
+    )
 
 
 def test_post_follows_a_passed_operation_and_can_run_alone_on_a_dispatch() -> None:
@@ -263,15 +271,26 @@ def test_alert_skips_green_schedule_or_sync_runs_and_runs_otherwise() -> None:
         ("workflow_dispatch", {"sync_app_releases": True}),
     ):
         assert not _runs(
-            alert_if, needs={"operation": "success"}, event=event, inputs=inputs
+            alert_if,
+            needs={"operation": "skipped", "sync-inputs": "success"},
+            event=event,
+            inputs=inputs,
         )
         assert _runs(
-            alert_if, needs={"operation": "failure"}, event=event, inputs=inputs
+            alert_if,
+            needs={"operation": "skipped", "sync-inputs": "failure"},
+            event=event,
+            inputs=inputs,
         )
-    assert _runs(alert_if, needs={"operation": "success"}, event="push", inputs={})
+    assert _runs(
+        alert_if,
+        needs={"operation": "success", "sync-inputs": "skipped"},
+        event="push",
+        inputs={},
+    )
     assert not _runs(
         alert_if,
-        needs={"operation": "failure"},
+        needs={"operation": "failure", "sync-inputs": "skipped"},
         event="workflow_dispatch",
         inputs={"dry_run": True},
     )
@@ -338,23 +357,23 @@ def test_the_contract_gates_a_production_run_through_the_same_single_job() -> No
     assert contract.GATED_JOBS[(NAME, "operation")] == "inputs.promote_prod"
     assert (NAME, "reconcile") not in contract.GATED_JOBS
     assert [k for k in contract.GATED_JOBS if k[0] == NAME] == [(NAME, "operation")]
-    # AFTER: the secrets of the old job are read by `operation`, `post` and `alert` only
+    # AFTER: the secrets of the old job are partitioned by role (`operation`, `post`, `alert`, `sync-inputs`)
     reads = {name: contract._secrets_read(job) for name, job in jobs.items()}
     assert reads["pre"] == set()
     assert (
         set().union(*reads.values())
         == set(BEFORE_SECRETS) | ALLOWED_POST_SPLIT_OPERATION_SECRETS
     )
-    assert ALLOWED_POST_SPLIT_OPERATION_SECRETS <= reads["operation"]
+    assert reads["sync-inputs"] == ALLOWED_POST_SPLIT_OPERATION_SECRETS
     # every deploy secret and `contents: write` stay in the gated job
     assert DEPLOY_SECRETS <= reads["operation"]
-    for name in ("pre", "post", "alert"):
+    for name in ("pre", "post", "alert", "sync-inputs"):
         assert not DEPLOY_SECRETS & reads[name], name
-        assert not ALLOWED_POST_SPLIT_OPERATION_SECRETS & reads[name], name
         assert not contract._writes_contents(workflow, jobs[name]), name
     assert contract._writes_contents(workflow, jobs["operation"])
-    # the two ungated jobs read only what their limit names, and nothing is unclassified
-    for name in ("post", "alert"):
+    assert not (ALLOWED_POST_SPLIT_OPERATION_SECRETS & reads["operation"])
+    # every ungated job reads only what its limit names, and nothing is unclassified
+    for name in ("post", "alert", "sync-inputs"):
         assert reads[name] <= contract.UNGATED_SECRET_LIMITS[(NAME, name)], name
         assert (NAME, name) in contract.UNGATED_JOBS
     assert (NAME, "pre") not in contract.UNGATED_JOBS
@@ -498,28 +517,29 @@ def test_show_stage_card_receives_reports_feishu_env() -> None:
         assert effective_env.get(key) == f"${{{{ secrets.{key} }}}}"
 
 
-_EXPECTED_SYNC_TOKEN_EXPR = (
-    "${{ (github.event_name == 'schedule' || inputs.sync_app_releases) "
-    "&& secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}"
-)
+_EXPECTED_SYNC_TOKEN_EXPR = "${{ secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}"
 
 
 def _sync_token_violations(workflow: dict) -> list[str]:
-    """Verify the sync-app-releases path uses INFRA2_RELEASE_BOT_TOKEN for push & PR (#1791)."""
+    """Verify sync-inputs uses INFRA2_RELEASE_BOT_TOKEN for push & PR (#1791)."""
     found: list[str] = []
-    op = workflow["jobs"]["operation"]
-    checkout = next(s for s in op["steps"] if s.get("name") == "Checkout")
+    sync_job = workflow["jobs"]["sync-inputs"]
+    checkout = next(s for s in sync_job["steps"] if s.get("name") == "Checkout")
     if (checkout.get("with") or {}).get("token") != _EXPECTED_SYNC_TOKEN_EXPR:
         found.append(
-            "operation Checkout token must select INFRA2_RELEASE_BOT_TOKEN on sync runs"
+            "sync-inputs Checkout token must select INFRA2_RELEASE_BOT_TOKEN on sync runs"
         )
 
-    phase = next(s for s in op["steps"] if s.get("name") == "Operation phase")
-    if (phase.get("env") or {}).get("SYNC_PR_TOKEN") != _EXPECTED_SYNC_TOKEN_EXPR:
+    sync_step = next(
+        s
+        for s in sync_job["steps"]
+        if s.get("name") == "Sync App releases and SDK pins"
+    )
+    if (sync_step.get("env") or {}).get("SYNC_PR_TOKEN") != _EXPECTED_SYNC_TOKEN_EXPR:
         found.append(
-            "Operation phase env SYNC_PR_TOKEN must select INFRA2_RELEASE_BOT_TOKEN on sync runs"
+            "Sync App releases and SDK pins env SYNC_PR_TOKEN must select INFRA2_RELEASE_BOT_TOKEN"
         )
-    run_script = str(phase.get("run") or "")
+    run_script = str(sync_step.get("run") or "")
     expected_call = (
         'GITHUB_TOKEN="$SYNC_PR_TOKEN" '
         'GH_TOKEN="$SYNC_PR_TOKEN" '
@@ -529,6 +549,9 @@ def _sync_token_violations(workflow: dict) -> list[str]:
         found.append(
             "sync_args invocation must override GITHUB_TOKEN and GH_TOKEN with SYNC_PR_TOKEN"
         )
+    op = workflow["jobs"]["operation"]
+    if "INFRA2_RELEASE_BOT_TOKEN" in yaml.safe_dump(op):
+        found.append("operation must not read INFRA2_RELEASE_BOT_TOKEN after split")
     return found
 
 
@@ -537,24 +560,24 @@ def test_sync_app_releases_uses_bot_token_for_checkout_and_pr_creation() -> None
     assert _sync_token_violations(_load()) == []
 
     no_checkout_token = _mutate(
-        ["jobs", "operation", "steps", 0, "with", "token"], "${{ github.token }}"
+        ["jobs", "sync-inputs", "steps", 0, "with", "token"], "${{ github.token }}"
     )
     assert _sync_token_violations(no_checkout_token)
 
-    phase_idx = next(
+    sync_idx = next(
         i
-        for i, s in enumerate(_load()["jobs"]["operation"]["steps"])
-        if s.get("name") == "Operation phase"
+        for i, s in enumerate(_load()["jobs"]["sync-inputs"]["steps"])
+        if s.get("name") == "Sync App releases and SDK pins"
     )
     no_sync_env = _mutate(
-        ["jobs", "operation", "steps", phase_idx, "env", "SYNC_PR_TOKEN"], None
+        ["jobs", "sync-inputs", "steps", sync_idx, "env", "SYNC_PR_TOKEN"], None
     )
     assert _sync_token_violations(no_sync_env)
 
-    phase_run = str(_load()["jobs"]["operation"]["steps"][phase_idx]["run"])
+    sync_run = str(_load()["jobs"]["sync-inputs"]["steps"][sync_idx]["run"])
     unwrapped_sync_run = _mutate(
-        ["jobs", "operation", "steps", phase_idx, "run"],
-        phase_run.replace(
+        ["jobs", "sync-inputs", "steps", sync_idx, "run"],
+        sync_run.replace(
             'GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" ', ""
         ),
     )

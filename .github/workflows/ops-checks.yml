@@ -34,6 +34,7 @@ name: Ops Checks
         type: choice
         options:
           - deploy-guard-audit
+          - scheduled-app-audit
           - preview-leak-check
           - host-hygiene-schedule
           - out-of-band-watchdog
@@ -85,9 +86,8 @@ jobs:
     # signal: deploy-guard-audit
     name: Audit deploy dependency graph
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'all')) }}
-    # Pinned to 24.04: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build (#1543).
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -109,10 +109,6 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
-      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
-      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
-      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
       DEPLOY_GUARD_AUDIT_REPORT: ${{ github.workspace }}/deploy-guard-audit-report.json
       GITHUB_SERVER_URL: ${{ github.server_url }}
       GITHUB_REPOSITORY: ${{ github.repository }}
@@ -142,10 +138,6 @@ jobs:
         run: |
           uv sync --locked --no-dev
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-      - name: Restore App tool caches
-        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
-        uses: ./.github/actions/app-caches
 
       - name: Audit deploy fan-out coverage (sufficiency)
         run: python tools/deploy_guard_audit.py
@@ -184,6 +176,132 @@ jobs:
           else
             python tools/deploy_guard_audit.py --record-check guard:dokploy-autodeploy "Dokploy single deploy trigger" -- python -m invoke dokploy.audit-autodeploy
           fi
+
+      - name: Upload deploy-guard audit artifacts
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-guard-audit-results
+          path: deploy-guard-audit-report.json
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Alert on confirmed failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import dedup_page, run_url_from_env
+          from tools.deploy_guard_audit import (
+              STATIC_GUARD_KEYS,
+              confirmed_finding_pairs,
+              observed_all_clean,
+              unevaluated_prefixes,
+          )
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          pairs = confirmed_finding_pairs(os.environ, keys=STATIC_GUARD_KEYS, include_hooks=False)
+          if not pairs:
+              print("deploy-guard audit job failed without a confirmed finding -- not paging.")
+          detail = "\n".join(line for _key, line in pairs)
+          outcome = dedup_page(
+              os.environ,
+              job="audit",
+              label="部署守卫审计",
+              findings=pairs,
+              observed_clean=observed_all_clean(os.environ, keys=STATIC_GUARD_KEYS, include_hooks=False),
+              unevaluated=unevaluated_prefixes(os.environ, keys=STATIC_GUARD_KEYS, include_hooks=False),
+              detail=detail,
+              page_message=(
+                  f"🚨 Deploy-guard audit found {len(pairs)} failing check(s).\n"
+                  f"{detail}\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the paged failures
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+          from tools.deploy_guard_audit import STATIC_GUARD_KEYS, unevaluated_prefixes
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="audit",
+              label="部署守卫审计",
+              unevaluated=unevaluated_prefixes(os.environ, keys=STATIC_GUARD_KEYS, include_hooks=False),
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+  scheduled-app-audit:
+    # schedule-signal-exempt: isolates slow scheduled App runtime audits and Canary reality checks from fast static deploy guards (#1877)
+    name: Run scheduled App runtime audits and Canary verification
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'scheduled-app-audit' || inputs.task == 'all')) }}
+    # Pinned to 24.04: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build (#1543).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    env:
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+      DEPLOY_GUARD_AUDIT_REPORT: ${{ github.workspace }}/deploy-guard-audit-report.json
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Restore App tool caches
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
+        uses: ./.github/actions/app-caches
 
       - name: Run scheduled App runtime audits (#1493)
         if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
@@ -249,26 +367,27 @@ jobs:
           import os
           from common.observability.page_dedup import dedup_page, run_url_from_env
           from tools.deploy_guard_audit import (
+              RUNTIME_GUARD_KEYS,
               confirmed_finding_pairs,
               observed_all_clean,
               unevaluated_prefixes,
           )
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
-          pairs = confirmed_finding_pairs(os.environ)
+          pairs = confirmed_finding_pairs(os.environ, keys=RUNTIME_GUARD_KEYS, include_hooks=True)
           if not pairs:
-              print("deploy-guard audit job failed without a confirmed finding -- not paging.")
+              print("scheduled app audit job failed without a confirmed finding -- not paging.")
           detail = "\n".join(line for _key, line in pairs)
           outcome = dedup_page(
               os.environ,
-              job="audit",
-              label="部署守卫与应用运行态审计",
+              job="scheduled-app-audit",
+              label="应用运行态与 Canary 定时审计",
               findings=pairs,
-              observed_clean=observed_all_clean(os.environ),
-              unevaluated=unevaluated_prefixes(os.environ),
+              observed_clean=observed_all_clean(os.environ, keys=RUNTIME_GUARD_KEYS, include_hooks=True),
+              unevaluated=unevaluated_prefixes(os.environ, keys=RUNTIME_GUARD_KEYS, include_hooks=True),
               detail=detail,
               page_message=(
-                  f"🚨 Deploy-guard & App runtime audit found {len(pairs)} failing check(s).\n"
+                  f"🚨 Scheduled App runtime audit found {len(pairs)} failing check(s).\n"
                   f"{detail}\n"
                   f"Run: {run_url_from_env(os.environ)}"
               ),
@@ -285,14 +404,14 @@ jobs:
           python - <<'PY'
           import os
           from common.observability.page_dedup import resolve_page_state
-          from tools.deploy_guard_audit import unevaluated_prefixes
+          from tools.deploy_guard_audit import RUNTIME_GUARD_KEYS, unevaluated_prefixes
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
           outcome = resolve_page_state(
               os.environ,
-              job="audit",
-              label="部署守卫与应用运行态审计",
-              unevaluated=unevaluated_prefixes(os.environ),
+              job="scheduled-app-audit",
+              label="应用运行态与 Canary 定时审计",
+              unevaluated=unevaluated_prefixes(os.environ, keys=RUNTIME_GUARD_KEYS, include_hooks=True),
               deliver_page=deliver_out_of_band_alert,
           )
           raise SystemExit(outcome.exit_code)

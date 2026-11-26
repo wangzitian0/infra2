@@ -853,7 +853,8 @@ def test_reconcile_job_runs_on_ubuntu_24_04_for_playwright() -> None:
     """#1543: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     assert {job: spec["runs-on"] for job, spec in workflow["jobs"].items()} == {
-        job: "ubuntu-24.04" for job in ("pre", "operation", "post", "alert")
+        **{job: "ubuntu-24.04" for job in ("pre", "operation", "post", "alert")},
+        "sync-inputs": "ubuntu-latest",
     }
 
 
@@ -917,8 +918,11 @@ def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["jobs"]["operation"]["permissions"] == {
         "contents": "write",
-        "pull-requests": "write",
         "id-token": "write",
+    }
+    assert workflow["jobs"]["sync-inputs"]["permissions"] == {
+        "contents": "read",
+        "pull-requests": "write",
     }
     assert workflow["jobs"]["alert"]["permissions"]["issues"] == "write"
 
@@ -1014,7 +1018,11 @@ def test_reconcile_workflow_pages_on_failure_with_the_runner_diagnostics() -> No
     ):
         assert job["env"][key] == "${{ secrets.%s }}" % key
     # a refusal in `pre`, which holds no secret, still pages through this job
-    assert job["needs"] == ["pre", "operation", "post"]
+    assert job["needs"] == ["pre", "operation", "post", "sync-inputs"]
+    assert (
+        "needs.sync-inputs.result == 'failure' && 'sync-inputs'"
+        in job["env"]["FAILED_JOB"]
+    )
     assert "needs.pre.result == 'failure' && 'pre'" in job["env"]["FAILED_JOB"]
     names = [step.get("name") for step in job["steps"]]
     alert = job["steps"][names.index("Alert on failure")]
@@ -2433,19 +2441,20 @@ def test_reconcile_workflow_skips_deploy_outage_alert_when_sync_app_releases_fai
     names = [step.get("name") for step in steps]
     alert_step = steps[names.index("Alert on failure")]
 
+    sync_script = next(
+        step["run"]
+        for step in workflow["jobs"]["sync-inputs"]["steps"]
+        if step.get("name") == "Sync App releases and SDK pins"
+    )
     operation_script = next(
         step["run"]
         for step in workflow["jobs"]["operation"]["steps"]
         if step.get("name") == "Operation phase"
     )
     assert "RECONCILE_PHASE" not in operation_script
-    sync_cmd_idx = operation_script.index(
-        'python -m tools.reconcile_iac_inputs "${sync_args[@]}"'
-    )
-    deploy_cmd_idx = operation_script.index(
-        'python -m tools.reconcile_iac_inputs "${args[@]}"'
-    )
-    assert sync_cmd_idx < deploy_cmd_idx
+    assert "sync_args" not in operation_script
+    assert 'python -m tools.reconcile_iac_inputs "${sync_args[@]}"' in sync_script
+    assert 'python -m tools.reconcile_iac_inputs "${args[@]}"' in operation_script
     phase = alert_job["env"]["RECONCILE_PHASE"]
     assert (
         "(github.event_name == 'schedule' || inputs.sync_app_releases) && 'sync-app-releases'"
@@ -2861,29 +2870,29 @@ def test_reconcile_workflow_always_runs_gates_and_every_sync_exits_after_its_pr(
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
     assert "run_post_deploy_hooks" not in inputs
-    script = next(
+    operation_script = next(
         step["run"]
         for step in workflow["jobs"]["operation"]["steps"]
         if step.get("name") == "Operation phase"
     )
-    assert "run_post_deploy_hooks" not in script
-    # the flag is deleted: hooks always run, so no script passes or tests it (#1628)
-    assert "--run-post-deploy-hooks" not in script
+    sync_script = next(
+        step["run"]
+        for step in workflow["jobs"]["sync-inputs"]["steps"]
+        if step.get("name") == "Sync App releases and SDK pins"
+    )
+    for script in (operation_script, sync_script):
+        assert "run_post_deploy_hooks" not in script
+        # the flag is deleted: hooks always run, so no script passes or tests it (#1628)
+        assert "--run-post-deploy-hooks" not in script
     with pytest.raises(SystemExit) as refused:
         reconcile.main(["--run-post-deploy-hooks"])
     assert refused.value.code == 2  # argparse: unrecognized argument
-    sched_idx = script.index(
-        'if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then'
-    )
-    sched_block = script[
-        sched_idx : script.index('python -m tools.reconcile_iac_inputs "${args[@]}"')
-    ]
-    assert "--sync-app-releases --apply-repos-yaml --sync-gitlinks" in sched_block
-    assert "sync_args+=(--create-pr)" in sched_block
-    assert "promote_prod" not in sched_block
-    body = [line.strip() for line in sched_block.splitlines() if line.strip()]
-    assert body[-2:] == ["exit 0", "fi"]
-    assert "synced_infra_tag" not in script
+    assert "--sync-app-releases --apply-repos-yaml --sync-gitlinks" in sync_script
+    assert "sync_args+=(--create-pr)" in sync_script
+    assert "promote_prod" not in sync_script
+    assert "sync_app_releases" not in operation_script
+    assert "synced_infra_tag" not in operation_script
+    assert "synced_infra_tag" not in sync_script
 
 
 def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
@@ -3065,7 +3074,7 @@ def test_workflow_steps_that_run_hook_slots_supply_every_runner_secret_env() -> 
     assert {
         ("reconcile-iac-inputs.yml", "operation"),
         ("reconcile-iac-inputs.yml", "post"),
-        ("ops-checks.yml", "audit"),
+        ("ops-checks.yml", "scheduled-app-audit"),
     } <= runners
     assert table
     assert _unsupplied_runner_env(workflows, table) == []
@@ -3465,7 +3474,7 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
     assert {
         ("reconcile-iac-inputs.yml", "operation"),
         ("reconcile-iac-inputs.yml", "post"),
-        ("ops-checks.yml", "audit"),
+        ("ops-checks.yml", "scheduled-app-audit"),
     } <= runners
     assert _hook_steps_without_bun(workflows, raw_manifests) == []
 
@@ -3510,7 +3519,7 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
     steps.append(setup)
     assert len(_hook_steps_without_bun(mutated, raw_manifests)) == 1
 
-    # Mutation proof 4: a bun call in a scheduled_audit slot reaches the audit job only.
+    # Mutation proof 4: a bun call in a scheduled_audit slot reaches scheduled-app-audit only.
     ops_manifest = json.loads(_REAL_TA_HOOKS_MANIFEST_JSON)
     (audit_check,) = [
         c for c in ops_manifest["checks"] if c["id"] == "nightly_verdicts"
@@ -3518,7 +3527,7 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
     audit_check["bootstrap"] = "bun install --frozen-lockfile"
     problems = _hook_steps_without_bun(workflows, (json.dumps(ops_manifest),))
     assert len(problems) == 1
-    assert "ops-checks.yml job 'audit'" in problems[0]
+    assert "ops-checks.yml job 'scheduled-app-audit'" in problems[0]
     assert (
         "slot 'scheduled_audit' bootstrap 'bun install --frozen-lockfile'"
         in problems[0]
@@ -5252,14 +5261,21 @@ def test_sync_sdk_pins_never_moves_the_pin_down_and_skips_an_unpublished_image(
 
 
 def test_the_schedule_branch_runs_the_canary_pin_bot() -> None:
-    text = (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
-        encoding="utf-8"
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
+            encoding="utf-8"
+        )
     )
-    branch = text[text.index('if [[ "$EVENT_NAME" == "schedule"') :]
-    branch = branch[: branch.index("exit 0")]
-    assert "--sync-app-releases" in branch
-    assert "--sync-sdk-pins" in branch
-    assert branch.index("--sync-app-releases") < branch.index("--sync-sdk-pins")
+    sync_job = workflow["jobs"]["sync-inputs"]
+    assert "github.event_name == 'schedule'" in sync_job["if"]
+    script = next(
+        step["run"]
+        for step in sync_job["steps"]
+        if step.get("name") == "Sync App releases and SDK pins"
+    )
+    assert "--sync-app-releases" in script
+    assert "--sync-sdk-pins" in script
+    assert script.index("--sync-app-releases") < script.index("--sync-sdk-pins")
 
 
 def test_sync_sdk_pins_skips_scan_when_bumping_and_passes_wanted_when_current(

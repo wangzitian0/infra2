@@ -56,6 +56,14 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
         "staging-db-hygiene",
     ): "scheduled staging-only finance_report test-tenant and trace_records purge (#1624 AC2)",
     (
+        "ops-checks.yml",
+        "scheduled-app-audit",
+    ): "scheduled App runtime audits and Canary staging reality checks (#1493, #1877)",
+    (
+        "reconcile-iac-inputs.yml",
+        "sync-inputs",
+    ): "scheduled and manual PR sync for App release tags and SDK pins (#1877)",
+    (
         "reconcile-iac-inputs.yml",
         "post",
     ): "gate hooks of a deployed release: read-only health checks; it reads only the staging test-account secrets and a production run passes none (#1646)",
@@ -98,13 +106,16 @@ _WATCHDOG_SSH_SECRETS: frozenset[str] = frozenset(
 )
 
 UNGATED_SECRET_LIMITS: dict[tuple[str, str], frozenset[str]] = {
+    ("reconcile-iac-inputs.yml", "sync-inputs"): frozenset(
+        {"INFRA2_RELEASE_BOT_TOKEN"}
+    ),
     ("reconcile-iac-inputs.yml", "post"): _TA_HOOK_SECRETS,
     ("reconcile-iac-inputs.yml", "alert"): _ALERT_SECRETS,
     ("ops-checks.yml", "audit"): (
-        frozenset({"DOKPLOY_API_KEY", "INFRA2_HOOKS_READ_TOKEN"})
-        | _ALERT_SECRETS
-        | _WATCHDOG_SSH_SECRETS
-        | _TA_HOOK_SECRETS
+        frozenset({"DOKPLOY_API_KEY", "INFRA2_HOOKS_READ_TOKEN"}) | _ALERT_SECRETS
+    ),
+    ("ops-checks.yml", "scheduled-app-audit"): (
+        _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS | _TA_HOOK_SECRETS
     ),
     ("ops-checks.yml", "watchdog"): (
         frozenset(

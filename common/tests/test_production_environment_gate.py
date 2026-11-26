@@ -760,6 +760,9 @@ def test_every_ungated_job_declares_secret_limits() -> None:
     ("job_name", "extra_secret"),
     [
         ("audit", "IAC_WEBHOOK_SECRET"),
+        ("audit", "TA_PASSWORD"),
+        ("audit", "INFRA2_WATCHDOG_SSH_PRIVATE_KEY"),
+        ("scheduled-app-audit", "IAC_WEBHOOK_SECRET"),
         ("watchdog", "SIGNOZ_API_KEY"),
         ("digest", "DOKPLOY_API_KEY"),
         ("preview-leak-check", "INFRA2_WATCHDOG_SSH_PRIVATE_KEY"),
@@ -789,6 +792,36 @@ def test_ops_checks_ungated_job_fails_when_reading_secret_outside_limit(
     errors = contract_errors(mutated, GATED_JOBS, UNGATED_JOBS)
     assert any(
         f"ops-checks.yml:{job_name} is ungated and reads ['{extra_secret}'] outside its secret limit"
+        in e
+        for e in errors
+    ), errors
+
+
+@pytest.mark.parametrize("extra_secret", ["IAC_WEBHOOK_SECRET", "DOKPLOY_API_KEY"])
+def test_reconcile_sync_inputs_fails_when_reading_deploy_secret(
+    extra_secret: str,
+) -> None:
+    """Adding a deploy secret to reconcile-iac-inputs.yml:sync-inputs fails closed."""
+    workflows = _load_workflows(WORKFLOWS_DIR)
+    job = yaml.safe_load(
+        yaml.safe_dump(workflows["reconcile-iac-inputs.yml"]["jobs"]["sync-inputs"])
+    )
+    job.setdefault("env", {})["UNEXPECTED_SECRET"] = (
+        f"${{{{ secrets.{extra_secret} }}}}"
+    )
+    mutated = {
+        **workflows,
+        "reconcile-iac-inputs.yml": {
+            **workflows["reconcile-iac-inputs.yml"],
+            "jobs": {
+                **workflows["reconcile-iac-inputs.yml"]["jobs"],
+                "sync-inputs": job,
+            },
+        },
+    }
+    errors = contract_errors(mutated, GATED_JOBS, UNGATED_JOBS)
+    assert any(
+        f"reconcile-iac-inputs.yml:sync-inputs is ungated and reads ['{extra_secret}'] outside its secret limit"
         in e
         for e in errors
     ), errors

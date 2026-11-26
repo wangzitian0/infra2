@@ -490,14 +490,16 @@ def test_ops_checks_audit_job_records_staging_canary_verify(
         (repo_root / ".github/workflows/ops-checks.yml").read_text(encoding="utf-8")
     )
     audit_job = wf["jobs"]["audit"]
-    env = audit_job["env"]
+    assert "INFRA2_WATCHDOG_SSH_HOST" not in audit_job["env"]
+    scheduled_app_audit_job = wf["jobs"]["scheduled-app-audit"]
+    env = scheduled_app_audit_job["env"]
     assert env["INFRA2_WATCHDOG_SSH_HOST"] == "${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}"
     assert env["INFRA2_WATCHDOG_SSH_USER"] == "${{ secrets.INFRA2_WATCHDOG_SSH_USER }}"
     assert (
         env["INFRA2_WATCHDOG_SSH_PRIVATE_KEY"]
         == "${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}"
     )
-    steps = audit_job["steps"]
+    steps = scheduled_app_audit_job["steps"]
     verify_step = next(
         s for s in steps if s.get("name") == "Verify Canary Todo reality (staging)"
     )

@@ -119,9 +119,10 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
     ]
     # #962: the daily jobs that page keep their page-dedup state as issues; #1648 adds
     # the digest, preview-leak-check and host-hygiene-schedule failure alerts.
-    # #1493: audit records scheduled_audit App runtime hook verdicts as issues.
+    # #1493 / #1877: audit and scheduled-app-audit record guard and runtime hook verdicts as issues.
     assert writers == [
         "audit",
+        "scheduled-app-audit",
         "watchdog",
         "digest",
         "preview-leak-check",
