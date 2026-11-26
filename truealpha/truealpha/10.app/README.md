@@ -4,9 +4,8 @@ Two containers from the truealpha app repo's GHCR images
 (`ghcr.io/wangzitian0/truealpha-app-web`, `ghcr.io/wangzitian0/truealpha-llm-service`):
 
 - **web** — Next.js (standalone) at `truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`.
-  Reads the Postgres `mart` schema directly (the app's init.md rule 5) via the
-  Vault-rendered `DATABASE_URL` (`app_service_login`, `APP_SERVICE_DB_PASSWORD`);
-  migrations run with `MIGRATIONS_DATABASE_URL` (`postgres`). There is no web→llm API hop.
+  Zero-DB frontend calling `llm` via `LLM_SERVICE_URL`; requires no Vault secrets or
+  direct `DATABASE_URL`. Migrations run in `llm` with `MIGRATIONS_DATABASE_URL` (`postgres`).
 - **llm** — FastAPI at the same host under `PathPrefix(/api)` (stripped). Scope is
   LLM-call orchestration only: MCP endpoint first, `/chat` later (Tier 3).
 - **data-engine is deployed separately** from `../20.data_engine/` so real-source

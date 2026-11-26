@@ -223,45 +223,25 @@ services:
         max-size: "5m"
         max-file: "2"
     depends_on:
-      vault-agent:
+      llm:
         condition: service_healthy
-      db:
-        condition: service_healthy
-    entrypoint:
-      - sh
-      - -c
-      - |
-        # The web app reads the mart schema directly (truealpha init.md rule 5):
-        # DATABASE_URL comes from Vault like the llm-service's, no API hop.
-        while [ ! -f /secrets/.env ]; do
-          echo "Waiting for secrets..."
-          sleep 1
-        done
-        set -a
-        . /secrets/.env
-        set +a
-        # PREVIEW OVERRIDE — see the llm service above for the rationale.
-        export DATABASE_URL="$$DATABASE_URL"
-        exec node server.js
+    # Zero-DB web frontend: calls llm over LLM_SERVICE_URL; never mounts Vault secrets or waits on /secrets/.env.
+    command:
+      - node
+      - server.js
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
-      # A preview reads staging's secrets (the generated template is fixed to that
-      # environment) and, since truealpha#780, llm-service validates its injected
-      # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
-      # same instance the staging stack uses.
       ENVIRONMENT: preview
       # The app-web origin resolver reads it (truealpha v0.2.132); no fixed host.
       LLM_SERVICE_URL: http://truealpha-llm${ENV_SUFFIX}:8000
       NODE_ENV: production
-      S3_ENDPOINT: http://platform-s3-staging:9000
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-preview}
       HOSTNAME: 0.0.0.0
       PORT: "3000"
-      DATABASE_URL: postgresql://ephemeral:ephemeral@truealpha-preview-db${ENV_SUFFIX}:5432/preview
     healthcheck:
       # busybox wget ships with the alpine runtime image. 127.0.0.1, not localhost:
       # busybox wget doesn't fall back across address families, and alpine resolves
