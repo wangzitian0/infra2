@@ -1,0 +1,94 @@
+name: Platform Images
+
+# CI builds each image of common/deploy/platform_images.py and pushes it to GHCR (#1822).
+# A raw Dokploy compose has no checkout, so a stack cannot build its image at deploy time.
+# The tag is the hash of the image input files. A tag that is on GHCR is not pushed again,
+# so a tag holds one image. The compose pins <tag>@sha256:<digest>; this job fails when
+# the pinned digest is not the GHCR digest of the tag, and prints the correct pin.
+# This workflow writes images only. It deploys nothing and changes no environment.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Do not cancel a running push: a cancelled run can leave a tag without its check.
+  group: platform-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    name: Platform image tags
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.matrix.outputs.images }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Compute the image tags from the input files
+        id: matrix
+        run: |
+          images="$(uv run --locked python -m common.deploy.platform_images matrix)"
+          echo "$images"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish ${{ matrix.key }}
+    needs: matrix
+    # A fork pull request gets no packages:write token.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.images) }}
+    env:
+      IMAGE: ${{ matrix.image }}
+      DOCKERFILE: ${{ matrix.dockerfile }}
+      CONTEXT: ${{ matrix.context }}
+      COMPOSE: ${{ matrix.compose }}
+      PINNED_DIGEST: ${{ matrix.pinned_digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and push the tag when it is not on GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "$IMAGE is on GHCR; no build and no push" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -f "$DOCKERFILE" -t "$IMAGE" "$CONTEXT"
+          docker push "$IMAGE"
+      - name: The compose pins the GHCR digest of the tag
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE" | awk '/^Digest:/ {print $2; exit}')"
+          echo "pin: $IMAGE@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$digest" != "$PINNED_DIGEST" ]; then
+            echo "::error file=$COMPOSE::$COMPOSE pins '${PINNED_DIGEST:-none}'. Set the image to $IMAGE@$digest"
+            exit 1
+          fi
+      - name: The VPS can pull the tag without credentials
+        run: |
+          docker logout ghcr.io
+          if ! docker manifest inspect "$IMAGE" > /dev/null; then
+            echo "::error::$IMAGE does not pull without credentials. Set the GHCR package to public once."
+            exit 1
+          fi

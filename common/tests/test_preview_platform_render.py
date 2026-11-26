@@ -17,6 +17,7 @@ import yaml
 from common.deploy import preview as pl
 from common.deploy.preview import PreviewDeps, PreviewOptions
 from common.deploy.env_config import preview_service_config
+from common.deploy.platform_images import PLATFORM_IMAGES
 from common.tests.test_preview_lifecycle import FakeDokploy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -222,8 +223,15 @@ def test_slot_backing_services_use_the_platform_unit_images():
         slot["postgres"]["image"]
         == _services("platform/01.postgres/compose.yaml")["postgres"]["image"]
     )
+    # The unit runs the GHCR image that CI builds from platform/03.s3/Dockerfile (#1822).
+    # The slot has a checkout and builds the same Dockerfile.
     s3 = _services("platform/03.s3/compose.yaml")["s3"]
-    assert slot["s3"]["build"] == s3["build"] and slot["s3"]["image"] == s3["image"]
+    published = PLATFORM_IMAGES["s3"]
+    assert published.pin_re.match(s3["image"]), s3["image"]
+    assert slot["s3"]["build"] == {
+        "context": "../..",
+        "dockerfile": published.dockerfile,
+    }
 
 
 def test_slot_postgres_keeps_no_data_across_up():

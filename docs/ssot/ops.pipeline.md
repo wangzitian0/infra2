@@ -595,6 +595,17 @@ promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Act
 即为缺失),并在其后通过公网 `/api/health` 校验 HTTP 200、`status == "ok"` 与版本身份(`version`/`git_sha`
 匹配目标 `image_tag`,#569);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。
 
+### 5.4 Platform images built by CI (#1822)
+
+A raw Dokploy compose (`sourceType="raw"`) has no checkout, so a platform stack cannot `build:` its image at deploy time.
+
+- `common/deploy/platform_images.py` `PLATFORM_IMAGES` is the one list of these images: key, GHCR repository, Dockerfile, build context, compose file and services.
+- The tag is the first 32 hex characters of the input hash: sha256 over `<repo-relative path>:<sha256>` of the Dockerfile and each file that it copies.
+- The compose pins `<repository>:<tag>@sha256:<digest>`. `python -m common.deploy.platform_images check` and `common/tests/test_platform_images.py` fail when the pinned tag is not the tag of the input files.
+- `.github/workflows/platform-images.yml` runs on each pull request and each push to `main`. It builds and pushes each tag that GHCR does not have, and it never pushes a tag again.
+- The `publish` job prints the pin and fails when the compose digest is not the GHCR digest of the tag, or when the tag does not pull without credentials. Set a new GHCR package to public once.
+- Flow for a Dockerfile edit: change the file and the tag, push the branch, then copy the printed `pin:` line into the compose.
+
 ## 6. 设计约束 (Dos & Don'ts)
 
 ### ✅ 推荐
