@@ -520,14 +520,19 @@ def test_sync_app_releases_uses_bot_token_for_checkout_and_pr_creation() -> None
     )
     assert _sync_token_violations(no_checkout_token)
 
+    phase_idx = next(
+        i
+        for i, s in enumerate(_load()["jobs"]["operation"]["steps"])
+        if s.get("name") == "Operation phase"
+    )
     no_sync_env = _mutate(
-        ["jobs", "operation", "steps", 3, "env", "SYNC_PR_TOKEN"], None
+        ["jobs", "operation", "steps", phase_idx, "env", "SYNC_PR_TOKEN"], None
     )
     assert _sync_token_violations(no_sync_env)
 
-    phase_run = str(_load()["jobs"]["operation"]["steps"][3]["run"])
+    phase_run = str(_load()["jobs"]["operation"]["steps"][phase_idx]["run"])
     unwrapped_sync_run = _mutate(
-        ["jobs", "operation", "steps", 3, "run"],
+        ["jobs", "operation", "steps", phase_idx, "run"],
         phase_run.replace(
             'GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" ', ""
         ),

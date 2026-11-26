@@ -702,7 +702,7 @@ def test_reconcile_plan_gate_fetches_pr_base_sha_and_fails_on_diff_error(
             .replace("${{ github.event.pull_request.base.sha }}", target_base)
             .replace("${{ needs.detect-changes.outputs.has_non_doc }}", has_non_doc)
             .replace(
-                "uv run --locked python -m tools.reconcile_iac_inputs",
+                "uv run --locked --no-sync python -m tools.reconcile_iac_inputs",
                 "printf 'RECONCILE:%s\\n'",
             )
         )
@@ -834,7 +834,7 @@ def test_reconcile_plan_gate_fetches_pr_base_sha_and_fails_on_diff_error(
             .replace("${{ github.event.pull_request.base.sha }}", sub_base)
             .replace("${{ needs.detect-changes.outputs.has_non_doc }}", "true")
             .replace(
-                "uv run --locked python -m tools.reconcile_iac_inputs",
+                "uv run --locked --no-sync python -m tools.reconcile_iac_inputs",
                 "printf 'RECONCILE:%s\\n'",
             ),
         ],

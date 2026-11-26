@@ -17,21 +17,98 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import common.alerting
 from common.alerting.card import build_feishu_report_card
-from common.alerting.release_card import bounded, publish_card
 from common.alerting.types import redact_secrets
 from infra2_sdk.stage_record import StageRecord
 
 MAX_CHECK_LINES = 12
 MAX_DETAIL_CHARS = 80
 STAGE_CARD_BUDGET_SECONDS = 15.0
+ROLLBACK_BUDGET_SECONDS = 20.0
 PHASES = ("pre", "operation", "post")
+MESSAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_ABANDONED: list[threading.Thread] = []
+
+
+def _warn(action: str, exc: Exception) -> None:
+    print(
+        f"::warning title=Stage card::{action} failed: {type(exc).__name__}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def publish_card(
+    env: Mapping[str, str],
+    rendered: dict[str, Any],
+    message_id: str = "",
+    *,
+    timeout: float = 10.0,
+    report: bool = False,
+) -> str:
+    """Create the card (no ``message_id``) or replace it. Return the message id."""
+    config = (
+        common.alerting.reports_app_config(env)
+        if report
+        else common.alerting.out_of_band_app_config(env)
+    )
+    if config["mode"] != "feishu_app":
+        return ""
+    if message_id:
+        common.alerting.update_feishu_app_card(
+            app_id=config["app_id"],
+            app_secret=config["app_secret"],
+            message_id=message_id,
+            card=rendered,
+            api_base=config["api_base"],
+            timeout=timeout,
+        )
+        return message_id
+    created = common.alerting.message_id_of(
+        common.alerting.deliver_feishu_app_card(
+            app_id=config["app_id"],
+            app_secret=config["app_secret"],
+            chat_id=config["chat_id"],
+            api_base=config["api_base"],
+            card=rendered,
+            timeout=timeout,
+        )
+    )
+    if created and not MESSAGE_ID_PATTERN.match(created):
+        raise ValueError("the Feishu message id has an unexpected shape")
+    return created
+
+
+def bounded(call: Callable[[], Any], seconds: float, default: Any) -> Any:
+    """Run ``call`` in a daemon thread. Return its result, or ``default`` after ``seconds``."""
+    result: list[Any] = [default]
+
+    def target() -> None:
+        try:
+            result[0] = call()
+        except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
+            _warn("bounded call", exc)
+
+    thread = threading.Thread(target=target, daemon=True, name="stage-card")
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        _ABANDONED.append(thread)
+        print(
+            f"::warning title=Stage card::no answer within {seconds:g} s",
+            file=sys.stderr,
+            flush=True,
+        )
+        return default
+    return result[0]
 
 
 def _label(records: Sequence[StageRecord]) -> tuple[str, str]:

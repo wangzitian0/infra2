@@ -279,10 +279,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          # common/env.py and common/secrets_supply.py import infra2-sdk; install the wheel
-          # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
-          uv pip install --system invoke httpx python-dotenv rich \
-            "$(python tools/sdk_requirement.py)"
+          uv sync --locked
 
       # Fail fast left to right: run sub-second static, SSOT and drift gates first
       # so documentation/contract drift fails in <5 seconds rather than waiting for
@@ -293,7 +290,7 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           # tools.ci_gate_audit --enforce
-          uv run --locked python -m tools.ci_runner preflight
+          uv run --locked --no-sync python -m tools.ci_runner preflight
 
       # The finance_report alert contract tests read the files that PINNED_FILES of
       # common/tests/finance_report_sources.py names, at the repos/finance_report gitlink
@@ -309,9 +306,9 @@ jobs:
           cd ${{ github.workspace }}
           sha=$(git ls-files --stage -- repos/finance_report | awk '$1 == "160000" {print $2}')
           test -n "$sha"
-          url=$(uv run --locked python -c "from common.tests.finance_report_sources import APP_SOURCES, SERVICE_ID; print('https://github.com/' + APP_SOURCES[SERVICE_ID] + '.git')")
+          url=$(uv run --locked --no-sync python -c "from common.tests.finance_report_sources import APP_SOURCES, SERVICE_ID; print('https://github.com/' + APP_SOURCES[SERVICE_ID] + '.git')")
           files="$RUNNER_TEMP/finance_report_files"
-          uv run --locked python -c "from common.tests.finance_report_sources import PINNED_FILES; print(chr(10).join(PINNED_FILES))" > "$files"
+          uv run --locked --no-sync python -c "from common.tests.finance_report_sources import PINNED_FILES; print(chr(10).join(PINNED_FILES))" > "$files"
           pin="$RUNNER_TEMP/finance_report_pin"
           git init -q "$pin"
           git -C "$pin" remote add origin "$url"
@@ -350,20 +347,19 @@ jobs:
           # Guard: fail when a vendored app manifest returns under contracts/. Since #1320 this
           # script fetches nothing; deploys read app manifests at the release commit.
           # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
-          uv run --locked python tools/fetch_app_manifests.py
+          uv run --locked --no-sync python tools/fetch_app_manifests.py
           # Guard: each App stack manifest copy equals its projection at the pinned release
           # tag (#1822). It reads the App manifests from GitHub, so only shard 1 runs it.
           if [[ "${{ matrix.shard }}" == "1" ]]; then
-            uv run --locked python tools/app_manifest_sync.py --check
+            uv run --locked --no-sync python tools/app_manifest_sync.py --check
             # The real verify_app_manifests (a unit test stubs it): each App stack, staging
             # and prod, at the pinned and the production release tags (#1822, v3.1.148).
-            uv run --locked python tools/app_manifest_verify.py
+            uv run --locked --no-sync python tools/app_manifest_verify.py
           fi
-          uv run --locked python tools/lint_anti_tautology.py common/tests
           # Print the runner facts that explain a slow run (#1494). The worker count comes
           # from pytest-xdist's own hook, so it equals what `-n auto` uses. Never fail the step.
-          uv run --locked python -c "import os, types, xdist.plugin as p; cpu = next((l.split(':', 1)[1].strip() for l in open('/proc/cpuinfo') if l.startswith('model name')), 'unknown') if os.path.exists('/proc/cpuinfo') else 'unknown'; print('runner: nproc=%s cpu_model=%s xdist_workers=%s' % (os.cpu_count(), cpu, p.pytest_xdist_auto_num_workers(types.SimpleNamespace(option=types.SimpleNamespace(numprocesses='auto')))))" || echo "runner: facts unavailable"
-          uv run --locked python -m pytest common/tests -q -n auto \
+          uv run --locked --no-sync python -c "import os, types, xdist.plugin as p; cpu = next((l.split(':', 1)[1].strip() for l in open('/proc/cpuinfo') if l.startswith('model name')), 'unknown') if os.path.exists('/proc/cpuinfo') else 'unknown'; print('runner: nproc=%s cpu_model=%s xdist_workers=%s' % (os.cpu_count(), cpu, p.pytest_xdist_auto_num_workers(types.SimpleNamespace(option=types.SimpleNamespace(numprocesses='auto')))))" || echo "runner: facts unavailable"
+          uv run --locked --no-sync python -m pytest common/tests -q -n auto \
             -p pytest_shard --shard=${{ matrix.shard }}/${{ strategy.job-total }} \
             --cov=common \
             --cov=tools \
@@ -425,10 +421,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          # common/env.py and common/secrets_supply.py import infra2-sdk; install the wheel
-          # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
-          uv pip install --system invoke httpx python-dotenv rich \
-            "$(python tools/sdk_requirement.py)"
+          uv sync --locked --no-dev
 
       - name: Download coverage data of the shards
         if: needs.detect-changes.outputs.reuse_run_id == ''
@@ -452,9 +445,9 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           # --keep: leave the shard files in place for a rerun of this step.
-          uv run --locked coverage combine --keep coverage/.coverage.shard*
-          uv run --locked coverage report --show-missing
-          uv run --locked coverage xml -o coverage/infra2-coverage.xml
+          uv run --locked --no-sync coverage combine --keep coverage/.coverage.shard*
+          uv run --locked --no-sync coverage report --show-missing
+          uv run --locked --no-sync coverage xml -o coverage/infra2-coverage.xml
 
       - name: Upload infra coverage context
         uses: actions/upload-artifact@v7
@@ -478,7 +471,7 @@ jobs:
       - name: Gate coverage regression
         run: |
           cd ${{ github.workspace }}
-          uv run --locked python tools/coverage_regression_audit.py
+          uv run --locked --no-sync python tools/coverage_regression_audit.py
 
       # Shift-left: surface what this PR would re-deploy once released, and prove the
       # reconcile plan BUILDS on these changes (deploy-dependencies fan-out + service
@@ -507,19 +500,17 @@ jobs:
           while IFS= read -r changed_file; do
             [[ -n "$changed_file" ]] && args+=(--changed-file "$changed_file")
           done <<< "$diff_out"
-          uv run --locked python -m tools.reconcile_iac_inputs "${args[@]}"
+          uv run --locked --no-sync python -m tools.reconcile_iac_inputs "${args[@]}"
 
       # #504/#541: the inventory's `blocks_merge: true` gates vs the LIVE GitHub branch
       # ruleset for main (the repo is public, so the default token can read the rules
-      # API). Report-only, matching the inventory audit above: a live-API check must not
-      # flake-block merges, and a transient API blip must not page (#425) — drift is
-      # printed on every run. Flip to `--enforce` once it has run clean for a while.
-      - name: Audit CI-gate inventory vs live ruleset (report-only)
+      # API). Enforced in CI (#1877) so missing or stale ruleset contexts fail closed.
+      - name: Audit CI-gate inventory vs live ruleset
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd ${{ github.workspace }}
-          uv run --locked python -m tools.ci_gate_ruleset_audit
+          uv run --locked --no-sync python -m tools.ci_gate_ruleset_audit --enforce
 
       # Print the measured load of each shard and merge the file seconds (#1602).
       # When the loads drift apart, copy the artifact to common/ci_plugins/shard_weights.json.
@@ -529,7 +520,7 @@ jobs:
         continue-on-error: true
         run: |
           cd ${{ github.workspace }}
-          uv run --locked python common/ci_plugins/pytest_shard.py merge \
+          uv run --locked --no-sync python common/ci_plugins/pytest_shard.py merge \
             coverage/shard_weights.json coverage/durations.shard*.json
 
       - name: Upload measured shard weights
@@ -601,56 +592,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Check vault-agent.hcl has required settings
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install Vault gate dependencies
         run: |
-          set -e
-          echo "🔍 Checking vault-agent.hcl files..."
-          failed=0
-          while IFS= read -r -d '' file; do
-            echo "Checking: $file"
-            if ! grep -q "exit_on_err = true" "$file"; then
-              echo "❌ Missing 'exit_on_err = true' in $file"
-              failed=1
-            fi
-            if ! grep -q "exit_on_retry_failure = true" "$file"; then
-              echo "❌ Missing 'exit_on_retry_failure = true' in $file"
-              failed=1
-            fi
-          done < <(find . -name "vault-agent.hcl" -type f -print0)
-          # Select composes by the sidecar's service key. The previous marker,
-          # VAULT_APP_TOKEN, left every compose with the AppRole migration (#369), so
-          # the four checks below skipped all 16 vault-agent composes and the job
-          # stayed green while truealpha/data_engine went unchecked (#713).
-          while IFS= read -r -d '' file; do
-            if ! grep -q "^  vault-agent:" "$file"; then
-              continue
-            fi
-            echo "Checking vault-agent health behavior: $file"
-            if ! grep -q "rm -f /vault/secrets/.env" "$file"; then
-              echo "❌ Vault agent does not clear stale secrets before auth in $file"
-              failed=1
-            fi
-            if ! grep -q "vault token lookup" "$file"; then
-              echo "❌ Vault agent healthcheck does not validate token lookup in $file"
-              failed=1
-            fi
-            if ! grep -q "<no value>" "$file"; then
-              echo "❌ Vault agent healthcheck does not reject unresolved template values in $file"
-              failed=1
-            fi
-            if grep -q "VAULT_AGENT_MAX_SECRET_AGE_SECONDS\\|stat -c %Y" "$file"; then
-              echo "❌ Vault agent Docker healthcheck must not use rendered-file mtime freshness in $file"
-              failed=1
-            fi
-          done < <(find . -name "compose.yaml" -type f -print0)
-          if [ $failed -eq 1 ]; then
-            echo ""
-            echo "⚠️  vault-agent.hcl files must have exit settings to prevent"
-            echo "   zombie containers when tokens expire. Compose healthchecks"
-            echo "   must validate token lookup and clear stale secrets."
-            exit 1
-          fi
-          echo "✅ All vault-agent files have required exit and health settings"
+          cd ${{ github.workspace }}
+          python3 -m pip install --quiet pyyaml python-hcl2 "$(python3 tools/sdk_requirement.py)"
+
+      - name: Run Vault agent, compose healthcheck, and policy checks
+        run: |
+          cd ${{ github.workspace }}
+          python3 -m tools.ci_runner vault --require-hcl2
 
   validate-vault-policy:
     name: Validate Vault Policy Syntax
@@ -658,8 +613,6 @@ jobs:
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # This job is advisory - vault policy fmt has container issues in GHA
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -717,15 +670,12 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          # common/env.py and common/secrets_supply.py import infra2-sdk; install the wheel
-          # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
-          uv pip install --system invoke httpx python-dotenv rich \
-            "$(python tools/sdk_requirement.py)"
+          uv sync --locked --no-dev
 
       - name: Validate Deployer classes and service facet matrix
         run: |
           cd ${{ github.workspace }}
-          python -m tools.ci_runner deployers
+          uv run --locked --no-sync python -m tools.ci_runner deployers
 
   lint-python:
     name: Lint Python Code
@@ -767,9 +717,10 @@ jobs:
   # the guard skips in one second (#1830). The schedule runs it in ops-checks.yml, report-only.
   promotion-probe:
     name: Probe the production promotion guard
+    needs: detect-changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.has_non_doc == 'true'
     permissions:
       contents: read
       # read the stage record artifacts

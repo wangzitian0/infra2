@@ -7,21 +7,16 @@
 # Scope is COMPUTED, not listed: a workflow's jobs must all be registered here exactly when
 # that workflow runs on a pull request (`pull_request` / `pull_request_target`), because that
 # is precisely when a job can appear on a PR without anyone deciding whether it gates merge.
-# Today that is infra-ci.yml, ops-checks.yml and docs.yml; the other 7 workflows never run on
-# a PR, so they are `out_of_scope_workflows` in the audit's JSON -- not backlog, just unable
-# to gate. Add `pull_request:` to a workflow and it becomes covered automatically; its jobs
-# then have to be registered or infra-ci.yml's `--enforce` step fails.
+# Today that is infra-ci.yml and docs.yml; the other workflows (including ops-checks.yml)
+# never run on a PR, so they are `out_of_scope_workflows` in the audit's JSON -- not backlog,
+# just unable to gate. Add `pull_request:` to a workflow and it becomes covered automatically;
+# its jobs then have to be registered or infra-ci.yml's `--enforce` step fails.
 #
-# Registering the ops-checks/docs jobs below finishes Infra-016 Phase 1 as it was written
-# (its D2 line scoped "infra-ci 7, ops-checks 6, ... drift reports", and `ops.scheduled_cleanup`
-# was defined for exactly this and sat unused). What epic #459 closed 2026-06-29 as "not
-# planned" was phases 3-4 -- app alignment and the cross-repo chain view -- not infra coverage.
-# See the Infra-016 entry of docs/project/archive/README.md.
-#
-# Every gate added by that backfill is `blocks_merge: false`: the set of blocks_merge:true
-# gates still equals, exactly, the 7 required status checks in the live branch ruleset, which
-# is what makes widening the audit provably non-loosening. Promoting any of these to
-# blocks_merge: true is a separate change that must add the ruleset context alongside it.
+# Non-PR scheduled operational jobs live in `.github/workflows/ops-checks.yml` and are not
+# listed here; only pull-request workflows belong in this merge-gate inventory.
+# Every non-ruleset gate below is `blocks_merge: false`: the set of `blocks_merge: true`
+# gates equals, exactly, the 7 required status checks in the live branch ruleset. Promoting
+# any gate to `blocks_merge: true` must add the ruleset context alongside it.
 version: 1
 repo_prefix: infra_ci.
 gates:
@@ -69,10 +64,7 @@ gates:
     task_category: vault_policy
     workflow: .github/workflows/infra-ci.yml
     job: validate-vault-policy
-    # The job itself is `continue-on-error: true` (GHA container issues with vault
-    # policy fmt, infra-ci.yml:303) so it can never fail the run — it cannot
-    # structurally block merge. blocks_merge: false makes the declaration match
-    # that reality instead of claiming a gate that can't actually gate (#504).
+    # Advisory job in infra-ci.yml; not listed in GitHub branch protection required checks.
     blocks_merge: false
     failure_semantics: vault-policy.hcl syntax is invalid (advisory only; does not block merge).
   - id: infra_ci.deployer_classes
@@ -137,13 +129,6 @@ gates:
     # (#1645); it gates nothing, and it holds no secret.
     blocks_merge: false
     failure_semantics: The CI post record of a commit on main is not written or not uploaded.
-  - id: infra_ci.hook_duration_report
-    stage: ops.scheduled_cleanup
-    task_category: duration_report
-    workflow: .github/workflows/ops-checks.yml
-    job: hook-duration-report
-    blocks_merge: false
-    failure_semantics: The stage records cannot be read, or the p95 duration of a hook is above 70% of its budget (a warning annotation only; the run stays green on a slow hook).
   - id: infra_ci.promotion_probe
     stage: github_ci.merge_authority
     task_category: change_detection
@@ -164,73 +149,3 @@ gates:
     # diff against origin/main (#1653). Does not block on `looser`, fails only on error.
     blocks_merge: false
     failure_semantics: The merge-gate replay over the last 20 merged PRs failed to execute or report.
-  - id: infra_ci.deploy_graph_audit
-    stage: ops.scheduled_cleanup
-    task_category: drift_report
-    workflow: .github/workflows/ops-checks.yml
-    job: audit
-    blocks_merge: false
-    failure_semantics: The scheduled deploy dependency-graph audit finds drift between declared and actual deploy edges.
-  - id: infra_ci.host_watchdog
-    stage: ops.scheduled_cleanup
-    task_category: host_watchdog
-    workflow: .github/workflows/ops-checks.yml
-    job: watchdog
-    blocks_merge: false
-    failure_semantics: The infra2 host or its alert bridge is unreachable or unhealthy.
-  - id: infra_ci.weekly_digest
-    stage: ops.scheduled_cleanup
-    task_category: drift_report
-    workflow: .github/workflows/ops-checks.yml
-    job: digest
-    blocks_merge: false
-    failure_semantics: The weekly operational digest cannot be built or delivered.
-  - id: infra_ci.preview_leak
-    stage: ops.scheduled_cleanup
-    task_category: preview_leak
-    workflow: .github/workflows/ops-checks.yml
-    job: preview-leak-check
-    blocks_merge: false
-    failure_semantics: A Dokploy preview outlived its PR and is still consuming a slot.
-  - id: infra_ci.host_hygiene_schedule
-    stage: ops.scheduled_cleanup
-    task_category: host_hygiene
-    workflow: .github/workflows/ops-checks.yml
-    job: host-hygiene-schedule
-    blocks_merge: false
-    failure_semantics: The VPS host-hygiene timer is missing or not scheduled as declared.
-  - id: infra_ci.facet_reconcile
-    stage: ops.scheduled_cleanup
-    task_category: reconcile_plan
-    workflow: .github/workflows/ops-checks.yml
-    job: facet-reconcile
-    blocks_merge: false
-    failure_semantics: compose_id, config-hash or DNS has drifted from the declared facet state.
-  - id: infra_ci.vault_self_refresh_audit
-    stage: ops.scheduled_cleanup
-    task_category: vault_agent
-    workflow: .github/workflows/ops-checks.yml
-    job: vault-self-refresh-audit
-    blocks_merge: false
-    failure_semantics: Vault agent self-refresh has stopped renewing, so a lease is heading for expiry.
-  - id: infra_ci.secrets_reconcile
-    stage: ops.scheduled_cleanup
-    task_category: secret_preflight
-    workflow: .github/workflows/ops-checks.yml
-    job: secrets-reconcile
-    blocks_merge: false
-    failure_semantics: Declared secrets diverge from 1Password, or the account is near a capacity limit.
-  - id: infra_ci.staging_db_hygiene
-    stage: ops.scheduled_cleanup
-    task_category: host_hygiene
-    workflow: .github/workflows/ops-checks.yml
-    job: staging-db-hygiene
-    blocks_merge: false
-    failure_semantics: The scheduled finance_report staging test-tenant and trace_records purge failed.
-  - id: infra_ci.e2e_regressions_smoke
-    stage: prod.release_integrity
-    task_category: e2e_regression
-    workflow: .github/workflows/ops-checks.yml
-    job: e2e-regressions-smoke
-    blocks_merge: false
-    failure_semantics: The production e2e regression smoke fails against the live deployment.

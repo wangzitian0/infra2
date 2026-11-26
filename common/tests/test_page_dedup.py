@@ -1351,24 +1351,25 @@ def test_vault_steps_page_report_and_resolve(step_env, tmp_path) -> None:
             ],
         }
 
+    def write_report(data: dict) -> None:
+        saved.write_text(json.dumps(data), encoding="utf-8")
+
     def unproven():
-        monkeypatch.setattr(vault, "run", lambda: report("?", "fail", "error"))
+        write_report(report("?", "fail", "error"))
         assert _execute("vault-self-refresh-audit", alert) == 0
         assert _execute("vault-self-refresh-audit", resolve) == 0
 
     _assert_step_lifecycle(
         "vault-self-refresh-audit",
         step_env,
-        set_state=lambda s: monkeypatch.setattr(vault, "run", lambda: report(s)),
+        set_state=lambda s: write_report(report(s)),
         day1_str="restarted 3 times",
         day1_match="restarted 3 times",
         age=2,
         day2_str="restarted 8 times",
         day2_day=3,
         unproven_fn=unproven,
-        clean_fn=lambda: monkeypatch.setattr(
-            vault, "run", lambda: report("ok", "pass", "pass")
-        ),
+        clean_fn=lambda: write_report(report("ok", "pass", "pass")),
         clean_step="alert",
         resolved_header="✅ [已恢复] Vault self-refresh 审计",
     )
@@ -1401,12 +1402,12 @@ def test_vault_info_for_a_check_that_could_not_compare_does_not_resolve_its_fail
             ],
         }
 
-    monkeypatch.setattr(vault, "run", lambda: report("fail", "fail"))
+    saved.write_text(json.dumps(report("fail", "fail")), encoding="utf-8")
     assert _execute("vault-self-refresh-audit", alert) == 0
     assert len(ch.pages) == 1
 
     # failed job, rerun passes on an `info`
-    monkeypatch.setattr(vault, "run", lambda: report("info", "pass"))
+    saved.write_text(json.dumps(report("info", "pass")), encoding="utf-8")
     assert _execute("vault-self-refresh-audit", alert) == 0
     # green job whose saved report has the same `info`
     saved.write_text(json.dumps(report("info", "pass")), encoding="utf-8")

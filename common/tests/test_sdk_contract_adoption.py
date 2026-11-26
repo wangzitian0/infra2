@@ -497,29 +497,38 @@ def test_python_embedded_in_workflows_and_shell_uses_only_the_published_contract
 
 
 def test_each_ops_checks_job_installs_the_declared_sdk_requirement() -> None:
-    """Each ops-checks job that installs the project first installs the locked SDK
-    wheel that tools/sdk_requirement.py reads from uv.lock (#1115)."""
+    """Each ops-checks job installs dependencies through either locked `uv sync`
+    against uv.lock or the hash-pinned `tools/sdk_requirement.py` wheel (#1115)."""
     workflow = yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8"))
     installers = {
         name: "\n".join(step.get("run", "") for step in job.get("steps", []))
         for name, job in workflow["jobs"].items()
         if any(
             "python -m pip install -e ." in step.get("run", "")
+            or "uv sync" in step.get("run", "")
             for step in job.get("steps", [])
         )
     }
-    # Eight jobs install the project today. A scan that finds fewer reads nothing,
-    # and the loop below would pass on an empty set.
     assert len(installers) >= 8, sorted(installers)
     for name, install_command in installers.items():
-        assert (
-            'sdk_requirement="$(python tools/sdk_requirement.py)"' in install_command
-        ), name
-        sdk_install = 'python -m pip install --no-deps "$sdk_requirement"'
-        assert sdk_install in install_command, name
-        assert install_command.index(sdk_install) < install_command.index(
-            "python -m pip install -e ."
-        ), name
+        if "python -m pip install -e ." in install_command:
+            assert (
+                'sdk_requirement="$(python tools/sdk_requirement.py)"'
+                in install_command
+            ), name
+            sdk_install = 'python -m pip install --no-deps "$sdk_requirement"'
+            assert sdk_install in install_command, name
+            assert install_command.index(sdk_install) < install_command.index(
+                "python -m pip install -e ."
+            ), name
+        else:
+            sync_lines = [
+                line.strip()
+                for line in install_command.splitlines()
+                if "uv sync" in line
+            ]
+            assert sync_lines and all("--locked" in line for line in sync_lines), name
+            assert "--no-verify-hashes" not in install_command, name
 
 
 def test_retired_compatibility_modules_stay_removed() -> None:

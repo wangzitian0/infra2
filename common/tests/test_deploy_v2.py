@@ -2725,3 +2725,52 @@ def test_deploy_v2_defaults_app_version_ref_from_repos_yaml_and_threads_bootstra
     assert rc == 0
     assert recorded_train_checks[-1] == ("truealpha/app", "v0.2.79", "staging", True)
     assert "[AUDIT] deploy_v2 bootstrap=True" in capsys.readouterr().err
+
+
+def test_deploy_yml_retires_prod_dispatch_and_verifies_bootstrap_main_ancestry() -> (
+    None
+):
+    """#1877: deploy.yml rejects direct prod dispatch fail-closed while preserving the
+    production contract selector, and bootstrap checks origin/main ancestry before SSH."""
+    import yaml
+
+    wf = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[2] / ".github/workflows/deploy.yml"
+        ).read_text(encoding="utf-8")
+    )
+    on_block = wf.get("on", wf.get(True))
+    type_input = on_block["workflow_dispatch"]["inputs"]["type"]
+    assert type_input["options"] == ["staging", "preview"]
+    assert "prod" not in type_input["options"]
+
+    deploy_job = wf["jobs"]["deploy"]
+    assert (
+        deploy_job["environment"]
+        == "${{ inputs.type == 'prod' && 'production' || 'staging' }}"
+    )
+    first_step = deploy_job["steps"][0]
+    assert first_step.get("if") == "${{ inputs.type == 'prod' }}"
+    assert "exit 1" in first_step["run"]
+    assert "reconcile-iac-inputs.yml" in first_step["run"]
+
+    bootstrap_steps = wf["jobs"]["bootstrap"]["steps"]
+    checkout = next(
+        s
+        for s in bootstrap_steps
+        if str(s.get("uses", "")).startswith("actions/checkout@")
+    )
+    assert checkout.get("with", {}).get("fetch-depth") == 0
+    step_names = [s.get("name", "") for s in bootstrap_steps]
+    ancestry_idx = next(
+        i
+        for i, s in enumerate(bootstrap_steps)
+        if 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main'
+        in str(s.get("run", ""))
+    )
+    ssh_idx = next(
+        i
+        for i, name in enumerate(step_names)
+        if "bootstrap" in name.lower() and i > ancestry_idx
+    )
+    assert ancestry_idx < ssh_idx

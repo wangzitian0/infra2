@@ -468,7 +468,7 @@ _SKIP_VERIFY = re.compile(r"NO_VERIFY_HASHES|--no-verify-hashes", re.I)
 MIN_STEPS_CALLING_THE_SCRIPT = {
     "workflows/deploy.yml": 1,
     "workflows/infra-ci.yml": 3,
-    "workflows/ops-checks.yml": 8,
+    "workflows/ops-checks.yml": 2,
     # the three jobs of the release train install through this composite action (#1646)
     "actions/train-setup/action.yml": 1,
 }
@@ -638,3 +638,26 @@ def test_the_expected_files_call_the_script() -> None:
             f"{name}: {found[name]} step(s) call tools/sdk_requirement.py, "
             f"expected at least {minimum}"
         )
+
+
+def test_every_uv_sync_or_run_step_locks_the_lockfile() -> None:
+    """Every `uv sync` or `uv run` command in GitHub workflows/actions must pass `--locked`."""
+    uv_steps = 0
+    ops_syncs = 0
+    for name, code in _steps():
+        for line in code.splitlines():
+            stripped = line.strip()
+            if not re.search(r"\buv\s+(?:sync|run)\b", stripped):
+                continue
+            uv_steps += 1
+            assert "--locked" in stripped, (
+                f"{name}: unlocked uv invocation: {stripped!r}"
+            )
+            if name == "workflows/ops-checks.yml" and re.search(
+                r"\buv\s+sync\b", stripped
+            ):
+                ops_syncs += 1
+    assert uv_steps >= 10, f"expected >= 10 locked uv steps, found {uv_steps}"
+    assert ops_syncs >= 9, (
+        f"expected >= 9 locked uv sync steps in ops-checks.yml, found {ops_syncs}"
+    )

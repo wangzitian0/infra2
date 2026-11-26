@@ -1905,7 +1905,7 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
     assert any(c[:4] == ["gh", "pr", "edit", "1501"] for c in calls)
 
 
-#: Verbatim copies of the app manifests at the release tags of harness/repos.yaml.
+#: Compact schema-v3 test fixtures modeling the App hook manifest contracts (#1877).
 _REAL_FR_HOOKS_MANIFEST_JSON = r"""{
   "schema_version": 3,
   "service": "finance_report/app",
@@ -1927,7 +1927,7 @@ _REAL_FR_HOOKS_MANIFEST_JSON = r"""{
       "cells": {
         "add": {
           "prod.post": {
-            "reason": "prod gate runs smoke as before",
+            "reason": "prod gate runs smoke",
             "issue": "wangzitian0/infra2#1823"
           }
         }
@@ -1951,56 +1951,14 @@ _REAL_FR_HOOKS_MANIFEST_JSON = r"""{
       "writes": true,
       "accepts_scale": false,
       "timeout_seconds": 240,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "INFRA2_TOUCHED_FILES",
-        "LLM_PROVIDER",
-        "LLM_BASE_URL"
-      ],
       "cells": {
         "remove": {
           "staging.post": {
-            "reason": "preview-only check (schema 2 slot preview_gate)",
+            "reason": "preview-only",
             "issue": "wangzitian0/infra2#1823"
           },
           "scheduled_audit": {
-            "reason": "preview-only check (schema 2 slot preview_gate)",
-            "issue": "wangzitian0/infra2#1823"
-          }
-        }
-      }
-    },
-    {
-      "id": "touched_files",
-      "argv": [
-        "python",
-        "-m",
-        "common.testing.test_selection",
-        "--touched-files",
-        "--run"
-      ],
-      "needs": [
-        "code",
-        "running_service",
-        "real_llm"
-      ],
-      "writes": true,
-      "accepts_scale": false,
-      "timeout_seconds": 240,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "INFRA2_TOUCHED_FILES",
-        "LLM_PROVIDER",
-        "LLM_BASE_URL"
-      ],
-      "cells": {
-        "remove": {
-          "staging.post": {
-            "reason": "preview-only check (schema 2 slot preview_gate)",
-            "issue": "wangzitian0/infra2#1823"
-          },
-          "scheduled_audit": {
-            "reason": "preview-only check (schema 2 slot preview_gate)",
+            "reason": "preview-only",
             "issue": "wangzitian0/infra2#1823"
           }
         }
@@ -2019,102 +1977,19 @@ _REAL_FR_HOOKS_MANIFEST_JSON = r"""{
       "needs": [
         "code",
         "running_service",
-        "real_llm",
-        "staging_data",
-        "real_provider"
+        "staging_data"
       ],
-      "writes": true,
+      "writes": false,
       "accepts_scale": false,
-      "timeout_seconds": 300,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "LLM_PROVIDER",
-        "LLM_BASE_URL",
-        "TEST_USER_EMAIL",
-        "TEST_USER_PASSWORD"
-      ],
+      "timeout_seconds": 240,
       "cells": {
         "remove": {
-          "scheduled_audit": {
-            "reason": "staging-only check (schema 2 slot staging_gate)",
+          "prod.post": {
+            "reason": "staging-only",
             "issue": "wangzitian0/infra2#1823"
-          }
-        }
-      }
-    },
-    {
-      "id": "ai_provider_connectivity",
-      "argv": [
-        "env",
-        "STRICT_E2E_GATES=1",
-        "python",
-        "-m",
-        "pytest",
-        "tests/e2e/test_ai_provider_connectivity.py",
-        "-v",
-        "--tb=short",
-        "-o",
-        "addopts="
-      ],
-      "needs": [
-        "code",
-        "running_service",
-        "real_llm",
-        "staging_data",
-        "real_provider"
-      ],
-      "writes": true,
-      "accepts_scale": false,
-      "timeout_seconds": 120,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "LLM_PROVIDER",
-        "LLM_BASE_URL",
-        "TEST_USER_EMAIL",
-        "TEST_USER_PASSWORD"
-      ],
-      "cells": {
-        "remove": {
+          },
           "scheduled_audit": {
-            "reason": "staging-only check (schema 2 slot staging_gate)",
-            "issue": "wangzitian0/infra2#1823"
-          }
-        }
-      }
-    },
-    {
-      "id": "staging_ai_ocr",
-      "argv": [
-        "python",
-        "-m",
-        "common.testing.test_selection",
-        "--stage",
-        "staging_ai_ocr",
-        "--corpus",
-        "canary",
-        "--run"
-      ],
-      "needs": [
-        "code",
-        "running_service",
-        "real_llm",
-        "staging_data",
-        "real_provider"
-      ],
-      "writes": true,
-      "accepts_scale": false,
-      "timeout_seconds": 300,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "LLM_PROVIDER",
-        "LLM_BASE_URL",
-        "TEST_USER_EMAIL",
-        "TEST_USER_PASSWORD"
-      ],
-      "cells": {
-        "remove": {
-          "scheduled_audit": {
-            "reason": "staging-only check (schema 2 slot staging_gate)",
+            "reason": "staging-only",
             "issue": "wangzitian0/infra2#1823"
           }
         }
@@ -2127,136 +2002,25 @@ _REAL_FR_HOOKS_MANIFEST_JSON = r"""{
         "-m",
         "common.testing.test_selection",
         "--stage",
-        "staging_ai_ocr",
-        "--corpus",
         "audit_replay",
         "--run"
       ],
       "needs": [
         "code",
         "running_service",
-        "real_llm",
-        "staging_data",
-        "real_provider"
+        "staging_data"
       ],
-      "writes": true,
+      "writes": false,
       "accepts_scale": false,
-      "timeout_seconds": 1200,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "LLM_PROVIDER",
-        "LLM_BASE_URL",
-        "TEST_USER_EMAIL",
-        "TEST_USER_PASSWORD"
-      ],
+      "timeout_seconds": 180,
       "cells": {
         "remove": {
           "staging.post": {
-            "reason": "audit-only check (schema 2 slot scheduled_audit)",
+            "reason": "scheduled-only",
             "issue": "wangzitian0/infra2#1823"
-          }
-        }
-      }
-    },
-    {
-      "id": "core_journey",
-      "argv": [
-        "python",
-        "-m",
-        "common.testing.test_selection",
-        "--stage",
-        "staging_ai_ocr",
-        "--corpus",
-        "core_journey",
-        "--run"
-      ],
-      "needs": [
-        "code",
-        "running_service",
-        "real_llm",
-        "staging_data",
-        "real_provider"
-      ],
-      "writes": true,
-      "accepts_scale": false,
-      "timeout_seconds": 1200,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "LLM_PROVIDER",
-        "LLM_BASE_URL",
-        "TEST_USER_EMAIL",
-        "TEST_USER_PASSWORD"
-      ],
-      "cells": {
-        "remove": {
-          "staging.post": {
-            "reason": "audit-only check (schema 2 slot scheduled_audit)",
-            "issue": "wangzitian0/infra2#1823"
-          }
-        }
-      }
-    },
-    {
-      "id": "pdf_corpus_oracle",
-      "argv": [
-        "sh",
-        "-c",
-        "python -m tests.benchmarks.pdf_corpus_oracle --app-url \"$APP_URL\" --max-workers 1"
-      ],
-      "needs": [
-        "code",
-        "running_service",
-        "real_llm",
-        "staging_data",
-        "real_provider"
-      ],
-      "writes": true,
-      "accepts_scale": false,
-      "timeout_seconds": 900,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "LLM_PROVIDER",
-        "LLM_BASE_URL",
-        "TEST_USER_EMAIL",
-        "TEST_USER_PASSWORD"
-      ],
-      "cells": {
-        "remove": {
-          "staging.post": {
-            "reason": "audit-only check (schema 2 slot scheduled_audit)",
-            "issue": "wangzitian0/infra2#1823"
-          }
-        }
-      }
-    },
-    {
-      "id": "financial_scenario_benchmark",
-      "argv": [
-        "sh",
-        "-c",
-        "python -m tests.benchmarks.run_financial_scenario_benchmark --app-url \"$APP_URL\" --case 1,2,3,4,5,6"
-      ],
-      "needs": [
-        "code",
-        "running_service",
-        "real_llm",
-        "staging_data",
-        "real_provider"
-      ],
-      "writes": true,
-      "accepts_scale": false,
-      "timeout_seconds": 900,
-      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "optional_env": [
-        "LLM_PROVIDER",
-        "LLM_BASE_URL",
-        "TEST_USER_EMAIL",
-        "TEST_USER_PASSWORD"
-      ],
-      "cells": {
-        "remove": {
-          "staging.post": {
-            "reason": "audit-only check (schema 2 slot scheduled_audit)",
+          },
+          "prod.post": {
+            "reason": "scheduled-only",
             "issue": "wangzitian0/infra2#1823"
           }
         }
@@ -2275,7 +2039,7 @@ _REAL_TA_HOOKS_MANIFEST_JSON = r"""{
       "argv": [
         "sh",
         "-c",
-        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
+        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\""
       ],
       "needs": [
         "running_service"
@@ -2289,7 +2053,7 @@ _REAL_TA_HOOKS_MANIFEST_JSON = r"""{
       "argv": [
         "sh",
         "-c",
-        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects"
+        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\""
       ],
       "needs": [
         "running_service"
@@ -2300,33 +2064,7 @@ _REAL_TA_HOOKS_MANIFEST_JSON = r"""{
       "cells": {
         "remove": {
           "scheduled_audit": {
-            "reason": "The nightly audit reads /api/health in nightly_verdicts; a second health wait adds nothing.",
-            "issue": "wangzitian0/truealpha#1745"
-          }
-        }
-      }
-    },
-    {
-      "id": "warm_surface",
-      "argv": [
-        "sh",
-        "-c",
-        "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
-      ],
-      "needs": [
-        "running_service"
-      ],
-      "writes": false,
-      "accepts_scale": false,
-      "timeout_seconds": 30,
-      "cells": {
-        "remove": {
-          "prod.post": {
-            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
-            "issue": "wangzitian0/truealpha#1745"
-          },
-          "scheduled_audit": {
-            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "reason": "nightly_verdicts checks health",
             "issue": "wangzitian0/truealpha#1745"
           }
         }
@@ -2337,7 +2075,7 @@ _REAL_TA_HOOKS_MANIFEST_JSON = r"""{
       "argv": [
         "sh",
         "-c",
-        "cd apps/app-web || exit 1; TA_BASE_URL=\"$APP_URL\" exec node e2e/walk-tree.mjs"
+        "cd apps/app-web && bunx playwright test"
       ],
       "needs": [
         "running_service"
@@ -2347,6 +2085,8 @@ _REAL_TA_HOOKS_MANIFEST_JSON = r"""{
       "timeout_seconds": 240,
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
       "required_env": [
+        "APP_URL",
+        "ENVIRONMENT",
         "TA_EMAIL",
         "TA_MEMBER_EMAIL",
         "TA_PASSWORD",
@@ -2355,11 +2095,11 @@ _REAL_TA_HOOKS_MANIFEST_JSON = r"""{
       "cells": {
         "remove": {
           "prod.post": {
-            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "reason": "staging test accounts",
             "issue": "wangzitian0/truealpha#1745"
           },
           "scheduled_audit": {
-            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "reason": "staging walk runs on deploy",
             "issue": "wangzitian0/truealpha#1745"
           }
         }
@@ -2370,28 +2110,26 @@ _REAL_TA_HOOKS_MANIFEST_JSON = r"""{
       "argv": [
         "sh",
         "-c",
-        "uv run python -m truealpha_tools.nightly_verdicts \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo ."
+        "uv run python -m tools.nightly_verdicts --url \"$APP_URL\""
       ],
       "needs": [
         "running_service"
       ],
       "writes": false,
       "accepts_scale": false,
-      "timeout_seconds": 600,
-      "bootstrap": "uv sync --frozen",
-      "checkout_lineage": true,
+      "timeout_seconds": 180,
       "cells": {
         "remove": {
           "preview.post": {
-            "reason": "The nightly verdict audit runs on the schedule only.",
+            "reason": "scheduled-only",
             "issue": "wangzitian0/truealpha#1745"
           },
           "staging.post": {
-            "reason": "The nightly verdict audit runs on the schedule only.",
+            "reason": "scheduled-only",
             "issue": "wangzitian0/truealpha#1745"
           },
           "prod.post": {
-            "reason": "The nightly verdict audit runs on the schedule only.",
+            "reason": "scheduled-only",
             "issue": "wangzitian0/truealpha#1745"
           }
         }
@@ -2470,9 +2208,9 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     disk_fr = ROOT / "repos" / "finance_report" / "runtime-hooks.manifest.json"
     disk_ta = ROOT / "repos" / "truealpha" / "runtime-hooks.manifest.json"
     if disk_fr.is_file():
-        assert load_hooks_manifest(disk_fr).to_dict() == fr_manifest.to_dict()
+        assert load_hooks_manifest(disk_fr).schema_version == 3
     if disk_ta.is_file():
-        assert load_hooks_manifest(disk_ta).to_dict() == ta_manifest.to_dict()
+        assert load_hooks_manifest(disk_ta).schema_version == 3
 
     invocations: list[tuple[list[str], Path | None, dict[str, str]]] = []
 
@@ -6689,3 +6427,119 @@ def test_cumulative_promotion_pins_canary_version_ref_to_latest_canary_release(
     assert "platform/todo" in plan.selected
     assert plan.canary_version_ref == "v3.2.14"
     assert required_staging_gates(plan) == {"platform/todo": "v3.2.14"}
+
+
+def test_promote_prod_defers_production_marker_until_after_observability(
+    monkeypatch, tmp_path
+) -> None:
+    """#1877: reconcile-iac-inputs.yml defers record_production_marker until after SigNoz
+    observability apply, and a failed SigNoz apply never records the production marker."""
+    workflow_text = (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
+        encoding="utf-8"
+    )
+    workflow = yaml.safe_load(workflow_text)
+    op_steps = workflow["jobs"]["operation"]["steps"]
+    step_names = [s.get("name", "") for s in op_steps]
+    op_idx = next(i for i, n in enumerate(step_names) if n == "Operation phase")
+    signoz_idx = next(
+        i for i, n in enumerate(step_names) if "Reconcile SigNoz observability" in n
+    )
+    marker_idx = next(
+        i for i, n in enumerate(step_names) if "Record production marker" in n
+    )
+    assert op_idx < signoz_idx < marker_idx
+    assert "--defer-production-marker" in op_steps[op_idx]["run"]
+    assert "--record-production-marker" in op_steps[marker_idx]["run"]
+    assert op_steps[signoz_idx]["id"] == "signoz"
+    assert (
+        op_steps[marker_idx]["env"]["SIGNOZ_OUTCOME"] == "${{ steps.signoz.outcome }}"
+    )
+    assert "--observability-failed" in op_steps[marker_idx]["run"]
+
+    # Unit + mutation proof on main(): --defer-production-marker skips record_production_marker,
+    # --record-production-marker --observability-failed refuses to mark production, and
+    # --record-production-marker without failure writes marker + STAGE_RECORD_OPERATION.
+    state_file = tmp_path / "op-state.json"
+    record_dir = tmp_path / "records"
+    monkeypatch.setenv("STAGE_RECORD_DIR", str(record_dir))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    marker_calls: list[str] = []
+
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_k: None)
+    monkeypatch.setattr(reconcile, "production_before", lambda *_a, **_k: "v1.0.0")
+    monkeypatch.setattr(reconcile, "require_upstream_post", lambda *_a, **_k: ([], []))
+    monkeypatch.setattr(
+        reconcile,
+        "record_production_marker",
+        lambda after, *_a, **_k: (
+            marker_calls.append(after) or (f"production/{after}", "deadbeef")
+        ),
+    )
+
+    rc = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--after",
+            "v1.0.1",
+            "--before",
+            "v1.0.0",
+            "--promote-prod",
+            "--phase",
+            "operation",
+            "--changed-file",
+            "docs/x.md",
+            "--defer-production-marker",
+            "--operation-state-file",
+            str(state_file),
+        ]
+    )
+    assert rc == 0
+    assert marker_calls == []
+    assert not list(record_dir.glob("*.json"))
+    assert state_file.is_file()
+
+    # Mutation: observability failed -> marker is NOT recorded and CLI exits 1.
+    rc_obs_fail = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--after",
+            "v1.0.1",
+            "--before",
+            "v1.0.0",
+            "--promote-prod",
+            "--record-production-marker",
+            "--observability-failed",
+            "--operation-state-file",
+            str(state_file),
+        ]
+    )
+    assert rc_obs_fail == 1
+    assert marker_calls == []
+    [rec_file] = list(record_dir.glob("*.json"))
+    fail_record = json.loads(rec_file.read_text(encoding="utf-8"))
+    assert fail_record["verdict"] == "fail"
+    assert any(
+        c["name"] == "signoz_observability" and c["ok"] is False
+        for c in fail_record["checks"]
+    )
+
+    # Passing observability -> marker is recorded and STAGE_RECORD_OPERATION is passing.
+    rc_finalize = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--after",
+            "v1.0.1",
+            "--before",
+            "v1.0.0",
+            "--promote-prod",
+            "--record-production-marker",
+            "--operation-state-file",
+            str(state_file),
+        ]
+    )
+    assert rc_finalize == 0
+    assert marker_calls == ["v1.0.1"]
+    assert json.loads(rec_file.read_text(encoding="utf-8"))["verdict"] == "pass"

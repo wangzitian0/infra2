@@ -943,15 +943,16 @@ def test_reconcile_record_upload_steps_fail_closed() -> None:
 
 def test_one_github_get_helper_and_one_card_publish_flow() -> None:
     import tools.ci_tree_reuse as reuse
-    from common.alerting import release_card, stage_card
+    from common.alerting import stage_card
     from common.deploy import github_api
 
     assert reuse.get_json is github_api.get_json
     assert stage_records.get_json is github_api.get_json
-    assert stage_card.publish_card is release_card.publish_card
+    assert callable(stage_card.publish_card)
+    assert callable(stage_card.bounded)
+    assert not (ROOT / "common/alerting/release_card.py").exists()
     for name in ("_headers",):
         assert not hasattr(stage_records, name)
-    assert not hasattr(release_card, "_deliver_card")
 
 
 def test_verified_sdk_versions_returns_only_canary_staging_gate_passed_versions() -> (

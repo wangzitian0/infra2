@@ -98,7 +98,7 @@ Budgets come from the SDK `stages.yaml` (`src/infra2_sdk/data/stages.yaml`, `bud
 8. Alert is event-driven. Report is time-driven ([ops.observability.md](./ops.observability.md) section 2, `docs/ssot/watchdog-signals.yaml`).
 9. Find the cause, Periodic report and Alert and watch read records and telemetry. They never deploy.
 
-**Hook grid: 15 cells, two owners, one policy table**
+**Hook grid: 16 cells, two owners, one policy table**
 
 A cell is one stage and one phase. A stage moves the artifact one step. Pre answers "can it move?". Post answers "is the result good?".
 
@@ -109,13 +109,13 @@ A cell is one stage and one phase. A stage moves the artifact one step. Pre answ
 | Preview | Platform: `contract` | Platform: the deploy from zero. App: `smoke`. | App: `preview_gate` |
 | Staging | Platform: `contract`, `provenance`, `env`, `upstream_post` | Platform: the deploy of the release tag. App: `smoke`. | App: `staging_gate` |
 | Prod | Platform: the same four checks, then the owner's approval | Platform: the promotion of the same artifact. App: `smoke`. | App: `prod_gate` |
+| Schedule | — | — | App: `scheduled_audit` |
 
-State: `stages.yaml` in the SDK has the 15 cells. `STAGE_HOOK_PLANS` derives the Preview, Staging, Prod and schedule rows from it. The Local row and the CI row have no scheduler entry.
+State: `stages.yaml` in the SDK has the 16 cells (15 grid cells plus `scheduled_audit`). `STAGE_HOOK_PLANS` derives the Preview, Staging, Prod and `scheduled_audit` rows from it. The Local row and the CI row have no scheduler entry.
 
 - The Platform owns 8 cells: the 5 operations and the pre of Preview, Staging and Prod. An App cannot change them.
-- An App owns 7 cells: the pre of Local and CI, and the 5 post cells. It also owns `smoke`.
+- An App owns 8 cells: the pre of Local and CI, the 5 post cells, and `scheduled_audit` (plus `smoke`).
 - Before the artifact exists, a check can read only the code, so the App owns pre. After that, the App checks the running service in post.
-- The clock is a second trigger of the Staging post and the Prod post. It is not a 16th cell. Its check list is `scheduled_audit`.
 
 **Roles**
 
@@ -130,12 +130,12 @@ State: `run_cell` in the SDK runs `smoke`, the three gate lists and `scheduled_a
 
 1. No engine runs the chain. A trigger starts each stage. The scheduler runs one cell for each call.
 2. The record is the only link between two stages (rule 3). A stage with no valid upstream record does not start.
-3. In a cell, the scheduler starts the cheapest checks first and runs independent checks at the same time.
+3. In a cell, the scheduler runs checks serially via `_execute_cell`.
 4. Local pre stops at the first failed check. Every other App-owned cell runs each check and records each verdict.
 5. Each check has a time limit. Each cell has a time budget.
 6. The policy table says if a cell blocks or reports. A cell that reports does not stop the chain.
 
-State: `run_cell` executes every check in order and honors `policy.stop_on_fail` (`true` on blocking pre/operation cells, `false` on reporting cells such as `scheduled_audit` and `staging.post`). Each cell has a bounded time budget. Items 3 and 5–6 remain aligned against `stages.yaml`.
+State: `run_cell` executes every check serially in `_execute_cell` and honors `policy.stop_on_fail` (`true` on blocking pre/operation cells, `false` on reporting cells such as `scheduled_audit` and `staging.post`). Each cell has a bounded time budget. Items 3 and 5–6 remain aligned against `stages.yaml`.
 
 **Check rows (target)**
 
@@ -159,7 +159,7 @@ State: a manifest lists the checks of each slot, so a check that runs in two slo
 - A change to the file is a change of kind SDK: the Canary first, then the Apps.
 - Target: each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
 
-State: the file exists: `src/infra2_sdk/data/stages.yaml` in infra2-sdk (`policy_version`, 15 cells and `scheduled_audit`). `manifests.py` loads it and derives `STAGE_HOOK_PLANS` from it.
+State: the file exists: `src/infra2_sdk/data/stages.yaml` in infra2-sdk (`policy_version`, 16 cells including `scheduled_audit`). `manifests.py` loads it and derives `STAGE_HOOK_PLANS` from it.
 
 **Scale ladder (target)**
 
@@ -435,49 +435,7 @@ The workflow `deploy.yml` with `type=prod` also takes a typed `iac_ref` for manu
 `deploy_v2` requires `iac_ref` to be a release tag on main. The run waits for the owner in the `production`
 environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the issue.
 
-### 4.2 Production release card
-
-A production release has one Feishu card (`common/alerting/release_card.py`, `tools/release_card.py`).
-The receiver is the only writer. A sender never posts to Feishu.
-
-- The pre-deploy job of the release workflow creates the card after the plan
-  step and writes its id to the job output `card_message_id`.
-  The last step of this job shows "Waiting for approval" with the time from `production_request_accept_until`. That
-  function is the one that the age check of the `deploy` job uses, so the card and the check give the same time. A
-  sender deadline in the request moves the time earlier. Nothing can run while the `production` environment gate
-  waits, so no later step can show the wait.
-- The `deploy` job shows "Deploying" after the approval. `common.deploy.v2._progress` updates the card for each finished
-  phase. `common.deploy.promote._notify_rollback_event` shows the event on the card and in its thread. Only the action
-  `rolled_back` gives "Rolled back". The other actions (`paused`, `blocked_by_schema_class_c`,
-  `circuit_breaker_tripped`, `rollback_failed: ...`) need a person and give "Failed". The action and the
-  manual-intervention line come first, and the long reason comes last. The last steps show "Succeeded" or "Failed". A
-  "Failed" step does not overwrite a card that has a reason.
-- Known gap: a rejected or expired approval, and a run cancelled before the `deploy` job starts, run no step after the
-  `production` environment gate. The card stays at "Waiting for approval". The card shows the accept-until time and says
-  that it is stale after that time. A third job could close the card, but it would hold the Feishu secrets, and that is
-  a production job classification edit in `common/gate/production_contract.py`. That edit needs the owner's approval
-  of the head SHA (infra2#1370). A cancelled run during the deploy does reach the card: the failure steps
-  run on `failure() || cancelled()`.
-- A staging request has no card. A rollback of a staging request sends one text message through the same out-of-band
-  settings.
-- The card needs the Feishu app mode (`INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE=feishu_app`). A webhook cannot update a
-  card, so in webhook mode there is no card, every card step does nothing, and the rollback text of `promote` stays the
-  notice.
-- A card step cannot stop a deploy. The step runs `timeout 30 python -m tools.release_card ... || echo "::warning"`,
-  so a hung call or a bad argument gives a warning. Inside the deploy process, each hook runs in a daemon thread with a
-  time budget (`PROGRESS_BUDGET_SECONDS`, `ROLLBACK_BUDGET_SECONDS`), because a socket timeout does not bound a
-  slow-drip server or a DNS lookup. After one progress update misses its budget, later progress updates are skipped, and
-  a rollback notice waits at most 2 s for the stalled update, so the stalled update cannot overwrite the rollback. The
-  text fallback of `promote` has the same budget as the rollback hook. The delivery settings are resolved in one place,
-  `common.alerting.out_of_band_app_config`.
-- Time that the card adds to a deploy when Feishu hangs: 30 s for the step that shows the start, 6 s for the first
-  stalled progress update, and 30 s for the step that shows the result. The deploy budget of a production request is
-  `PRODUCTION_DEPLOY_BUDGET_SECONDS` (300 s). A healthy Feishu adds about two requests for each update.
-- Feishu limits: the app updates a card for 14 days after the send, the card sets `config.update_multi` to true, and only
-  the sending app updates it. The app needs a permission of `im:message`, `im:message:send_as_bot` or
-  `im:message:update`. The reply uses `reply_in_thread`.
-
-### 4.3 Stage records and the stage card (#1645)
+### 4.2 Stage records and the stage card (#1645)
 
 Each staging soak and each production promotion writes three records: `pre`, `operation`, `post`. A record is an
 `infra2_sdk.stage_record.StageRecord`. `common/deploy/stage_record.py::write_stage_record` is the only writer.
@@ -589,10 +547,7 @@ sidecar label `infra2.vault.template.sha256`. The `validate-compose` job runs
 `python -m tools.compose_compile check` against the PR base. `python -m tools.compose_compile print <file>`
 prints the compiled text.
 Slice 2: `platform/30.todo/compose.yaml` is the first `x-infra2` stack (`raw`). Its `preview.compose.yaml`
-stays hand-written on `github`, because it builds S3 from the checkout. Repository guards read the
-compiled text through `load_stack(...).compiled`, so they see the injected sidecar. The shell step
-`validate-vault-agent` selects files by the text `  vault-agent:`, so it does not see an `x-infra2` stack;
-`common/tests/test_vault_agent_healthcheck_gate.py` checks the compiled sidecar instead.
+stays hand-written on `github`, because it builds S3 from the checkout. - `common.tests.test_vault_agent_healthcheck_gate` checks compiled `x-infra2` sidecars alongside `tools.ci_runner vault --require-hcl2`, which `infra-ci.yml:validate-vault-agent` runs on every non-doc PR to validate `vault-agent.hcl`, handwritten and compiled compose healthchecks, and `vault-policy.hcl` HCL2 syntax.
 infra2#1884: the `validate-compose` step runs `python3 -m tools.compose_compile validate` on each
 `compose.yaml`. A plain file runs `docker compose -f <file> config` on its source. An `x-infra2` file runs it
 on its compiled text (`common/deploy/compose_validate.py`, which also holds the dummy env `CI_COMPOSE_ENV`

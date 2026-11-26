@@ -23,11 +23,11 @@ on:
         required: false
         default: finance_report/app
       type:
-        description: "Deploy type (staging | prod | preview)"
+        description: "Deploy type (staging | preview)"
         required: false
         default: staging
         type: choice
-        options: [staging, prod, preview]
+        options: [staging, preview]
       version_ref:
         description: "Version surface: pr-<N> or PR# (preview) | main (preview) | tag vX.Y.Z (staging/prod; defaults to harness/repos.yaml for apps or latest infra2 tag for platform)"
         required: false
@@ -114,6 +114,12 @@ jobs:
       INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
       INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
     steps:
+      - name: Reject retired prod dispatch
+        if: ${{ inputs.type == 'prod' }}
+        run: |
+          echo "::error::Direct prod deploy via deploy.yml is retired; use reconcile-iac-inputs.yml promote_prod=true"
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -214,6 +220,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit is on origin/main
+        run: |
+          set -euo pipefail
+          git fetch origin main && git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Configure SSH key for IaC Runner bootstrap update
         env:

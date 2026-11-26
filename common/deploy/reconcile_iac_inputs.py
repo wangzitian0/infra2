@@ -3800,6 +3800,187 @@ def run_canary_reality_gate(
     return False, f"canary_verify failed ({env_name}): " + "; ".join(failures)
 
 
+DEFAULT_OPERATION_STATE_FILE = "reconcile-operation-state.json"
+
+
+def _serialize_check(check: CheckVerdict) -> dict[str, object]:
+    return {
+        "name": check.name,
+        "ok": check.ok,
+        "detail": check.detail,
+        "severity": check.severity,
+        "failure_domain": check.failure_domain,
+        "seconds": check.seconds,
+        "skipped": check.skipped,
+    }
+
+
+def _deserialize_check(data: Mapping[str, object]) -> CheckVerdict:
+    return CheckVerdict(
+        str(data["name"]),
+        bool(data["ok"]),
+        str(data.get("detail") or ""),
+        str(data.get("severity") or ""),
+        str(data.get("failure_domain") or ""),
+        seconds=float(data.get("seconds") or 0.0),
+        skipped=bool(data.get("skipped") or False),
+    )
+
+
+def _finalize_production_operation(
+    args: argparse.Namespace,
+    repo_root: Path,
+    stage: StageRun,
+    *,
+    started: str,
+    hooks_started: str,
+    checks: Sequence[CheckVerdict],
+    results: Sequence[dict],
+    hook_results: Sequence[dict[str, object]],
+    facts: dict[str, object],
+    promote_prod: bool,
+    deploy_failed: bool,
+    hooks_failed: bool,
+    canary_verify_checks: Sequence[CheckVerdict] = (),
+    observability_failed: bool = False,
+) -> tuple[bool, list[CheckVerdict]]:
+    """Record the production marker (unless observability failed) and emit operation/post records."""
+    production_marker = ""
+    marker_pending = ""
+    marker_error: BaseException | None = None
+    extra_checks: list[CheckVerdict] = []
+    if observability_failed:
+        extra_checks.append(
+            CheckVerdict(
+                "signoz_observability",
+                False,
+                "SigNoz observability apply failed",
+            )
+        )
+    elif promote_prod and not args.dry_run and not deploy_failed and not hooks_failed:
+        marker_began = time.monotonic()
+        try:
+            production_marker = record_production_marker(args.after, repo_root)
+            detail = production_marker
+        except ProductionMarkerRejected as exc:
+            marker_pending = production_marker_tag(args.after)
+            detail = f"pending: {exc}"
+            print(
+                f"::warning::production marker {marker_pending} is pending: GitHub "
+                "rejects a GitHub App push for a commit whose workflow files differ "
+                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
+                "section on the production marker."
+            )
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - record_production_marker fails with SystemExit; the record is written first, then it re-raises
+            marker_error = exc
+            detail = f"{type(exc).__name__}: {exc}"
+        extra_checks.append(
+            CheckVerdict(
+                "production_marker",
+                bool(production_marker),
+                detail[:300],
+                seconds=round(time.monotonic() - marker_began, 3),
+            )
+        )
+    all_checks = [
+        *checks,
+        *operation_checks(results, dry_run=args.dry_run),
+        *(post_checks(hook_results) if hook_results else []),
+        *canary_verify_checks,
+        *extra_checks,
+    ]
+    stage.emit("operation", started, all_checks)
+    # A production run has no `post` job: its `post` record holds the verdict of `prod_gate`
+    # (or a passing hooks check when no service has a gate hook), so the stage card ends
+    # Passed or Failed instead of staying at "operation done".
+    if (
+        promote_prod
+        and not args.dry_run
+        and not deploy_failed
+        and not observability_failed
+        and marker_error is None
+    ):
+        gate_results = [item for item in hook_results if item.get("slot") != "smoke"]
+        if gate_results or not hooks_failed:
+            emit_post_record(stage, hooks_started, gate_results)
+    facts["production_marker"] = production_marker
+    facts["marker_pending"] = marker_pending
+    if marker_error is not None:
+        _write_payload(
+            args,
+            _alert_payload(
+                args,
+                "operation",
+                promote_prod=promote_prod,
+                results=results,
+                hook_results=hook_results,
+            )
+            | facts,
+            stage,
+        )
+        raise marker_error
+    return not (deploy_failed or hooks_failed or observability_failed), extra_checks
+
+
+def record_deferred_production_marker(args: argparse.Namespace, repo_root: Path) -> int:
+    """Finalize a deferred production operation after SigNoz observability apply."""
+    state_path = Path(
+        getattr(args, "operation_state_file", "") or DEFAULT_OPERATION_STATE_FILE
+    )
+    if not state_path.is_file():
+        raise SystemExit(
+            f"::error::deferred operation state file not found: {state_path}"
+        )
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(
+            f"::error::unreadable deferred operation state file {state_path}: {exc}"
+        ) from exc
+    stage = StageRun(
+        env=str(state["env"]),
+        subject=str(state["subject"]),
+        dry_run=False,
+        units=list(state.get("units") or ()),
+    )
+    checks = [_deserialize_check(item) for item in state.get("checks") or ()]
+    canary_verify_checks = [
+        _deserialize_check(item) for item in state.get("canary_verify_checks") or ()
+    ]
+    results = list(state.get("results") or ())
+    hook_results = list(state.get("hook_results") or ())
+    facts = dict(state.get("facts") or {})
+    observability_failed = bool(getattr(args, "observability_failed", False))
+    ok, extra_checks = _finalize_production_operation(
+        args,
+        repo_root,
+        stage,
+        started=str(state["started"]),
+        hooks_started=str(state["hooks_started"]),
+        checks=checks,
+        results=results,
+        hook_results=hook_results,
+        facts=facts,
+        promote_prod=True,
+        deploy_failed=False,
+        hooks_failed=False,
+        canary_verify_checks=canary_verify_checks,
+        observability_failed=observability_failed,
+    )
+    payload = _alert_payload(
+        args,
+        "operation",
+        promote_prod=True,
+        failed_checks=extra_checks if not ok else (),
+        results=results,
+        hook_results=hook_results,
+    )
+    if ok:
+        payload["alert_text"] = None
+    _write_payload(args, payload | facts, stage)
+    return 0 if ok else 1
+
+
 def run_operation(
     args: argparse.Namespace,
     repo_root: Path,
@@ -3932,53 +4113,6 @@ def run_operation(
                     "summary": cv_detail,
                 }
             )
-    production_marker = ""
-    marker_pending = ""
-    marker_error: BaseException | None = None
-    marker_checks: list[CheckVerdict] = []
-    if promote_prod and not args.dry_run and not deploy_failed and not hooks_failed:
-        marker_began = time.monotonic()
-        try:
-            production_marker = record_production_marker(args.after, repo_root)
-            detail = production_marker
-        except ProductionMarkerRejected as exc:
-            marker_pending = production_marker_tag(args.after)
-            detail = f"pending: {exc}"
-            print(
-                f"::warning::production marker {marker_pending} is pending: GitHub "
-                "rejects a GitHub App push for a commit whose workflow files differ "
-                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
-                "section on the production marker."
-            )
-        except (Exception, SystemExit) as exc:  # noqa: BLE001 - record_production_marker fails with SystemExit; the record is written first, then it re-raises
-            marker_error = exc
-            detail = f"{type(exc).__name__}: {exc}"
-        marker_checks.append(
-            CheckVerdict(
-                "production_marker",
-                bool(production_marker),
-                detail[:300],
-                seconds=round(time.monotonic() - marker_began, 3),
-            )
-        )
-    stage.emit(
-        "operation",
-        started,
-        [
-            *checks,
-            *operation_checks(results, dry_run=args.dry_run),
-            *(post_checks(hook_results) if hook_results else []),
-            *canary_verify_checks,
-            *marker_checks,
-        ],
-    )
-    # A production run has no `post` job: its `post` record holds the verdict of `prod_gate`
-    # (or a passing hooks check when no service has a gate hook), so the stage card ends
-    # Passed or Failed instead of staying at "operation done".
-    if promote_prod and not args.dry_run and not deploy_failed and marker_error is None:
-        gate_results = [item for item in hook_results if item.get("slot") != "smoke"]
-        if gate_results or not hooks_failed:
-            emit_post_record(stage, hooks_started, gate_results)
     facts: dict[str, object] = {
         "plan": train.plan.to_dict(),
         "commands": [command.to_dict() for command in train.commands],
@@ -3991,23 +4125,56 @@ def run_operation(
             if command not in train.applied
         ],
         "target_env": target_env,
-        "production_marker": production_marker,
-        "marker_pending": marker_pending,
+        "production_marker": "",
+        "marker_pending": "",
     }
-    if marker_error is not None:
-        _write_payload(
-            args,
-            _alert_payload(
-                args,
-                "operation",
-                promote_prod=promote_prod,
-                results=results,
-                hook_results=hook_results,
-            )
-            | facts,
-            stage,
+    if (
+        getattr(args, "defer_production_marker", False)
+        and promote_prod
+        and not args.dry_run
+        and not deploy_failed
+        and not hooks_failed
+    ):
+        state_path = Path(
+            getattr(args, "operation_state_file", "") or DEFAULT_OPERATION_STATE_FILE
         )
-        raise marker_error
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "started": started,
+                    "hooks_started": hooks_started,
+                    "env": stage.env,
+                    "subject": stage.subject,
+                    "units": list(stage.units),
+                    "checks": [_serialize_check(c) for c in checks],
+                    "canary_verify_checks": [
+                        _serialize_check(c) for c in canary_verify_checks
+                    ],
+                    "results": results,
+                    "hook_results": hook_results,
+                    "facts": facts,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return PhaseOutcome(True, results, hook_results, facts)
+    _finalize_production_operation(
+        args,
+        repo_root,
+        stage,
+        started=started,
+        hooks_started=hooks_started,
+        checks=checks,
+        results=results,
+        hook_results=hook_results,
+        facts=facts,
+        promote_prod=promote_prod,
+        deploy_failed=deploy_failed,
+        hooks_failed=hooks_failed,
+        canary_verify_checks=canary_verify_checks,
+    )
     return PhaseOutcome(
         not (deploy_failed or hooks_failed), results, hook_results, facts
     )
@@ -4290,6 +4457,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
     parser.add_argument(
+        "--defer-production-marker",
+        action="store_true",
+        help="defer production marker and operation stage record until after SigNoz apply",
+    )
+    parser.add_argument(
+        "--record-production-marker",
+        action="store_true",
+        help="record deferred production marker and emit operation/post stage records",
+    )
+    parser.add_argument(
+        "--observability-failed",
+        action="store_true",
+        help="used with --record-production-marker when SigNoz observability apply failed",
+    )
+    parser.add_argument(
+        "--operation-state-file",
+        default=DEFAULT_OPERATION_STATE_FILE,
+        help="state JSON path shared between --defer-production-marker and --record-production-marker",
+    )
+    parser.add_argument(
         "--artifacts-dir",
         default="",
         help="optional persistent directory for --run-scheduled-audit hook artifacts",
@@ -4501,6 +4688,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.after:
         raise SystemExit("::error::--after is required for IaC input reconcile")
+    if args.record_production_marker:
+        if not promote_prod:
+            raise SystemExit(
+                "::error::--record-production-marker requires --promote-prod"
+            )
+        return record_deferred_production_marker(args, repo_root)
     if args.print_changed_files:
         base = plan_base(
             args.after,

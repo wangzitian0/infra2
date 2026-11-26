@@ -557,6 +557,11 @@ def test_the_watchdog_job_installs_what_the_backup_checks_import() -> None:
             for step in job.get("steps", [])
         )
     ]
+    runs = "\n".join(str(step.get("run", "")) for step in job["steps"])
+    if "uv sync" in runs:
+        sync_lines = [line.strip() for line in runs.splitlines() if "uv sync" in line]
+        assert sync_lines and all("--locked" in line for line in sync_lines)
+        return
     installs = " ".join(
         step["run"] for step in job["steps"] if "pip install" in step.get("run", "")
     )
