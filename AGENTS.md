@@ -1,11 +1,11 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=5122a79e64b80c58f1e8f7cd98b38f94b409319e8ef8405fea816354b5bc4947 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=200dd029233241055798f85fbc54f1ef7bedca05e31d7756020487b5b4f66120 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
 
 - **Measure the physical system first.** Inspect the system with read-only probes (`time cmd`, process chains, file locks) before proposing architecture. Never combine validation and mutation in one command. Measure, read the result, then decide.
 - **Green does not prove truth.** The tested system writes its own unit tests, CI, and issue states. Cross-check critical conclusions against two external sources not written by this repository.
-- **Tests must be falsifiable.** Never hide assertions inside `if` branches or accept tautologies. Source-text `indexOf` matches against prose are not integration tests. Avoid duplicate test function names that shadow earlier tests. Make every new test fail under a relevant mutation; fake tests are CRITICAL merge blockers.
+- **Classify checks (`Gate -> Dependency -> Fact -> None`).** Keep falsifiable tests for security or release gates; report drift and metrics on the Fact Board. Never hide assertions inside `if` branches, match prose with `indexOf`, or shadow test names.
 - **Falsifiable documentation and assertions:** State test requirements, error messages, and specifications in concrete ASD-STE100 terms without vague qualifiers.
 - **One source of truth:** Keep one authoritative definition per core fact. Repeated hardcoding and scattered configuration invite drift.
 - **Clean up during migration:** After the new mechanism is live and equivalence is proved, remove its predecessor, obsolete files, and dead code in the same change. Define contracts first and derive CI from them.
