@@ -71,7 +71,7 @@ repositories:
     contract: snapshot
     source: https://github.com/wangzitian0/truealpha
     release_identity: app-image-ref-or-digest
-    release_tag: v0.3.14
+    release_tag: v0.3.15
     sdk_lock: uv.lock
     # The production host is the bare product domain (Deployer.domain of truealpha/app).
     health:
