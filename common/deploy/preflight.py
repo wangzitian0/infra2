@@ -14,8 +14,12 @@ import time
 from pathlib import Path
 
 import httpx
-from infra2_sdk.ci import parse_github_time
-from infra2_sdk.refs import ReleaseError, assert_after_on_main, resolve_image_digest
+from common.core.ci_contract import parse_github_time
+from common.deploy.git_refs import (
+    ReleaseError,
+    assert_after_on_main,
+    resolve_image_digest,
+)
 
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.deploy.contract import (

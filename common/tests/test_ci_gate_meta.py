@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 import yaml
-from infra2_sdk import ci as ci_spec
-from infra2_sdk.ci import (
+from common.core import ci_contract as ci_spec
+from common.core.ci_contract import (
     GATE_WALL_CLOCK_BUDGET_S,
     MAX_SINGLE_TEST_S,
     SHARD_MAX,

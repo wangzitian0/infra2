@@ -22,8 +22,8 @@ from typing import Any
 from urllib.request import Request, urlopen
 import zipfile
 
-from infra2_sdk.ci import parse_github_time
-from infra2_sdk.routing import resolve_service_url
+from common.core.ci_contract import parse_github_time
+from common.deploy.routing import resolve_service_url
 
 from common.alerting import (
     REPORT_TITLE_PREFIX,

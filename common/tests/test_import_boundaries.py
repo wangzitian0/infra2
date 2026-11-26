@@ -24,7 +24,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from infra2_sdk.rules.imports import (
+from common.core.import_rules import (
     LayerRule,
     check_import_boundaries,
     scan_module_imports,

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from infra2_sdk.secrets import SecretsError, vault_path
+from common.security.backends import SecretsError, vault_path
 
 from common.security.registry import SERVICES, Service, store_keys
 from common.security.supply import vault_backend

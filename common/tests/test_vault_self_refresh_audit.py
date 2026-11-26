@@ -27,7 +27,6 @@ from common.security.vault_self_refresh_audit import (
     _remote_container_logs,
     _remote_container_state,
     _remote_secret_file_state,
-    _remote_secret_file_text,
     _vault_addr_from_env,
     collect_live_observations,
     write_report,
@@ -857,28 +856,6 @@ def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
     }
     assert captured["host"] == "vps.example"
     assert "docker exec platform-postgres-vault-agent sh -lc" in captured["command"]
-
-
-def test_remote_secret_file_text_returns_raw_cat_output(monkeypatch) -> None:
-    """#526: the raw-content fetch used for optional-field inertness checks
-    just `cat`s the rendered file and returns stdout verbatim."""
-    captured = _patch_fake_ssh(
-        monkeypatch,
-        stdout='EXAMPLE_OPTIONAL_KEY=""\nOTHER_KEY="value"\n',
-    )
-
-    result = _remote_secret_file_text("vps.example", "finance_report-app-vault-agent")
-
-    assert result == 'EXAMPLE_OPTIONAL_KEY=""\nOTHER_KEY="value"\n'
-    assert captured["host"] == "vps.example"
-    assert "docker exec finance_report-app-vault-agent sh -lc" in captured["command"]
-    assert "cat /vault/secrets/.env" in captured["command"]
-
-
-def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> None:
-    _patch_fake_ssh(monkeypatch, returncode=1, stderr="connection refused")
-
-    assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
 
 
 def test_collect_live_observations_skips_token_lookup_for_approle_service(

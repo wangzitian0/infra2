@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from infra2_sdk.ci import validate_manifest_offline
+from common.core.ci_contract import validate_manifest_offline
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 
 from common.security import secrets_render

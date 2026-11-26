@@ -455,7 +455,7 @@ def test_scanner_finds_the_infra2_sdk_imports_of_the_tree() -> None:
     found = scan(names=frozenset(), modules=frozenset({"infra2_sdk"}))
     assert {
         "platform/12.alerting/app.py",
-        "common/deploy/v2.py",
+        "common/deploy/app_contract.py",
         "common/deploy/preview.py",
     } <= set(found)
     assert len(found) >= 15

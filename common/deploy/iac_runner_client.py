@@ -12,7 +12,7 @@ import time
 from collections.abc import Iterator
 
 import httpx
-from infra2_sdk.refs import classify_ref
+from common.deploy.git_refs import classify_ref
 
 _SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _DEPLOYMENT_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")

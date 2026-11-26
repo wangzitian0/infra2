@@ -129,7 +129,7 @@ def test_an_unaccepted_schema_is_refused(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_audit_app_hooks_accepts_schema_3_and_reports_an_empty_cell(
     monkeypatch,
 ) -> None:
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     monkeypatch.setattr(
         reconcile, "APP_SOURCES", {"finance_report/app": "wangzitian0/finance_report"}
@@ -199,7 +199,7 @@ def test_the_scheduled_audit_runs_and_fails_a_schema_3_app_with_an_empty_cell(
     check. `if slot not in manifest.slots: continue` in run_scheduled_app_audits skipped such
     an app and recorded nothing; schema 2 made every slot mandatory. The audit must run the
     slot, and run_cell fails the empty cell."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +241,7 @@ def test_the_train_runs_and_fails_a_schema_3_slot_with_an_empty_cell(
     """Review of #1849 (severity: high): schema 3 builds slots only for cells that have a
     check, so a `slot not in manifest.slots: continue` would skip an empty prod.post and
     record nothing. The train must run it, and run_cell fails it."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     monkeypatch.setattr(
         reconcile,

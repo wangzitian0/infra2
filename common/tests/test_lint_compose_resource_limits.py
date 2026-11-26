@@ -11,7 +11,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from infra2_sdk.rules.compose import inspect_compose
+from common.deploy.compose_rules import inspect_compose
 
 _SPEC = importlib.util.spec_from_file_location(
     "lint_compose_resource_limits",

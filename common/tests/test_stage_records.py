@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from infra2_sdk.stage_record import StageRecord
+from common.deploy.stage_record import StageRecord
 
 import common.deploy.reconcile_iac_inputs as reconcile
 from common.deploy import stage_record as writer

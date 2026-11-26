@@ -9,7 +9,7 @@ import time
 
 from invoke import task
 from invoke.exceptions import Exit
-from infra2_sdk.routing import CANARY_SLOT
+from common.deploy.routing import CANARY_SLOT
 
 from common.console import error, header, info, run_with_status, success
 from common.deploy.deployer import Deployer, make_tasks
@@ -229,7 +229,7 @@ class TodoDeployer(Deployer):
 @task
 def sso_setup(c):
     """Register Canary Todo in Authentik SSO (One-time or idempotent)"""
-    from infra2_sdk.routing import derive_preview_coordinates
+    from common.deploy.routing import derive_preview_coordinates
     from infra2_sdk.runtime.environment import resolve_environment_tier
 
     env = TodoDeployer.env()

@@ -22,7 +22,7 @@ from typing import Any, Mapping
 
 from invoke import Context, task
 
-from infra2_sdk.secrets import policy_name
+from common.security.backends import policy_name
 
 from common.console import error, header, info, success, warning
 from common.core.environ import get_env, infra_domain, with_env_suffix
@@ -63,7 +63,7 @@ def get_or_create_db_credentials(
     Returns (password, is_created).
     """
     from common.security.store import generate_password
-    from infra2_sdk.secrets import OnePasswordBackend
+    from common.security.backends import OnePasswordBackend
 
     item_title = f"{project}/{env_name}/{service}/db"
     backend = op_backend or OnePasswordBackend("Infra2")
@@ -220,7 +220,7 @@ def sync_vault_secrets(
     vault_backend: Any = None,
 ) -> None:
     """Idempotently sync secrets dictionary into Vault KV v2."""
-    from infra2_sdk.secrets import VaultKvBackend, vault_path
+    from common.security.backends import VaultKvBackend, vault_path
 
     backend = vault_backend or VaultKvBackend(vault_addr, token=token)
     path = vault_path(project, env_name, service)

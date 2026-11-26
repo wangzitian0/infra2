@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from infra2_sdk.observability import ListingFailed
+from common.observability.issue_trail import ListingFailed
 
 from common.observability import page_dedup as pd
 from common.observability.page_dedup import (

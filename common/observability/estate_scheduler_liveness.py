@@ -48,8 +48,8 @@ from urllib.parse import quote
 
 import yaml
 
-from infra2_sdk.ci import ScheduleError, largest_gap
-from infra2_sdk.observability import (
+from common.core.ci_contract import ScheduleError, largest_gap
+from common.observability.liveness import (
     DELAY_ALLOWANCE,
     MISSED_TICKS_TOLERATED,
     PeerReadError,

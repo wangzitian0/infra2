@@ -222,7 +222,7 @@ def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManife
     DATABASE_URL); they must agree on how it is produced and rendered, and the first
     declaration wins for the rest (requiredness, description).
     """
-    from infra2_sdk.runtime import merge_manifests
+    from common.security.manifest_merge import merge_manifests
 
     return merge_manifests(
         [(path, load_manifest(path, root=root)) for path in service.manifests],

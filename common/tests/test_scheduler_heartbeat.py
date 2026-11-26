@@ -8,7 +8,7 @@ import urllib.error
 from pathlib import Path
 
 import pytest
-from infra2_sdk.observability import load_trail
+from common.observability.issue_trail import load_trail
 
 from common.observability import scheduler_heartbeat as hb
 from common.observability.scheduler_heartbeat import HEARTBEAT_CHECK, HEARTBEAT_SOURCE

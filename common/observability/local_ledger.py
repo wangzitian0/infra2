@@ -49,7 +49,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from infra2_sdk.deploy import canonical_json_bytes
+from common.core._sdk_wire import canonical_json_bytes
 
 SCHEMA = 2
 RETENTION_DAYS = 35

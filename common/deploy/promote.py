@@ -39,7 +39,7 @@ from common.deploy.env_util import RUNTIME_ENV_KEYS_TO_PRESERVE, _parse_env_text
 from common.deploy.queue import deployment_start_epoch
 from common.deploy.failure_snapshot import emit_failure_snapshot
 from common.observability.openpanel import openpanel_env
-from infra2_sdk.refs import resolve_to_sha
+from common.deploy.git_refs import resolve_to_sha
 from common.deploy.preflight import (
     check_approle_creds,
     parse_env_var as _env_value,
@@ -53,7 +53,8 @@ from common.deploy.dokploy_adapter import (
     started_before_trigger,
 )
 from common.deploy.rollout import RolloutError, wait_for_deployment
-from infra2_sdk.deploy import VERSION_KEYS, default_http_get, poll_until_healthy
+from common.deploy.evidence import VERSION_KEYS
+from infra2_sdk.deploy import default_http_get, poll_until_healthy
 
 
 @dataclass(frozen=True)

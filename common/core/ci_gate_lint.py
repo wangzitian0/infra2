@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from infra2_sdk import ci as ci_spec
-from infra2_sdk.ci import (
+from common.core import ci_contract as ci_spec
+from common.core.ci_contract import (
     BANNED_GATE_MARKERS,
     BANNED_IN_GATE_PATTERNS,
     GATE_EXEMPT_RE,

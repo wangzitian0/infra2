@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 import httpx
 from infra2_sdk.deploy import poll_until_healthy
-from infra2_sdk.routing import PreviewStackCoordinates, derive_preview_coordinates
+from common.deploy.routing import PreviewStackCoordinates, derive_preview_coordinates
 
 from common.core.environ import infra_domain
 from common.deploy.app_contract import APP_SOURCES
@@ -30,7 +30,7 @@ from common.deploy.env_config import (
     preview_service_config,
 )
 from common.observability.openpanel import openpanel_env
-from infra2_sdk.refs import resolve_to_sha
+from common.deploy.git_refs import resolve_to_sha
 
 PreviewType = Literal["branch", "pr"]
 

@@ -15,9 +15,9 @@ from urllib.error import HTTPError, URLError
 import pytest
 import yaml
 
-import infra2_sdk.observability as trail_lib
-from infra2_sdk.observability import (
-    CheckVerdict,
+import common.observability.issue_trail as trail_lib
+from infra2_sdk.observability import CheckVerdict, record_verdicts
+from common.observability.issue_trail import (
     GitHubIssues,
     ListingFailed,
     Trail,
@@ -25,7 +25,6 @@ from infra2_sdk.observability import (
     issue_trail_mode,
     load_trail,
     reconcile_issue_trail,
-    record_verdicts,
     title_for,
 )
 
@@ -532,7 +531,7 @@ class _Response(io.BytesIO):
 
 
 def test_the_listing_skips_pull_requests_and_reads_every_page(monkeypatch) -> None:
-    import infra2_sdk.observability as sdk_obs
+    import common.observability.issue_trail as sdk_obs
 
     monkeypatch.setattr(sdk_obs, "_PER_PAGE", 2)
     pages = {
@@ -587,7 +586,7 @@ def test_an_unreadable_listing_is_a_listing_failure(answer) -> None:
 
 
 def test_a_listing_longer_than_the_page_cap_is_not_trusted(monkeypatch) -> None:
-    import infra2_sdk.observability as sdk_obs
+    import common.observability.issue_trail as sdk_obs
 
     monkeypatch.setattr(sdk_obs, "_PER_PAGE", 1)
     monkeypatch.setattr(sdk_obs, "_MAX_PAGES", 2)

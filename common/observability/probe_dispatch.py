@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError
 
-from infra2_sdk.deploy import canonical_json_bytes
+from common.core._sdk_wire import canonical_json_bytes
 
 from common.alerting.card import mark_report_payload
 from common.observability.probe_environment import resolve_probe_environment

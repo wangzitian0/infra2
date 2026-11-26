@@ -102,7 +102,7 @@ def _no_ambient_op_cli(monkeypatch):
     CI has no ``op`` binary, so ``OpSecrets`` reads an empty item there. A shell with ``op``
     made the same tests read the real vault and wait up to 30 s each (#1453). A backend
     built with its own ``runner`` is unchanged."""
-    from infra2_sdk.secrets import OnePasswordBackend
+    from common.security.backends import OnePasswordBackend
 
     real_init = OnePasswordBackend.__init__
 

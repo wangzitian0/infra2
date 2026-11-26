@@ -173,7 +173,7 @@ def test_vault_writes_use_update_not_patch(monkeypatch) -> None:
     import json as _json
     import types as _types
 
-    from infra2_sdk.secrets import WriteResult
+    from common.security.backends import WriteResult
 
     calls: list[tuple[str, str, bytes | None]] = []
 
@@ -186,7 +186,7 @@ def test_vault_writes_use_update_not_patch(monkeypatch) -> None:
             )
         return _types.SimpleNamespace(status=200, body=b"{}", headers={})
 
-    from infra2_sdk.secrets import VaultKvBackend
+    from common.security.backends import VaultKvBackend
 
     backend = VaultKvBackend(
         "https://vault.test", token="t", transport=transport, write_mode="update"
@@ -450,7 +450,7 @@ def test_apply_secret_supply_does_not_swallow_a_kwarg_it_cannot_honour() -> None
 def test_apply_prunes_orphan_keys_on_non_preview_service() -> None:
     """Remove retired store keys via replace while keeping active and placeholder keys."""
     from infra2_sdk.runtime.config_schema import EnvironmentManifest
-    from infra2_sdk.secrets import SecretsResolver, WriteResult, vault_path
+    from common.security.backends import SecretsResolver, WriteResult, vault_path
     from common.security.registry import Service
 
     manifest = EnvironmentManifest.from_dict(

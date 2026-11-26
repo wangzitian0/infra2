@@ -241,17 +241,6 @@ def _remote_template_identity(host: str, vault_agent_container: str) -> tuple[st
     return "", ""
 
 
-def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:
-    command = (
-        f"docker exec {shlex.quote(vault_agent_container)} "
-        "sh -lc 'cat /vault/secrets/.env 2>/dev/null'"
-    )
-    result = _ssh(host, command)
-    if result.returncode != 0:
-        return ""
-    return result.stdout
-
-
 def _remote_container_logs(
     host: str, container_name: str, *, since: str = DEFAULT_LOG_SINCE
 ) -> str:

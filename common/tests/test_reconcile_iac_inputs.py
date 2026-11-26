@@ -1390,7 +1390,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     and environment URL, fetches runtime-hooks.manifest.json, executes the smoke slot,
     and records hook_results in the reconcile JSON payload."""
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -1493,7 +1493,7 @@ def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
     """#1416 (M2): when a post-deploy smoke hook fails during promote_prod, the production
     marker must NOT advance and main() must return exit code 1."""
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -2189,7 +2189,7 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     repos/truealpha/runtime-hooks.manifest.json contracts and execute execute_app_hook_slot
     and run_post_deploy_app_hooks without mocking execute_app_hook_slot or build_hook_env."""
     from common.deploy.app_contract import execute_app_hook_slot, load_hooks_manifest
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     # Prepare an isolated repo_root in tmp_path with repos/finance_report and repos/truealpha
     # containing the exact verbatim manifests, and verify against on-disk submodules if checked out.
@@ -2322,7 +2322,7 @@ def test_audit_app_hooks_cli_validates_both_apps(monkeypatch, capsys, tmp_path) 
     """#1416 (Fix 3): --audit-app-hooks validates both finance_report/app and truealpha/app
     runtime-hooks.manifest.json files (both from local checkouts and via remote fetch when
     submodules are absent in CI) and exits 0."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
     (tmp_path / "harness" / "repos.yaml").write_text(
@@ -2509,7 +2509,7 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
     """#1493: run_post_deploy_app_hooks with slot='smoke,staging_gate' executes both smoke and
     staging_gate in order for each deployed App and records issue trails per slot."""
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     monkeypatch.setattr(
         reconcile,
@@ -2567,7 +2567,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit(
     TA_EMAIL from the env, records the issue trail, and main(--run-scheduled-audit)
     returns 1 when any audit fails."""
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -3136,7 +3136,7 @@ def test_train_fails_before_any_deploy_when_a_pinned_hook_env_value_is_missing(
     with the service, the slot and the name, and runs 0 deploy commands. The ``operation``
     record names the check ``hook_env``: the ``pre`` job holds no secret, so it cannot read the
     value (#1646)."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True)
     (tmp_path / "harness" / "repos.yaml").write_text(
@@ -3198,7 +3198,7 @@ def test_train_fails_before_any_deploy_when_a_pinned_hook_env_value_is_missing(
 
 def _hook_env_run(monkeypatch, tmp_path, *, slot: str, promote: bool) -> list[object]:
     """Run the train through `hook_env` with TA_EMAIL set and `slot` requiring it."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
     (tmp_path / "harness" / "repos.yaml").write_text(
@@ -3267,7 +3267,7 @@ def test_scheduled_audit_fails_a_service_with_a_missing_hook_env_value_without_r
 ) -> None:
     """#1633: the same missing name gives a failed result for the service. The hook executor
     gets 0 calls."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True)
     (tmp_path / "harness" / "repos.yaml").write_text(
@@ -3736,7 +3736,7 @@ def test_stage_hook_plans_ssot_and_workflow_wiring() -> None:
     """#1608: DEFAULT_STAGE_HOOK_SLOTS / default_hook_slot_for_stage are deleted in favor of
     infra2_sdk.manifests.STAGE_HOOK_PLANS / stage_hook_plan (Pre -> Deploy smoke -> Post gate),
     and reconcile-iac-inputs.yml delegates slot selection to stage_hook_plan."""
-    from infra2_sdk.manifests import STAGE_HOOK_PLANS, stage_hook_plan
+    from common.deploy.stage_hooks import STAGE_HOOK_PLANS, stage_hook_plan
     from common.deploy.app_contract import HOOK_SLOTS
 
     assert not hasattr(reconcile, "DEFAULT_STAGE_HOOK_SLOTS")
@@ -3897,7 +3897,7 @@ def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
 ) -> None:
     """#1534: audit_app_hooks rejects any slot whose required_env lacks an infra2 source in
     HOOK_RUNNER_SECRET_NAMES | HOOK_RUNNER_CONTEXT_ENV."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
     (tmp_path / "harness" / "repos.yaml").write_text(
@@ -4041,7 +4041,7 @@ def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
     skips sync-app-releases failures before deploy, and --run-scheduled-audit writes
     structured scheduled_audit_results for page_dedup."""
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     result_file = tmp_path / "reconcile-result.json"
     run_url = "https://github.com/wangzitian0/infra2/actions/runs/777"
@@ -4333,7 +4333,7 @@ def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
     """Stub the hook environment of a reconcile run; return the (service, release_ref)
     of every hook checkout that the run asks for."""
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -4567,7 +4567,7 @@ def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot
     import threading
     import time as _time
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -5994,7 +5994,7 @@ def test_app_pins_scan_the_sdk_stage_records_once_for_all_apps(
 ) -> None:
     """A staging train with two App pins scans the stage records one time. The scan receives
     the locked SDK of each App, and each App is checked against that one result (#1635)."""
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True)
     (tmp_path / "harness" / "repos.yaml").write_text(
@@ -6101,7 +6101,7 @@ def test_run_scheduled_app_audits_isolates_setup_failure_and_persists_hook_artif
 ) -> None:
     """A setup exception on one service does not abort sibling services, and hook artifacts survive cleanup."""
     from infra2_sdk.manifests import HookRunResult
-    from infra2_sdk.refs import ResolvedRef
+    from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)

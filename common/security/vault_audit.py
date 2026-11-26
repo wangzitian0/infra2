@@ -620,7 +620,7 @@ def classify_container(
     max_restart_count = int(container_state.get("max_restart_count", 3))
     observed_now = float(now if now is not None else time.time())
     started_at_epoch = parse_epoch_seconds(container_state.get("started_at"))
-    from infra2_sdk.observability import is_recently_flapping
+    from common.observability.liveness import is_recently_flapping
 
     if is_recently_flapping(
         event_count=restart_count,

@@ -22,7 +22,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from infra2_sdk.secrets import (
+from common.security.backends import (
     HttpTransport,
     OnePasswordBackend,
     SecretsError,

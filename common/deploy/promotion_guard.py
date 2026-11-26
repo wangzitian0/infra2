@@ -26,7 +26,7 @@ from common.deploy.stage_record_reader import (
     staging_gates_verdict,
     verified_sdk_versions,
 )
-from infra2_sdk.manifests import stage_hook_plan
+from common.deploy.stage_hooks import stage_hook_plan
 
 _CANARY_TRIGGER_PREFIXES = (
     "platform/",

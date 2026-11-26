@@ -28,7 +28,7 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from infra2_sdk.fastapi import init_service
-from infra2_sdk.refs import classify_ref
+from common.deploy.git_refs import classify_ref
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 

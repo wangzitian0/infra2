@@ -164,7 +164,7 @@ def gh_json(run: Runner, argv: Sequence[str]) -> Any:
 
 
 def epoch(iso: str | None) -> float | None:
-    from infra2_sdk.ci import parse_github_time
+    from common.core.ci_contract import parse_github_time
 
     parsed = parse_github_time(iso)
     return parsed.timestamp() if parsed is not None else None

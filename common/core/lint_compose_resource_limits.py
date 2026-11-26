@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from infra2_sdk.rules.compose import inspect_compose
+from common.deploy.compose_rules import inspect_compose
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_PATH = ROOT / "docs/ssot/compose-resource-baseline.json"

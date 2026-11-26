@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-
-from infra2_sdk.ci import PR_BEHIND_MAX_AGE_SECONDS, is_pr_behind_fresh
+from datetime import UTC, datetime
 
 from common.gate.inventory import (
     _declared_deploy_globs,
@@ -45,6 +44,51 @@ from common.gate.types import (
     _is_local_root_repo,
     _normalized_path,
 )
+
+PR_BEHIND_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def _timestamp_epoch(value: str | int | float | datetime | None) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return None
+        return value.astimezone(UTC).timestamp()
+    if isinstance(value, int | float):
+        return float(value) if math.isfinite(value) and value > 0 else None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC).timestamp()
+    return None
+
+
+def is_pr_behind_fresh(
+    first_behind_at: str | int | float | datetime | None,
+    *,
+    now: str | int | float | datetime,
+    max_age_seconds: float = PR_BEHIND_MAX_AGE_SECONDS,
+) -> bool:
+    """Return True when base divergence started within ``max_age_seconds`` of ``now``."""
+    diverged = _timestamp_epoch(first_behind_at)
+    current = _timestamp_epoch(now)
+    if (
+        diverged is None
+        or current is None
+        or not math.isfinite(max_age_seconds)
+        or max_age_seconds < 0
+    ):
+        return False
+    return (current - diverged) <= max_age_seconds
+
 
 # Check states GitHub reports while a check has not finished yet.
 PENDING_STATES = frozenset(

@@ -475,7 +475,7 @@ jobs:
       # One issue per red check (exact title; comment while it stays red), closed by the
       # next green scheduled run — in addition to Feishu, never instead. A step above
       # that recorded no verdict is itself red. Mode (schedule / drill / dry run) is
-      # decided by infra2_sdk.observability.issue_trail_mode from the env above.
+      # decided by common.observability.issue_trail.issue_trail_mode from the env above.
       - name: Record the verdicts as GitHub issues
         if: ${{ !cancelled() }}
         run: python tools/watchdog_issue_trail.py

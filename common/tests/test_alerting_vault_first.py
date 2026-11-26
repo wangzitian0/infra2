@@ -12,7 +12,7 @@ over in-memory stores and a small manifest with one field of each source class.
 from __future__ import annotations
 
 from infra2_sdk.runtime.config_schema import EnvironmentManifest
-from infra2_sdk.secrets import (
+from common.security.backends import (
     SecretsError,
     SecretsResolver,
     WriteResult,
