@@ -192,30 +192,66 @@ def pin_problems(root: Path = REPO_ROOT) -> list[str]:
     return problems
 
 
-def build_matrix(root: Path = REPO_ROOT, commit: str = "") -> list[dict[str, str]]:
+def _sha(value: str, name: str) -> str:
+    value = value.strip().lower()
+    if value and not _COMMIT_RE.match(value):
+        raise ValueError(f"{name} must be a full 40-hex SHA, got {value!r}")
+    return value
+
+
+def build_matrix(
+    root: Path = REPO_ROOT,
+    commit: str = "",
+    *,
+    commit_only: bool = False,
+    check: str = "",
+    changed: frozenset[str] | None = None,
+) -> list[dict[str, str]]:
     """One row per image for the CI publish job.
 
-    ``commit`` is the full SHA of the checkout. Without it (a pull request), the matrix has
-    no ``commit`` image: only a push to ``main`` or a manual run publishes a commit tag.
+    - ``commit``: the full SHA to publish. Each ``commit`` image gets kind ``commit`` and
+      the tag ``<commit>``. A push to ``main`` and a manual run pass it.
+    - ``commit_only``: no ``inputs`` row. A manual run for an older commit passes it: this
+      table describes the images, and the old tree is only the build source.
+    - ``check`` and ``changed`` (a pull request, without ``commit``): each ``commit`` image
+      with an input file in ``changed`` (repo-relative paths) gets kind ``check`` and the
+      tag ``check-<check>``. CI builds that row and pushes nothing.
     """
-    commit = commit.strip().lower()
-    if commit and not _COMMIT_RE.match(commit):
-        raise ValueError(f"commit must be a full 40-hex SHA, got {commit!r}")
+    commit = _sha(commit, "commit")
+    check = _sha(check, "check")
+    if commit and check:
+        raise ValueError("pass commit or check, not both")
+    if commit_only and not commit:
+        raise ValueError("commit_only needs commit")
     rows = []
     for image in PLATFORM_IMAGES.values():
+        row = {
+            "key": image.key,
+            "dockerfile": image.dockerfile,
+            "context": image.context,
+            "compose": image.compose,
+            "pinned_digest": "",
+        }
         if image.tag_kind == "commit":
             if commit:
                 rows.append(
-                    {
-                        "key": image.key,
-                        "kind": "commit",
-                        "image": f"{image.repository}:{commit}",
-                        "dockerfile": image.dockerfile,
-                        "context": image.context,
-                        "compose": image.compose,
-                        "pinned_digest": "",
-                    }
+                    {**row, "kind": "commit", "image": f"{image.repository}:{commit}"}
                 )
+            elif check and changed is not None:
+                inputs = {
+                    path.relative_to(root.resolve()).as_posix()
+                    for path in input_files(image, root)
+                }
+                if inputs & changed:
+                    rows.append(
+                        {
+                            **row,
+                            "kind": "check",
+                            "image": f"{image.repository}:check-{check}",
+                        }
+                    )
+            continue
+        if commit_only:
             continue
         digests = sorted(
             {
@@ -226,12 +262,9 @@ def build_matrix(root: Path = REPO_ROOT, commit: str = "") -> list[dict[str, str
         )
         rows.append(
             {
-                "key": image.key,
+                **row,
                 "kind": "inputs",
                 "image": f"{image.repository}:{expected_tag(image, root)}",
-                "dockerfile": image.dockerfile,
-                "context": image.context,
-                "compose": image.compose,
                 "pinned_digest": digests[0] if len(digests) == 1 else "",
             }
         )
@@ -247,14 +280,41 @@ def main(argv: list[str] | None = None) -> int:
     matrix.add_argument(
         "--commit",
         default="",
-        help="full SHA of the checkout; empty gives no commit-tagged image",
+        help="full SHA to publish as the tag of each commit image",
+    )
+    matrix.add_argument(
+        "--commit-only",
+        action="store_true",
+        help="no inputs-tagged row (a manual run for an older commit)",
+    )
+    matrix.add_argument(
+        "--check",
+        default="",
+        help="full SHA of a pull request run: build, not push, a changed commit image",
+    )
+    matrix.add_argument(
+        "--changed",
+        default="",
+        help="file that lists the changed repo-relative paths, one per line",
     )
     sub.add_parser(
         "check", help="exit 1 when a compose pin does not match its input files"
     )
     args = parser.parse_args(argv)
     if args.command == "matrix":
-        print(json.dumps(build_matrix(commit=args.commit), separators=(",", ":")))
+        changed = None
+        if args.changed:
+            text = Path(args.changed).read_text(encoding="utf-8")
+            changed = frozenset(
+                line.strip() for line in text.splitlines() if line.strip()
+            )
+        rows = build_matrix(
+            commit=args.commit,
+            commit_only=args.commit_only,
+            check=args.check,
+            changed=changed,
+        )
+        print(json.dumps(rows, separators=(",", ":")))
         return 0
     problems = pin_problems()
     for problem in problems:
