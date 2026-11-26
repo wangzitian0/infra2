@@ -749,3 +749,46 @@ def test_retired_workflows_are_removed_from_contract_and_disk():
         "deploy.yml:bootstrap is named in the contract and does not exist",
         "deploy.yml:deploy is named in the contract and does not exist",
     ]
+
+
+def test_every_ungated_job_declares_secret_limits() -> None:
+    """Every UNGATED_JOBS entry declares its exact secret boundary in UNGATED_SECRET_LIMITS."""
+    assert set(UNGATED_JOBS) <= set(production_contract.UNGATED_SECRET_LIMITS)
+
+
+@pytest.mark.parametrize(
+    ("job_name", "extra_secret"),
+    [
+        ("audit", "IAC_WEBHOOK_SECRET"),
+        ("watchdog", "SIGNOZ_API_KEY"),
+        ("digest", "DOKPLOY_API_KEY"),
+        ("preview-leak-check", "INFRA2_WATCHDOG_SSH_PRIVATE_KEY"),
+        ("host-hygiene-schedule", "CF_API_TOKEN"),
+        ("facet-reconcile", "IAC_WEBHOOK_SECRET"),
+        ("vault-self-refresh-audit", "IAC_WEBHOOK_SECRET"),
+        ("secrets-reconcile", "DOKPLOY_API_KEY"),
+        ("staging-db-hygiene", "DOKPLOY_API_KEY"),
+    ],
+)
+def test_ops_checks_ungated_job_fails_when_reading_secret_outside_limit(
+    job_name: str, extra_secret: str
+) -> None:
+    """Adding an unauthorized secret to any ops-checks.yml ungated job fails closed."""
+    workflows = _load_workflows(WORKFLOWS_DIR)
+    job = yaml.safe_load(yaml.safe_dump(workflows["ops-checks.yml"]["jobs"][job_name]))
+    job.setdefault("env", {})["UNEXPECTED_SECRET"] = (
+        f"${{{{ secrets.{extra_secret} }}}}"
+    )
+    mutated = {
+        **workflows,
+        "ops-checks.yml": {
+            **workflows["ops-checks.yml"],
+            "jobs": {**workflows["ops-checks.yml"]["jobs"], job_name: job},
+        },
+    }
+    errors = contract_errors(mutated, GATED_JOBS, UNGATED_JOBS)
+    assert any(
+        f"ops-checks.yml:{job_name} is ungated and reads ['{extra_secret}'] outside its secret limit"
+        in e
+        for e in errors
+    ), errors

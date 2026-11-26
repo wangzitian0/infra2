@@ -145,12 +145,10 @@ jobs:
         # finance_report/app staging/prod WITHOUT it fails closed later, loudly, from
         # schema_gate._ssh_host() itself -- never silently skipped.
         if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
-        run: |
-          set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_schema_gate
-          chmod 600 ~/.ssh/infra2_schema_gate
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_schema_gate" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_schema_gate
+          private-key: ${{ env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
 
       - name: Run deploy_v2
         env:
