@@ -393,16 +393,18 @@ REDIS_EXITED = _ps(
     ("vault-agent", "running", "Up 3 days (healthy)"),
 )
 
-# The sample of a github (git-checkout) stack: platform/23.prefect stays plain after
-# #1822 step B, so Dokploy clones it and the #629/#718/#1247/#1439 proofs read the HEAD.
-PLAIN = "platform/23.prefect/compose.yaml"
+# The sample of a github (git-checkout) stack: platform/21.portal is plain and has no
+# Vault sidecar, so #1822 step B does not move it. Dokploy clones it and the
+# #629/#718/#1247/#1439 proofs read the HEAD. platform/23.prefect was the sample until it
+# moved to x-infra2 (#1822 step B).
+PLAIN = "platform/21.portal/compose.yaml"
 PLAIN_COMPOSE = """
 services:
-  prefect-server:
-    image: prefecthq/prefect:3
+  portal:
+    image: nginx:1
     healthcheck: {test: ["CMD", "true"]}
 """
-PLAIN_UP = _ps(("prefect-server", "running", "Up 3 days (healthy)"))
+PLAIN_UP = _ps(("portal", "running", "Up 3 days (healthy)"))
 
 
 class _Host:
@@ -506,7 +508,7 @@ def _plain_sync(monkeypatch, *, remote_hash: str):
     """The same sync for a github stack (PLAIN), which Dokploy clones at a ref."""
     return _stack_sync(
         monkeypatch,
-        name="prefect",
+        name="portal",
         compose_path=PLAIN,
         content=PLAIN_COMPOSE,
         remote_hash=remote_hash,
@@ -650,7 +652,7 @@ def test_an_unchanged_stack_at_an_older_checkout_is_skipped_not_restarted(
     assert deployed == []
     assert not host.asked_for_the_checkout
     assert any(
-        "label=com.docker.compose.project=platform-prefect-x1" in cmd
+        "label=com.docker.compose.project=platform-portal-x1" in cmd
         for cmd in host.commands
     )
 
@@ -954,7 +956,7 @@ def test_verify_still_in_service_detects_mismatched_recorded_deploy_ref_checkout
         classmethod(
             lambda cls, e: {
                 "composeId": "cid",
-                "appName": "platform-prefect-x1",
+                "appName": "platform-portal-x1",
                 "env": f"IAC_DEPLOY_REF={LAST_DEPLOY_SHA}\n",
             }
         ),

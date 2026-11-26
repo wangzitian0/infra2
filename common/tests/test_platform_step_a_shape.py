@@ -18,13 +18,13 @@ from common.deploy.compose_compile import compile_stack, vault_template_for
 from common.deploy.compose_equivalence import equivalence_problems
 
 ROOT = Path(__file__).resolve().parents[2]
-# platform/02.redis and platform/01.postgres left this list in #1822 step B: each file is
-# an x-infra2 source now, and `tools.compose_compile check` proves it against the step-A file.
+# platform/02.redis, platform/01.postgres and platform/23.prefect left this list in #1822
+# step B: each file is an x-infra2 source now, and `tools.compose_compile check` proves it
+# against the step-A file.
 STACKS = (
     "platform/03.s3",
     "platform/10.authentik",
     "platform/12.alerting",
-    "platform/23.prefect",
     "platform/24.openpanel",
 )
 SUFFIX = "-vault-agent${ENV_SUFFIX}"
