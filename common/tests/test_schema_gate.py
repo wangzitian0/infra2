@@ -9,6 +9,7 @@ subprocess against a stub SDK and against the installed SDK.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -664,6 +665,11 @@ def test_launcher_with_installed_sdk_accepts_finance_report_spec_argv(tmp_path):
         text=True,
         capture_output=True,
         cwd=orm_root,
+        # Clear PYTHONSAFEPATH (set in Infrastructure CI) and put orm_root on PYTHONPATH.
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONPATH": str(orm_root),
+        },
         timeout=60,
     )
     assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
