@@ -236,6 +236,7 @@ services:
       # The app-web origin resolver reads it (truealpha v0.2.132); no fixed host.
       LLM_SERVICE_URL: http://truealpha-llm${ENV_SUFFIX}:8000
       NODE_ENV: production
+      # Kept for stack-level 10.app/env.manifest.json injected contract parity; only llm uses S3.
       S3_ENDPOINT: http://platform-s3-staging:9000
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}

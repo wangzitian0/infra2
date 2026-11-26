@@ -85,12 +85,10 @@ services:
       - dokploy-network
     labels:
       - "traefik.enable=true"
-      # Scoped to exactly what this FastAPI app serves (main.py: GET /health, and
-      # the MCP app mounted at /mcp) -- NOT a bare PathPrefix(`/api`). The web
-      # service's own Next.js API routes (/api/auth/login, /api/auth/me, ...) live
-      # under the same /api prefix on the same Host, and a bare PathPrefix(`/api`)
-      # here claims those too, silently 404ing them at llm instead of ever reaching
-      # web (truealpha#463 -- login was broken on both envs for this exact reason).
+      # Scoped to what this FastAPI app handles via the /api prefix rewrite (/mcp and
+      # /health), plus /api/v1/* via router truealpha-v1 below -- NOT a bare
+      # PathPrefix(`/api`). Legacy v0.3.6 Next.js releases also served /api/auth/* on
+      # web under /api (truealpha#463); newer releases serve /api/v1/auth/* on llm.
       # Host uses ${APP_HOST} (deploy.py-computed), not the literal
       # truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} pattern -- that pattern
       # collapsed to the malformed truealpha.truealpha.club in production, since
@@ -141,6 +139,7 @@ services:
       # The app-web origin resolver reads it (truealpha v0.2.132); no fixed host.
       LLM_SERVICE_URL: http://truealpha-llm${ENV_SUFFIX}:8000
       NODE_ENV: production
+      # Kept for stack-level 10.app/env.manifest.json injected contract parity; only llm uses S3.
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://${APP_HOST}}
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}
