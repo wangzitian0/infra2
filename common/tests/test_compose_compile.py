@@ -36,11 +36,13 @@ X_INFRA2_FILES = {
     "finance_report/finance_report/10.app/compose.yaml",
     "truealpha/truealpha/10.app/compose.yaml",
     "truealpha/truealpha/20.data_engine/compose.yaml",
-    # Platform Redis, Postgres, Prefect and S3 moved to x-infra2 in #1822 step B.
+    # Platform Redis, Postgres, Prefect, S3 and Authentik moved to x-infra2 in #1822
+    # step B.
     "platform/02.redis/compose.yaml",
     "platform/01.postgres/compose.yaml",
     "platform/23.prefect/compose.yaml",
     "platform/03.s3/compose.yaml",
+    "platform/10.authentik/compose.yaml",
 }
 
 
@@ -248,6 +250,10 @@ def test_real_stacks_classify_as_measured() -> None:
     s3 = load_stack("platform/03.s3/compose.yaml")
     assert raw_ineligibility(s3.compiled) == []
     assert s3.source_type == "raw"
+    # The token-init script is inline (#1822): no mount from the checkout is left.
+    authentik = load_stack("platform/10.authentik/compose.yaml")
+    assert raw_ineligibility(authentik.compiled) == []
+    assert authentik.source_type == "raw"
     assert (
         raw_ineligibility(load_stack("platform/21.portal/compose.yaml").compiled) == []
     )
@@ -676,8 +682,8 @@ def test_check_reports_a_plain_file_that_the_compile_changes(monkeypatch) -> Non
     monkeypatch.setattr(eq, "compile_stack", lambda text, **k: text + "\n")
     report = eq.check("HEAD")
     plain = [p for p in report.problems if not p.startswith(tuple(X_INFRA2_FILES))]
-    # 15 plain files on 2026-11-26, after platform/03.s3 moved to x-infra2 (#1822).
-    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 15
+    # 14 plain files on 2026-11-26, after platform/10.authentik moved to x-infra2 (#1822).
+    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 14
     assert all("a plain file changed in the compile" in p for p in plain)
 
 

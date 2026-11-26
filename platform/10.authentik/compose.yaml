@@ -1,100 +1,23 @@
+# Platform Authentik on x-infra2 (#1822 step B). common/deploy/compose_compile.py compiles
+# this file with infra2-sdk `compile_compose`, and the deploy uploads the compiled text as
+# Dokploy sourceType=raw. To read the compiled text:
+#   python -m tools.compose_compile print platform/10.authentik/compose.yaml
+x-infra2:
+  # One vault-agent sidecar, container platform-authentik-vault-agent${ENV_SUFFIX}. Its
+  # template is rendered from env.manifest.json (common.security.secrets_render).
+  vault:
+    name: platform-authentik
+
 services:
-  vault-agent:
-    init: true  # tini as PID1 reaps healthcheck ssl_client zombies
-    image: hashicorp/vault:1.15
-    container_name: platform-authentik-vault-agent${ENV_SUFFIX}
-    restart: always
-    mem_limit: 128m
-    cpu_shares: 256
-    entrypoint:
-      - sh
-      - -c
-      - |
-        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
-        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
-          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
-          exit 1
-        fi
-        if [ -z "$$VAULT_ADDR" ]; then
-          echo "VAULT_ADDR is required"
-          exit 1
-        fi
-        echo "$$VAULT_ROLE_ID" > /vault/role_id
-        echo "$$VAULT_SECRET_ID" > /vault/secret_id
-        # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
-        # natively. No token_file decay, no manual renew loop.
-        exec vault agent -config=/etc/vault/vault-agent.hcl
-    environment:
-      VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
-      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      ENVIRONMENT: ${ENV}
-      ENV_SUFFIX: ${ENV_SUFFIX:-}
-      # Cache-bust (#628): secrets.ctmpl is a single-file bind mount, so a checkout that
-      # rewrites it leaves the running agent on the old inode, and Compose only recreates
-      # a service whose resolved config changed. The hash covers the template, so a
-      # template edit recreates the agent instead of shipping as a silent no-op.
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
-    volumes:
-      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
-      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
-      - secrets:/vault/secrets
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
-
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          # local checks every cycle (fast): secrets rendered + no unresolved template.
-          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
-          # vault token lookup THROTTLED to ~5min (token TTL is hours) so N vault-agents
-          # do not hammer Vault every 30s (#292). The local checks above still fail fast.
-          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
-            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
-            touch /tmp/.vault_hc
-          fi
-      interval: 30s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-
   server:
     image: ghcr.io/goauthentik/server:2024.12.0
     container_name: platform-authentik-server${ENV_SUFFIX}
     restart: unless-stopped
     mem_limit: 768m
-    depends_on:
-      - vault-agent
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -e
-        waited=0
-        max_wait="300"
-        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
-          echo "Waiting for secrets file..."
-          sleep 2
-          waited=$$((waited + 2))
-        done
-        if [ ! -s /secrets/.env ]; then
-          echo "ERROR: /secrets/.env is missing or empty"
-          exit 1
-        fi
-        set -a
-        . /secrets/.env
-        set +a
-        exec "$$@"
-      - --
+    # x-vault waits for /secrets/.env, exports it, then runs this command.
+    x-vault: {}
     command: [ak, server]
     environment:
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
@@ -104,13 +27,6 @@ services:
       - ${DATA_PATH}/media:/media
       - ${DATA_PATH}/certs:/certs
       - ${DATA_PATH}/custom-templates:/templates
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
     labels:
       - "traefik.enable=true"
     healthcheck:
@@ -124,32 +40,10 @@ services:
     container_name: platform-authentik-worker${ENV_SUFFIX}
     restart: unless-stopped
     mem_limit: 512m
-    depends_on:
-      - vault-agent
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -e
-        waited=0
-        max_wait="300"
-        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
-          echo "Waiting for secrets file..."
-          sleep 2
-          waited=$$((waited + 2))
-        done
-        if [ ! -s /secrets/.env ]; then
-          echo "ERROR: /secrets/.env is missing or empty"
-          exit 1
-        fi
-        set -a
-        . /secrets/.env
-        set +a
-        exec "$$@"
-      - --
+    # x-vault waits for /secrets/.env, exports it, then runs this command.
+    x-vault: {}
     command: [ak, worker]
     environment:
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
@@ -159,13 +53,6 @@ services:
       - ${DATA_PATH}/media:/media
       - ${DATA_PATH}/custom-templates:/templates
       - ${DATA_PATH}/certs:/certs
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
     healthcheck:
       test: [ "CMD", "ak", "healthcheck" ]
       interval: 60s
@@ -179,33 +66,12 @@ services:
     restart: "no"
     mem_limit: 256m
     depends_on:
-      vault-agent:
-        condition: service_started
       server:
         condition: service_healthy
       worker:
         condition: service_healthy
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -e
-        waited=0
-        max_wait="300"
-        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
-          echo "Waiting for secrets file..."
-          sleep 2
-          waited=$$((waited + 2))
-        done
-        if [ ! -s /secrets/.env ]; then
-          echo "ERROR: /secrets/.env is missing or empty"
-          exit 1
-        fi
-        set -a
-        . /secrets/.env
-        set +a
-        exec "$$@"
-      - --
+    # x-vault waits for /secrets/.env, exports it, then runs this command.
+    x-vault: {}
     # The script is inline (#1822): a raw Dokploy compose has no checkout to mount a
     # script file from. Compose interpolates `$`, so each shell `$` is written `$$`;
     # only `${ENV_SUFFIX}` is a Compose reference.
@@ -360,7 +226,6 @@ services:
 
         echo "Root token initialization complete"
     environment:
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
@@ -371,21 +236,3 @@ services:
       ENVIRONMENT: ${ENV}
     volumes:
       - secrets:/secrets:ro
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
-
-volumes:
-  secrets:
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "size=10m,mode=0755"
-
-networks:
-  dokploy-network:
-    external: true

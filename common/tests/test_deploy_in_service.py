@@ -1013,7 +1013,9 @@ def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
 
     class FailingDeployer(d.Deployer):
         service = "authentik"
-        compose_path = "platform/10.authentik/compose.yaml"
+        # A plain (github) compose: platform/10.authentik is x-infra2 since #1822 step B,
+        # and this test writes the github upsert first.
+        compose_path = "platform/24.openpanel/compose.yaml"
 
         @classmethod
         def env(cls):
