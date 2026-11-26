@@ -27,6 +27,20 @@ invoke s3.status
   - Zero code modifications required for existing downstream consumers (`truealpha`, `finance_report`).
   - Supports standard AWS S3 SDK, boto3, `mc`, and `rc`.
 
+## Files
+
+| File | Purpose |
+|------|---------|
+| `compose.yaml` | x-infra2 source; the compiler adds the vault-agent sidecar (#1822 step B) |
+| `Dockerfile` | RustFS 1.0.0 with `mc`; CI publishes it as `ghcr.io/wangzitian0/infra2-s3` (`common/deploy/platform_images.py`) |
+| `deploy.py` | S3 deployer with vault-init |
+| `env.manifest.json` | Secret keys; the vault-agent template renders from it |
+| `shared_tasks.py` | `status` and `create_app_bucket` tasks |
+| `vault-policy.hcl` | Read-only policy for the S3 secret |
+
+The compiled text has no `vault-agent.hcl` or `secrets.ctmpl` file in git. Read it with
+`python -m tools.compose_compile print platform/03.s3/compose.yaml`.
+
 ## Domains & Ports
 
 | Port | Protocol / Purpose | Staging Domain | Production Domain |
