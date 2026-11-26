@@ -36,8 +36,9 @@ X_INFRA2_FILES = {
     "finance_report/finance_report/10.app/compose.yaml",
     "truealpha/truealpha/10.app/compose.yaml",
     "truealpha/truealpha/20.data_engine/compose.yaml",
-    # Platform Redis moved to x-infra2 in #1822 step B.
+    # Platform Redis and Postgres moved to x-infra2 in #1822 step B.
     "platform/02.redis/compose.yaml",
+    "platform/01.postgres/compose.yaml",
 }
 
 
@@ -667,8 +668,8 @@ def test_check_reports_a_plain_file_that_the_compile_changes(monkeypatch) -> Non
     monkeypatch.setattr(eq, "compile_stack", lambda text, **k: text + "\n")
     report = eq.check("HEAD")
     plain = [p for p in report.problems if not p.startswith(tuple(X_INFRA2_FILES))]
-    # 18 plain files on 2026-11-26, after platform/02.redis moved to x-infra2 (#1822).
-    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 18
+    # 17 plain files on 2026-11-26, after platform/01.postgres moved to x-infra2 (#1822).
+    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 17
     assert all("a plain file changed in the compile" in p for p in plain)
 
 
