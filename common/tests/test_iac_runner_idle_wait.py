@@ -424,8 +424,8 @@ def test_a_failed_health_request_is_unknown(tmp_path) -> None:
     assert docker_calls.count("exec -i iac-runner python -") == 1
 
 
-def test_the_wait_stops_at_the_limit_with_a_warning(tmp_path, health_server) -> None:
-    """The wait must never block the self-update: at the limit it warns and continues."""
+def test_the_wait_fails_closed_at_the_limit(tmp_path, health_server) -> None:
+    """When in-flight deploys never drain by the limit, fail closed and abort recreate."""
     sequence = health_server([(200, {"in_flight_deploys": 1})])
 
     proc, _ = _run_helper(
@@ -438,17 +438,17 @@ def test_the_wait_stops_at_the_limit_with_a_warning(tmp_path, health_server) -> 
         timeout=30,
     )
 
-    assert proc.returncode == 0, proc.stderr
-    warning = re.search(
-        r"WARNING: runner still reports 1 in-flight deploy\(s\) after (\d+)s; "
-        r"rebuilding anyway",
-        proc.stdout,
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+    err = re.search(
+        r"ERROR: runner still reports 1 in-flight deploy\(s\) after (\d+)s; "
+        r"aborting recreate",
+        proc.stderr,
     )
-    assert warning, proc.stdout
-    assert int(warning.group(1)) >= 2
+    assert err, proc.stderr
+    assert int(err.group(1)) >= 2
     assert sequence.requests >= 2
     assert set(_count_lines(proc.stdout)) == {"1"}
-    assert proc.stdout.rstrip().endswith(AFTER_LINE)
+    assert AFTER_LINE not in proc.stdout
 
 
 def test_an_invalid_limit_falls_back_to_the_default(tmp_path, health_server) -> None:

@@ -28,9 +28,32 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from infra2_sdk.service import CallableCheck, init_service
-from common.deploy.git_refs import classify_ref
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
+
+_SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
+_TAG_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
+_PR_RE = re.compile(r"\A(?:pr-[1-9]\d*|[1-9]\d{0,5})\Z")
+
+
+def classify_ref(ref: str | int) -> str:
+    """Classify a deploy ref without importing repo-root packages outside /app."""
+    cleaned = str(ref).strip() if ref is not None else ""
+    if not cleaned:
+        raise ValueError("deploy ref must be non-empty")
+    if _TAG_RE.match(cleaned):
+        return "tag"
+    if cleaned == "main":
+        return "branch"
+    if _PR_RE.fullmatch(cleaned):
+        return "pr"
+    if _SHA_RE.match(cleaned):
+        return "sha"
+    raise ValueError(
+        f"unrecognized deploy ref {ref!r}: expected 'main', 'vX.Y.Z', 'pr-<N>', "
+        "a 1-6 digit PR number, or a 7-40 hex commit sha"
+    )
+
 
 app = FastAPI(
     title="Infra2 IaC Runner",

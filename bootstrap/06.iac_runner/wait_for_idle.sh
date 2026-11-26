@@ -15,7 +15,7 @@
 #   IAC_RUNNER_IDLE_WAIT_SECONDS  wait limit in whole seconds (default 900)
 #   IAC_RUNNER_IDLE_POLL_SECONDS  seconds between polls (default 10)
 #
-# The wait never blocks the self-update: an unknown count or the limit continues.
+# An unknown count continues; reaching the limit fails closed (return 1).
 
 _IAC_RUNNER_IDLE_CONTAINER="iac-runner"
 
@@ -86,8 +86,8 @@ wait_for_runner_idle() {
       return 0
     fi
     if [ "$elapsed" -ge "$limit" ]; then
-      echo "WARNING: runner still reports $count in-flight deploy(s) after ${elapsed}s; rebuilding anyway"
-      return 0
+      echo "ERROR: runner still reports $count in-flight deploy(s) after ${elapsed}s; aborting recreate" >&2
+      return 1
     fi
     sleep "$interval"
   done

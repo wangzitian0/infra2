@@ -44,6 +44,10 @@ RUN pip install --no-cache-dir "uv==0.9.18" && uv --version
 COPY bootstrap/06.iac_runner/webhook_server.py .
 COPY bootstrap/06.iac_runner/sync_runner.py .
 
+# Fail the image build if either entrypoint imports repo-root packages absent from /app.
+RUN GIT_REPO_URL=https://github.com/wangzitian0/infra2 PYTHONPATH=/app \
+    python -c "import sys, webhook_server, sync_runner; assert 'common' not in sys.modules"
+
 RUN mkdir -p /workspace && \
     git config --global --add safe.directory /workspace/infra2 && \
     git config --global --add safe.directory '*'

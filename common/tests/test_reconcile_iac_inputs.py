@@ -237,6 +237,7 @@ def test_x_infra2_stacks_are_read_from_the_compose_files() -> None:
         "uv.lock",
         "tools/sdk_requirement.py",
         "common/deploy/compose_compile.py",
+        "common/deploy/compose_rules.py",
         "common/security/secrets_render.py",
         "common/security/registry.py",
     ],
