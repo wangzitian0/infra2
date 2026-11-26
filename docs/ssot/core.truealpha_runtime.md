@@ -80,6 +80,12 @@ Required assertions:
 4. OpenD, Postgres, and Dagster UI are unreachable on non-loopback host interfaces.
 5. A missing digest/release/approval/credential or wrong `ENVIRONMENT` blocks execution.
 
+## 7. Telemetry & Ops Surface Split (L0–L4)
+
+- **L0–L2 (`infra2`):** Delivery/Watchdog (`StageRecord`, CI gates, availability ledger) and SigNoz OTel metrics/logs (`OTEL_SERVICE_NAME` runtime override preserved) stay in `infra2` (see [ops.observability.md](./ops.observability.md#12-宏观全局看板与门禁治理原则-macro-dashboard--gate-rationalization-1195)).
+- **L3 (`truealpha` Admin & Ops):** Runtime operations (`/admin`), DataHub facts (`/admin/datahub`), and read-only contract/applicability settings (`/admin/settings`) read Postgres `ops.*` views (`ops.nightly_verdicts`, `ops.output_invariant_results`, `ops.pipeline_trigger_requests`, `ops.head_rollback_requests`) and `app_ops_reader`, governed independently from `mart_readonly` research queries and non-superuser `data_engine_runtime` worker execution. Every Dagster lane schedule resolves its `DefaultScheduleStatus` from `environment_contract.v1.json` (`live_vendor_calls=false` in preview keeps all schedules `STOPPED`).
+- **L4 (`truealpha` Research & MCP):** Dual-tier MCP bearer auth separates full admin/trigger access (`MCP_BEARER_TOKEN`) from optional read-only mart access (optional readonly MCP token resolving to `PrincipalKind.MEMBER`).
+
 ## Used By
 
 - `truealpha/truealpha/20.data_engine/README.md`
