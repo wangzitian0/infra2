@@ -134,9 +134,10 @@ services:
     # nothing.
     ports:
       - "${S3_HOST_PORT:-127.0.0.1:0}:9000"
+    # The data mount comes first: the x-infra2 compile (#1822 step B) appends the secrets mount.
     volumes:
-      - secrets:/secrets:ro
       - ${DATA_PATH}:/data
+      - secrets:/secrets:ro
     networks:
       dokploy-network:
         aliases:
