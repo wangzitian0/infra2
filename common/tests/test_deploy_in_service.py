@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -380,14 +381,28 @@ def test_sync_reports_failed_when_the_stack_is_not_in_service(monkeypatch):
 RELEASE_SHA = "a" * 40  # this runner's checkout: the release being synced (v1.2.4)
 LAST_DEPLOY_SHA = "b" * 40  # the release the stack was last deployed from
 
-REDIS_COMPOSE = """
+REDIS = "platform/02.redis/compose.yaml"
+# platform/02.redis is a raw x-infra2 stack (#1822 step B). Its compiled text declares
+# the redis service and the vault-agent sidecar, both with a healthcheck.
+REDIS_UP = _ps(
+    ("redis", "running", "Up 3 days (healthy)"),
+    ("vault-agent", "running", "Up 3 days (healthy)"),
+)
+REDIS_EXITED = _ps(
+    ("redis", "exited", "Exited (137) 2 hours ago"),
+    ("vault-agent", "running", "Up 3 days (healthy)"),
+)
+
+# The sample of a github (git-checkout) stack: platform/23.prefect stays plain after
+# #1822 step B, so Dokploy clones it and the #629/#718/#1247/#1439 proofs read the HEAD.
+PLAIN = "platform/23.prefect/compose.yaml"
+PLAIN_COMPOSE = """
 services:
-  redis:
-    image: redis:7
-    healthcheck: {test: ["CMD", "redis-cli", "ping"]}
+  prefect-server:
+    image: prefecthq/prefect:3
+    healthcheck: {test: ["CMD", "true"]}
 """
-REDIS_UP = _ps(("redis", "running", "Up 3 days (healthy)"))
-REDIS_EXITED = _ps(("redis", "exited", "Exited (137) 2 hours ago"))
+PLAIN_UP = _ps(("prefect-server", "running", "Up 3 days (healthy)"))
 
 
 class _Host:
@@ -396,21 +411,35 @@ class _Host:
 
     def __init__(
         self,
-        checkout: str,
+        checkout: str | None,
         containers: str,
         *,
         listable: bool = True,
         running: tuple[str, ...] = (),
         restart_ok: bool = True,
+        raw: tuple[str, Callable[[], str | None]] | None = None,
     ):
+        """`checkout` is None for a raw stack: it has no clone, so `git rev-parse` is
+        an unexpected command. `raw` is (the compose file Dokploy wrote, a callable that
+        answers the CONFIGURATION_SHA256 that the running containers carry)."""
         self.checkout, self.containers, self.listable = checkout, containers, listable
-        self.running, self.restart_ok = running, restart_ok
+        self.running, self.restart_ok, self.raw = running, restart_ok, raw
         self.commands: list[str] = []
 
     def run(self, cmd, hide=True, warn=True):
         self.commands.append(cmd)
-        if "rev-parse HEAD" in cmd:
+        if "rev-parse HEAD" in cmd and self.checkout is not None:
             return _Run(True, self.checkout + "\n")
+        if self.raw and cmd.endswith("/code/docker-compose.yml'"):
+            return _Run(True, self.raw[0])
+        if self.raw and "docker inspect" in cmd:
+            carried = {"CONFIGURATION_SHA256": self.raw[1]() or ""}
+            return _Run(
+                True,
+                _inspected(
+                    ("platform-redis", carried), ("platform-redis-vault-agent", carried)
+                ),
+            )
         if "{{.Names}}" in cmd:
             return _Run(True, "".join(f"{name}\n" for name in self.running))
         if "docker ps" in cmd:
@@ -440,32 +469,75 @@ class _Host:
 
 
 class _Dokploy:
-    """platform/redis in `env`; any other lookup finds nothing."""
+    """platform/<name> in `env`; any other lookup finds nothing."""
 
-    def __init__(self, env: str = "production"):
-        self.env = env
+    def __init__(self, env: str = "production", name: str = "redis"):
+        self.env, self.name = env, name
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):
-        if (name, project_name, env_name) == ("redis", "platform", self.env):
-            return {"composeId": "cid", "appName": "platform-redis-x1"}
+        if (name, project_name, env_name) == (self.name, "platform", self.env):
+            return {"composeId": "cid", "appName": f"platform-{self.name}-x1"}
         return None
 
     def get_compose(self, compose_id):
         assert compose_id == "cid"
-        return {"composeId": "cid", "appName": "platform-redis-x1"}
+        return {"composeId": "cid", "appName": f"platform-{self.name}-x1"}
 
 
 def _redis_sync(
     monkeypatch, *, remote_hash: str, env: str = "production", suffix: str = ""
 ):
-    """A platform/redis sync in `env` at RELEASE_SHA against a stack last deployed from
-    LAST_DEPLOY_SHA; `remote_hash` "h1" means its config did not change. Returns the
-    deployer and the list `composing` appends to when a (re)deploy is triggered."""
+    """A platform/redis sync (a raw stack) in `env` at RELEASE_SHA against a stack last
+    deployed from LAST_DEPLOY_SHA; `remote_hash` "h1" means its config did not change.
+    Returns the deployer and the list `composing` appends to when a (re)deploy is
+    triggered."""
+    return _stack_sync(
+        monkeypatch,
+        name="redis",
+        compose_path=REDIS,
+        content=(ROOT / REDIS).read_text(encoding="utf-8"),
+        remote_hash=remote_hash,
+        env=env,
+        suffix=suffix,
+    )
+
+
+def _plain_sync(monkeypatch, *, remote_hash: str):
+    """The same sync for a github stack (PLAIN), which Dokploy clones at a ref."""
+    return _stack_sync(
+        monkeypatch,
+        name="prefect",
+        compose_path=PLAIN,
+        content=PLAIN_COMPOSE,
+        remote_hash=remote_hash,
+    )
+
+
+def _raw_redis_host(redis, **kwargs) -> _Host:
+    """The host of a raw redis: no clone, Dokploy's compiled file, bound containers."""
+    from common.deploy.compose_compile import load_stack
+
+    assert redis._raw_identity_labels(), "platform/02.redis must be a raw stack"
+    written = load_stack(REDIS).compiled
+    return _Host(None, raw=(written, redis.get_remote_config_hash), **kwargs)
+
+
+def _stack_sync(
+    monkeypatch,
+    *,
+    name: str,
+    compose_path: str,
+    content: str,
+    remote_hash: str,
+    env: str = "production",
+    suffix: str = "",
+):
     from common.core.service_identity import ServiceIdentity
 
     d = deployer_module
+    path = compose_path
     identity = ServiceIdentity.build(
-        "platform/redis", env, component="redis", service_name="redis"
+        f"platform/{name}", env, component=name, service_name=name
     ).deploy_env()
     remote = {
         "runtime_hash": remote_hash,
@@ -478,9 +550,9 @@ def _redis_sync(
     }
     deployed: list[dict] = []
 
-    class Redis(d.Deployer):
-        service = "redis"
-        compose_path = "platform/02.redis/compose.yaml"
+    class Stack(d.Deployer):
+        service = name
+        compose_path = path
         IN_SERVICE_INTERVAL_SECONDS = 0
 
         @classmethod
@@ -518,7 +590,7 @@ def _redis_sync(
 
         @classmethod
         def get_compose_content(cls, c):
-            return REDIS_COMPOSE
+            return content
 
         @classmethod
         def get_remote_config_identity(cls):
@@ -551,13 +623,14 @@ def _redis_sync(
             return RELEASE_SHA
 
     monkeypatch.setattr(
-        "common.deploy.dokploy_client.get_dokploy", lambda host=None: _Dokploy(env)
+        "common.deploy.dokploy_client.get_dokploy",
+        lambda host=None: _Dokploy(env, name),
     )
     monkeypatch.setattr(d, "validate_env", lambda: [])
     monkeypatch.setattr(d.time, "sleep", lambda _s: None)
     monkeypatch.setenv("IAC_DEPLOY_REF", RELEASE_SHA)
     monkeypatch.delenv("DEPLOY_ACTION", raising=False)
-    return Redis, deployed
+    return Stack, deployed
 
 
 def test_an_unchanged_stack_at_an_older_checkout_is_skipped_not_restarted(
@@ -566,17 +639,18 @@ def test_an_unchanged_stack_at_an_older_checkout_is_skipped_not_restarted(
     """#718 regression: the skip path asked the post-deploy identity proof, which
     wants Dokploy's checkout at THIS release; an unchanged stack is at its last
     deploy's, so every release would have restarted every unchanged service (a redis
-    restart breaks OpenPanel and Authentik workers, #726)."""
-    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
-    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+    restart breaks OpenPanel and Authentik workers, #726). A github stack keeps the
+    checkout proof, so PLAIN is the sample (platform/02.redis is raw since #1822)."""
+    stack, deployed = _plain_sync(monkeypatch, remote_hash="h1")
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=PLAIN_UP)
 
-    result = redis.sync(host)
+    result = stack.sync(host)
 
     assert result["action"] == "skipped", result
     assert deployed == []
     assert not host.asked_for_the_checkout
     assert any(
-        "label=com.docker.compose.project=platform-redis-x1" in cmd
+        "label=com.docker.compose.project=platform-prefect-x1" in cmd
         for cmd in host.commands
     )
 
@@ -639,10 +713,10 @@ def test_an_unchanged_stack_whose_compose_lookup_raises_fails_not_skips(monkeypa
 def test_a_changed_stack_still_fails_on_a_stale_checkout_after_deploy(monkeypatch):
     """#629 is untouched: after THIS release deployed the stack, a Dokploy checkout
     left at the previous release is a failed deploy, healthy containers or not."""
-    redis, deployed = _redis_sync(monkeypatch, remote_hash="h0")
-    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+    stack, deployed = _plain_sync(monkeypatch, remote_hash="h0")
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=PLAIN_UP)
 
-    result = redis.sync(host)
+    result = stack.sync(host)
 
     assert len(deployed) == 1
     assert result["action"] == "failed"
@@ -650,10 +724,10 @@ def test_a_changed_stack_still_fails_on_a_stale_checkout_after_deploy(monkeypatc
 
 
 def test_a_changed_stack_at_the_new_checkout_is_updated(monkeypatch):
-    redis, deployed = _redis_sync(monkeypatch, remote_hash="h0")
-    host = _Host(checkout=RELEASE_SHA, containers=REDIS_UP)
+    stack, deployed = _plain_sync(monkeypatch, remote_hash="h0")
+    host = _Host(checkout=RELEASE_SHA, containers=PLAIN_UP)
 
-    result = redis.sync(host)
+    result = stack.sync(host)
 
     # no dependent is running on this host, so none was restarted
     assert result == {"action": "updated", "details": "composeId: cid"}
@@ -673,7 +747,6 @@ def _names(compose: str, suffix: str, *services: str) -> list[str]:
 
 OPENPANEL = "platform/24.openpanel/compose.yaml"
 AUTHENTIK = "platform/10.authentik/compose.yaml"
-REDIS = "platform/02.redis/compose.yaml"
 
 
 def _everything_running(suffix: str) -> tuple[str, ...]:
@@ -686,9 +759,7 @@ def test_a_skipped_redis_sync_restarts_no_dependent(monkeypatch):
     """#726: only a sync that recreated Redis flushes its script cache; a skip must
     not bounce OpenPanel and Authentik on every release (#718)."""
     redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
-    host = _Host(
-        checkout=LAST_DEPLOY_SHA, containers=REDIS_UP, running=_everything_running("")
-    )
+    host = _raw_redis_host(redis, containers=REDIS_UP, running=_everything_running(""))
 
     result = redis.sync(host)
 
@@ -696,6 +767,9 @@ def test_a_skipped_redis_sync_restarts_no_dependent(monkeypatch):
     assert "restarted_dependents" not in result
     assert host.restarted == []
     assert not any("{{.Names}}" in cmd for cmd in host.commands)
+    # the raw skip path binds the containers to the release (#1893), with no clone
+    assert any("docker inspect" in cmd for cmd in host.commands)
+    assert not host.asked_for_the_checkout
 
 
 def test_an_applied_redis_sync_restarts_exactly_its_declared_dependents(monkeypatch):
@@ -705,9 +779,7 @@ def test_an_applied_redis_sync_restarts_exactly_its_declared_dependents(monkeypa
     redis, deployed = _redis_sync(monkeypatch, remote_hash="h0")
     printed: list[str] = []
     monkeypatch.setattr(deployer_module, "success", printed.append)
-    host = _Host(
-        checkout=RELEASE_SHA, containers=REDIS_UP, running=_everything_running("")
-    )
+    host = _raw_redis_host(redis, containers=REDIS_UP, running=_everything_running(""))
 
     result = redis.sync(host)
 
@@ -730,6 +802,13 @@ def test_an_applied_redis_sync_restarts_exactly_its_declared_dependents(monkeypa
     )
     restart = next(i for i, cmd in enumerate(host.commands) if "docker restart" in cmd)
     assert in_service < restart
+    # a raw redis proves the file Dokploy wrote and the release binding, not a HEAD
+    written = next(
+        i for i, cmd in enumerate(host.commands) if "code/docker-compose.yml" in cmd
+    )
+    bound = next(i for i, cmd in enumerate(host.commands) if "docker inspect" in cmd)
+    assert written < in_service < bound < restart
+    assert not host.asked_for_the_checkout
 
 
 def test_a_staging_redis_sync_restarts_only_staging_dependents(monkeypatch):
@@ -738,8 +817,8 @@ def test_a_staging_redis_sync_restarts_only_staging_dependents(monkeypatch):
     redis, _deployed = _redis_sync(
         monkeypatch, remote_hash="h0", env="staging", suffix="-staging"
     )
-    host = _Host(
-        checkout=RELEASE_SHA,
+    host = _raw_redis_host(
+        redis,
         containers=REDIS_UP,
         running=_everything_running("") + _everything_running("-staging"),
     )
@@ -760,7 +839,7 @@ def test_a_dependent_that_is_not_running_is_left_alone(monkeypatch):
         for name in _everything_running("")
         if name not in _names(OPENPANEL, "", "op-worker")
     )
-    host = _Host(checkout=RELEASE_SHA, containers=REDIS_UP, running=running)
+    host = _raw_redis_host(redis, containers=REDIS_UP, running=running)
 
     result = redis.sync(host)
 
@@ -780,8 +859,8 @@ def test_a_failed_dependent_restart_fails_the_sync_with_the_manual_command(
     """A retry would skip the now-unchanged Redis and never restart them, so the sync
     fails and says what to run by hand."""
     redis, _deployed = _redis_sync(monkeypatch, remote_hash="h0")
-    host = _Host(
-        checkout=RELEASE_SHA,
+    host = _raw_redis_host(
+        redis,
         containers=REDIS_UP,
         running=_everything_running(""),
         restart_ok=False,
@@ -866,23 +945,24 @@ def test_verify_still_in_service_detects_mismatched_recorded_deploy_ref_checkout
 ):
     """#1247: when a prior sync updated IAC_DEPLOY_REF in Dokploy DB but Dokploy's
     on-disk git checkout stayed at an older SHA, verify_still_in_service returns an
-    error string so SyncPipeline forces a redeploy instead of skipping."""
-    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    error string so SyncPipeline forces a redeploy instead of skipping. Only a github
+    stack has that checkout, so PLAIN is the sample (platform/02.redis is raw)."""
+    stack, deployed = _plain_sync(monkeypatch, remote_hash="h1")
     monkeypatch.setattr(
-        redis,
+        stack,
         "_find_remote_compose",
         classmethod(
             lambda cls, e: {
                 "composeId": "cid",
-                "appName": "platform-redis-x1",
+                "appName": "platform-prefect-x1",
                 "env": f"IAC_DEPLOY_REF={LAST_DEPLOY_SHA}\n",
             }
         ),
     )
     stale_on_disk_sha = "c" * 40
-    host = _Host(checkout=stale_on_disk_sha, containers=REDIS_UP)
+    host = _Host(checkout=stale_on_disk_sha, containers=PLAIN_UP)
 
-    err = redis.verify_still_in_service(host, "cid")
+    err = stack.verify_still_in_service(host, "cid")
     assert err is not None
     assert stale_on_disk_sha[:12] in err
     assert LAST_DEPLOY_SHA[:12] in err
@@ -911,16 +991,16 @@ def test_an_unchanged_stack_is_skipped_only_when_its_newest_record_is_done(
     containers matching while Dokploy's deploy runs or failed; the skip must not turn the
     retry green. No record keeps the skip. The redeploy's newer `done` record ends the block."""
     records = _records(*statuses)
-    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    stack, deployed = _plain_sync(monkeypatch, remote_hash="h1")
     monkeypatch.setattr(
         "common.deploy.dokploy_adapter.get_compose_deployments", lambda _c, _id: records
     )
-    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=PLAIN_UP)
 
-    redis.sync(host)
+    stack.sync(host)
     assert (len(deployed) == 1) is redeploys
     records.append({"status": "done", "createdAt": "2026-11-05T09:00"})
-    assert redis.sync(host)["action"] == "skipped" and len(deployed) == int(redeploys)
+    assert stack.sync(host)["action"] == "skipped" and len(deployed) == int(redeploys)
 
 
 def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):

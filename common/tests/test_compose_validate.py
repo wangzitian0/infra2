@@ -39,8 +39,8 @@ def test_every_plain_file_keeps_the_source_command(tmp_path):
         for p in _tracked_compose_files()
         if not has_x_infra2((ROOT / p).read_text(encoding="utf-8"))
     ]
-    # 16 plain files on 2026-11-25, after #1822 Slice 3 moved six stacks to x-infra2.
-    assert len(plain) >= 16
+    # 15 plain files on 2026-11-26, after platform/02.redis moved to x-infra2 (#1822).
+    assert len(plain) >= 15
     for rel in plain:
         assert config_command(rel, tmp_path) == [
             "docker",
@@ -69,17 +69,21 @@ def test_the_x_infra2_stack_validates_its_compiled_text(tmp_path):
 def test_validate_reports_failed_files_and_uses_the_ci_env():
     seen: list[tuple[list[str], dict[str, str]]] = []
 
+    # The failing sample is a plain file, so docker compose reads its source path.
+    # platform/02.redis moved to x-infra2 (#1822); it validates a compiled work copy.
+    bad = "platform/03.clickhouse/compose.yaml"
+
     def fake_run(cmd, *, env, stdout):
         assert stdout is subprocess.DEVNULL
         seen.append((list(cmd), env))
-        rc = 1 if cmd[cmd.index("-f") + 1] == "platform/02.redis/compose.yaml" else 0
+        rc = 1 if cmd[cmd.index("-f") + 1] == bad else 0
         return subprocess.CompletedProcess(cmd, rc)
 
     failed = validate(
-        ["platform/02.redis/compose.yaml", TODO, "platform/01.postgres/compose.yaml"],
+        [bad, TODO, "platform/01.postgres/compose.yaml"],
         run=fake_run,
     )
-    assert failed == ["platform/02.redis/compose.yaml"]
+    assert failed == [bad]
     assert len(seen) == 3
     for _cmd, env in seen:
         assert {k: env[k] for k in CI_COMPOSE_ENV} == CI_COMPOSE_ENV

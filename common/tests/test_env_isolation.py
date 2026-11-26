@@ -11,6 +11,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
+from common.deploy.compose_compile import compile_stack, has_x_infra2
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # Internal services that run a separate instance per environment. A host
@@ -44,20 +48,47 @@ def _platform_composes() -> list[Path]:
     return sorted((ROOT / "platform").glob("*/compose.yaml"))
 
 
+def _vault_name_line(text: str) -> int | None:
+    """The 1-based line of `x-infra2.vault.name`, if the compiled text proves its suffix.
+
+    The compiler names the sidecar `<name>-vault-agent${ENV_SUFFIX}`, so the source key
+    is not a host. The line is skipped only when the compiled text carries that name.
+    """
+    if not has_x_infra2(text):
+        return None
+    root = yaml.compose(text)
+    for key, value in root.value:
+        if key.value != "x-infra2" or not isinstance(value, yaml.MappingNode):
+            continue
+        for vkey, vault in value.value:
+            if vkey.value != "vault" or not isinstance(vault, yaml.MappingNode):
+                continue
+            for nkey, name in vault.value:
+                if nkey.value == "name":
+                    compiled = compile_stack(text, vault_template="X=1\n")
+                    proof = f"container_name: {name.value}-vault-agent${{ENV_SUFFIX}}"
+                    return name.start_mark.line + 1 if proof in compiled else None
+    return None
+
+
+def _violations(label: str, text: str) -> list[str]:
+    skip = _vault_name_line(text)
+    found = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        # Skip comments and image tags (image:name:tag is not a host ref).
+        if stripped.startswith("#") or "image:" in stripped or lineno == skip:
+            continue
+        if _HOST_REF.search(line):
+            found.append(f"{label}:{lineno}: {stripped[:110]}")
+    return found
+
+
 def test_internal_service_host_refs_carry_env_suffix() -> None:
     violations: list[str] = []
     for compose in _platform_composes():
-        for lineno, line in enumerate(
-            compose.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            stripped = line.strip()
-            # Skip comments and image tags (image:name:tag is not a host ref).
-            if stripped.startswith("#") or "image:" in stripped:
-                continue
-            if _HOST_REF.search(line):
-                violations.append(
-                    f"{compose.relative_to(ROOT)}:{lineno}: {stripped[:110]}"
-                )
+        text = compose.read_text(encoding="utf-8")
+        violations += _violations(str(compose.relative_to(ROOT)), text)
 
     assert not violations, (
         "Internal service host reference(s) missing ${ENV_SUFFIX} — staging would "
@@ -89,3 +120,33 @@ def test_lint_detects_missing_suffix_and_allows_correct() -> None:
     # prod_only shared services (no suffix is correct) must NOT match:
     assert not _HOST_REF.search("http://platform-signoz:8080/api/v1/health")
     assert not _HOST_REF.search("http://platform-clickhouse:8123/ping")
+
+
+def test_the_vault_name_is_skipped_only_when_the_compiled_sidecar_has_the_suffix(
+    monkeypatch,
+) -> None:
+    """`x-infra2.vault.name` is a container prefix, not a host (#1822 step B).
+
+    The compiler appends `-vault-agent${ENV_SUFFIX}`. A host reference elsewhere in
+    the source is still found, and a compiler without the suffix loses the skip.
+    """
+    source = (
+        "x-infra2:\n  vault:\n    name: platform-redis\n"
+        "services:\n  app:\n    image: a:1\n    command: [run]\n    x-vault: {}\n"
+        "    environment:\n      REDIS_HOST: platform-redis\n"
+    )
+    assert _violations("src", source) == ["src:10: REDIS_HOST: platform-redis"]
+    redis = (ROOT / "platform/02.redis/compose.yaml").read_text(encoding="utf-8")
+    assert _vault_name_line(redis) is not None
+    assert _violations("redis", redis) == []
+
+    import common.tests.test_env_isolation as mod
+
+    real = mod.compile_stack
+    monkeypatch.setattr(
+        mod,
+        "compile_stack",
+        lambda text, **k: real(text, **k).replace("${ENV_SUFFIX}", ""),
+    )
+    assert _vault_name_line(redis) is None
+    assert _violations("redis", redis) == ["redis:9: name: platform-redis"]
