@@ -146,5 +146,10 @@ def test_a_restart_writes_the_same_file(tmp_path: Path, name: str) -> None:
 def test_the_wrapper_writes_the_bytes_of_the_old_file(
     tmp_path: Path, name: str
 ) -> None:
+    """Each written file has the bytes of the old checkout file.
+
+    The expected values are `OLD_FILE_SHA256`: `git show
+    e88287bd:platform/24.openpanel/clickhouse/<file> | shasum -a 256` on main.
+    """
     written = (_run(tmp_path) / name).read_bytes()
     assert hashlib.sha256(written).hexdigest() == OLD_FILE_SHA256[name]
