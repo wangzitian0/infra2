@@ -135,7 +135,7 @@ def test_remote_failure_raises_exit_and_prints_no_token(st, monkeypatch, capsys)
 
 
 def test_remote_stderr_shows_only_fail_lines(st, monkeypatch, capsys):
-    """init-token.sh prints the generated token to stderr when the Vault write fails."""
+    """The token-init script prints the generated token to stderr when the Vault write fails."""
     remote_token = "AUTHENTIK-ROOT-TOKEN-" + "z" * 40
     stderr = (
         "Token was generated but not persisted:\n"
@@ -315,7 +315,7 @@ def test_script_runs_only_in_this_environments_directory(st, tmp_path, suffix, c
         f"ENV={name} ENV_SUFFIX={suffix} VAULT_ADDR=https://vault.example.test " in line
     )
     # Compose joins the running project, starts no dependency and passes the suffix
-    # that the readiness wait of init-token.sh needs.
+    # that the readiness wait of the token-init script needs.
     assert f" -p proj-x run --rm --no-deps -e ENV_SUFFIX={suffix} token-init" in line
     assert "VAULT_INIT_TOKEN=tok-in-envfile" in envcopy.read_text()
     assert not Path(envfile.read_text().strip()).exists()

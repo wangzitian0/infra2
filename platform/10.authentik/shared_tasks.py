@@ -51,7 +51,7 @@ def build_remote_script(
     It runs compose in the project of that container, because the `secrets`
     volume that token-init mounts belongs to that project, and it starts no
     dependency, so the running server and worker stay as they are. It passes
-    `ENV_SUFFIX` into the container, because init-token.sh waits for the server
+    `ENV_SUFFIX` into the container, because the token-init script waits for the server
     `platform-authentik-server${ENV_SUFFIX}` of this environment.
     Exit codes: 11 container missing, 12 directory match is not exactly one,
     13 container has no compose project label.
