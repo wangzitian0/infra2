@@ -8,12 +8,14 @@ Shared PostgreSQL database for all platform applications using vault-init patter
 
 | File | Purpose |
 |------|---------|
-| `compose.yaml` | Docker Compose with vault-agent sidecar |
+| `compose.yaml` | x-infra2 source; the compiler adds the vault-agent sidecar (#1822 step B) |
 | `deploy.py` | PostgresDeployer with vault-init |
+| `env.manifest.json` | Secret keys; the vault-agent template renders from it |
 | `shared_tasks.py` | Health check + admin helpers |
-| `vault-agent.hcl` | Vault agent configuration |
 | `vault-policy.hcl` | Read-only policy for postgres secrets |
-| `secrets.ctmpl` | Template rendering `POSTGRES_PASSWORD` |
+
+The compiled text has no `vault-agent.hcl` or `secrets.ctmpl` file in git. Read it with
+`python -m tools.compose_compile print platform/01.postgres/compose.yaml`.
 
 ## Architecture
 
