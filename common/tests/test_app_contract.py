@@ -682,15 +682,15 @@ def test_render_release_template_renders_canonical_release_field() -> None:
     assert "AI_API_KEY=" not in post_tpl
 
 
-def test_parse_manifest_strips_legacy_mirror_to_1password_and_registry_owns_mirror_keys() -> (
+def test_parse_manifest_rejects_retired_mirror_to_1password_and_registry_owns_mirror_keys() -> (
     None
 ):
-    """Wave 1B -> Wave 3 bridge: upstream v4.9 manifests with mirror_to_1password parse cleanly
-    while infra2 Service.mirror_to_1password_keys owns which runtime keys mirror to 1Password."""
+    """Wave 3: retired mirror_to_1password fails closed on v4.11 manifests while
+    infra2 Service.mirror_to_1password_keys owns which runtime keys mirror to 1Password."""
     from common.security.backends import SecretsResolver, WriteResult
     from common.security.registry import SERVICES
 
-    legacy_body = json.dumps(
+    retired_body = json.dumps(
         {
             "contract_version": 2,
             "source": "truealpha/app",
@@ -702,17 +702,33 @@ def test_parse_manifest_strips_legacy_mirror_to_1password_and_registry_owns_mirr
                     "sensitive": True,
                     "mirror_to_1password": True,
                 },
+            ],
+        }
+    )
+    with pytest.raises(ValueError, match="mirror_to_1password"):
+        app_contract.parse_manifest(retired_body, label="retired-upstream")
+
+    clean_body = json.dumps(
+        {
+            "contract_version": 2,
+            "source": "truealpha/app",
+            "fields": [
+                {
+                    "field": "mcp_bearer_token",
+                    "env": "MCP_BEARER_TOKEN",
+                    "source": "runtime",
+                    "sensitive": True,
+                },
                 {
                     "field": "other_runtime",
                     "env": "OTHER_RUNTIME_SECRET",
                     "source": "runtime",
                     "sensitive": True,
-                    "mirror_to_1password": False,
                 },
             ],
         }
     )
-    manifest = app_contract.parse_manifest(legacy_body, label="legacy-upstream")
+    manifest = app_contract.parse_manifest(clean_body, label="clean-upstream")
     assert [f.env for f in manifest.fields] == [
         "MCP_BEARER_TOKEN",
         "OTHER_RUNTIME_SECRET",

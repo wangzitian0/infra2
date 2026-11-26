@@ -126,42 +126,16 @@ def _yaml() -> Any:
     return yaml
 
 
-_LEGACY_TRUEALPHA_SOURCES = frozenset(
-    {
-        "apps/llm-service",
-        "apps/data-engine",
-        "infra2/truealpha/app",
-        "infra2/truealpha/data_engine",
-    }
-)
+def parse_env_manifest_dict(raw: Any) -> Any:
+    """Parse a strict v4.11 EnvironmentManifest dict requiring explicit ``contract_version``."""
+    from infra2_sdk.config import EnvironmentManifest
 
-
-def strip_legacy_manifest_fields(raw: Any) -> Any:
-    """Strip retired v4.9 manifest fields before strict v4.11 ContractModel validation."""
-    # TODO(wave3): remove once apps release v4.11.1 manifests (no mirror_to_1password, sensitive DATABASE_URL).
     if not isinstance(raw, Mapping):
-        return raw
+        raise ValueError("environment manifest must be a JSON object")
     if "contract_version" not in raw:
         raise ValueError("environment manifest requires 'contract_version'")
     parse_contract_version(raw, 2, description="environment manifest version")
-    fields = raw.get("fields")
-    if not isinstance(fields, list):
-        return raw
-    is_legacy_truealpha = str(raw.get("source") or "") in _LEGACY_TRUEALPHA_SOURCES
-    cleaned_fields = []
-    for fld in fields:
-        if isinstance(fld, Mapping):
-            item = {k: v for k, v in fld.items() if k != "mirror_to_1password"}
-            if (
-                is_legacy_truealpha
-                and item.get("env") == "DATABASE_URL"
-                and item.get("sensitive") is False
-            ):
-                item["sensitive"] = True
-            cleaned_fields.append(item)
-        else:
-            cleaned_fields.append(fld)
-    return {**raw, "fields": cleaned_fields}
+    return EnvironmentManifest.from_dict(dict(raw))
 
 
 @dataclass(frozen=True)
@@ -221,12 +195,12 @@ __all__ = [
     "field_store_key",
     "parse_bool",
     "parse_contract_version",
+    "parse_env_manifest_dict",
     "parse_iso_utc",
     "parse_string",
     "record_verdicts",
     "redact_text",
     "reject_unknown",
     "require_contract_version",
-    "strip_legacy_manifest_fields",
     "validate_http_url",
 ]

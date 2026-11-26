@@ -5,7 +5,7 @@ The copy feeds the committed Vault Agent template and policy (``secrets_render``
 secret supply and reconcile (``registry.store_keys``) and the compose contract check of
 ``verify_app_manifests``. This module makes each copy a generated projection of the App
 manifests at one App release: it fetches the manifests at that release, merges them with
-``infra2_sdk.runtime.merge_manifests`` (as ``registry.merged_manifest`` does), and writes
+``common.security.manifest_merge`` (as ``registry.merged_manifest`` does), and writes
 the result in the ``EnvironmentManifest.to_dict`` form.
 
 ``--check`` compares each copy with the projection at the tag in ``harness/repos.yaml``.

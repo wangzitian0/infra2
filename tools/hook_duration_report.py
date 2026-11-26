@@ -11,7 +11,7 @@ summary. The exit code is 0 whatever the durations are. It is 1 only when the re
 read, so that a broken report does not look like a quiet one.
 
 The budget of a hook is derived from its `RuntimeHooksManifest` active check timeout sum
-and `infra2_sdk.manifests.CELL_POLICIES` for the env and phase of its record.
+and `infra2_sdk.delivery.CELL_POLICIES` for the env and phase of its record.
 
     GITHUB_TOKEN=... GITHUB_REPOSITORY=owner/repo python tools/hook_duration_report.py
 """

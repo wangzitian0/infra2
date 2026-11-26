@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from common.core._sdk_wire import field_rendered, strip_legacy_manifest_fields
+from common.core._sdk_wire import field_rendered, parse_env_manifest_dict
 from common.deploy.evidence import (
     PRODUCTION_DEPLOY_BUDGET_SECONDS,
     PRODUCTION_REQUEST_MAX_AGE_SECONDS,
@@ -183,8 +183,7 @@ def parse_manifest(body: str | bytes, *, label: str) -> EnvironmentManifest:
     Raises ``ValueError`` when ``body`` is not valid manifest JSON or declares no fields.
     """
     try:
-        raw = strip_legacy_manifest_fields(json.loads(body))
-        manifest = EnvironmentManifest.from_dict(raw)
+        manifest = parse_env_manifest_dict(json.loads(body))
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise ValueError(f"{label} is not an App env manifest: {exc!r}") from None
     if not manifest.fields:
@@ -782,7 +781,7 @@ def execute_app_hook_slot(
     result_path: Path | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> HookRunResult:
-    """Load (if needed) and execute one verification hook slot via ``infra2_sdk.manifests``."""
+    """Load (if needed) and execute one verification hook slot via ``infra2_sdk.delivery``."""
     cleaned_url = app_url.strip()
     augmented_manifest, effective_ambient = hook_env_for_slot(
         manifest_or_path,
