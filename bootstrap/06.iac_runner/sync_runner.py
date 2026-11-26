@@ -90,6 +90,21 @@ def _all_services() -> list[str]:
     return sorted(discover_services())
 
 
+_WAVE1_STATEFUL_SUFFIXES: frozenset[str] = frozenset(
+    {"postgres", "redis", "s3", "authentik", "prefect"}
+)
+
+
+def partition_sync_waves(services: list[str] | set[str]) -> list[list[str]]:
+    """Order stateful foundation services (Wave 1) ahead of consumers and apps (Wave 2)."""
+    ordered = sorted(services)
+    wave1 = [svc for svc in ordered if svc.split("/")[-1] in _WAVE1_STATEFUL_SUFFIXES]
+    wave2 = [
+        svc for svc in ordered if svc.split("/")[-1] not in _WAVE1_STATEFUL_SUFFIXES
+    ]
+    return [wave for wave in (wave1, wave2) if wave]
+
+
 def _tail_text(value: str, limit: int = MAX_RESULT_OUTPUT_CHARS) -> str:
     if len(value) <= limit:
         return value
@@ -1080,59 +1095,62 @@ def sync_services(
                 )
             return run_invoke_task(task_name, repo_path, deploy_env, **extra)
 
-        futures_by_service: dict[str, concurrent.futures.Future] = {}
-        max_workers = min(4, max(1, len(ordered_services)))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for service in ordered_services:
-                task_name = task_map.get(service)
-                if task_name is not None:
-                    futures_by_service[service] = executor.submit(
-                        _invoke_for_service, service, task_name
-                    )
-
-            for service in ordered_services:
-                task_name = task_map.get(service)
-
-                if task_name is None:
-                    logger.info(f"Skipping {service} (no sync task configured)")
-                    results.append(
-                        ServiceSyncResult(
-                            service=service,
-                            task=None,
-                            success=True,
-                            skipped=True,
+        for wave_services in partition_sync_waves(ordered_services):
+            futures_by_service: dict[str, concurrent.futures.Future] = {}
+            max_workers = min(4, max(1, len(wave_services)))
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers
+            ) as executor:
+                for service in wave_services:
+                    task_name = task_map.get(service)
+                    if task_name is not None:
+                        futures_by_service[service] = executor.submit(
+                            _invoke_for_service, service, task_name
                         )
-                    )
-                    continue
 
-                result = futures_by_service[service].result()
-                service_result = ServiceSyncResult(
-                    service=service,
-                    task=task_name,
-                    success=bool(result["success"]),
-                    stdout=str(result.get("stdout", "")),
-                    stderr=str(result.get("stderr", "")),
-                )
-                results.append(service_result)
+                for service in wave_services:
+                    task_name = task_map.get(service)
 
-                if service_result.success:
-                    logger.info(f"✅ {service}: sync completed")
-                    for line in service_result.verdict:
-                        logger.info(f"   {service}: {line}")
-                else:
-                    logger.error(f"❌ {service}: sync failed")
-                    diagnostic = diagnose_failure(
-                        service_result.stderr, service_result.stdout
+                    if task_name is None:
+                        logger.info(f"Skipping {service} (no sync task configured)")
+                        results.append(
+                            ServiceSyncResult(
+                                service=service,
+                                task=None,
+                                success=True,
+                                skipped=True,
+                            )
+                        )
+                        continue
+
+                    result = futures_by_service[service].result()
+                    service_result = ServiceSyncResult(
+                        service=service,
+                        task=task_name,
+                        success=bool(result["success"]),
+                        stdout=str(result.get("stdout", "")),
+                        stderr=str(result.get("stderr", "")),
                     )
-                    logger.error(
-                        "Diagnostic: service=%s task=%s kind=%s summary=%s next=%s",
-                        service,
-                        task_name,
-                        diagnostic["error_kind"],
-                        diagnostic["summary"],
-                        diagnostic["next_action"],
-                    )
-                    logger.error(_tail_text(service_result.stderr))
+                    results.append(service_result)
+
+                    if service_result.success:
+                        logger.info(f"✅ {service}: sync completed")
+                        for line in service_result.verdict:
+                            logger.info(f"   {service}: {line}")
+                    else:
+                        logger.error(f"❌ {service}: sync failed")
+                        diagnostic = diagnose_failure(
+                            service_result.stderr, service_result.stdout
+                        )
+                        logger.error(
+                            "Diagnostic: service=%s task=%s kind=%s summary=%s next=%s",
+                            service,
+                            task_name,
+                            diagnostic["error_kind"],
+                            diagnostic["summary"],
+                            diagnostic["next_action"],
+                        )
+                        logger.error(_tail_text(service_result.stderr))
 
         sync_result = SyncResult(
             env=deploy_env,

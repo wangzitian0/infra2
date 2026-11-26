@@ -64,10 +64,9 @@ class PrefectDeployer(Deployer):
             app_containers=(
                 "platform-prefect-server${ENV_SUFFIX}",
                 "platform-prefect-services${ENV_SUFFIX}",
-                "platform-prefect-worker${ENV_SUFFIX}",
             ),
             auth_method="approle",
-            mount_exempt_containers=("platform-prefect-worker${ENV_SUFFIX}",),
+            mount_exempt_containers=(),
         ),
     )
 

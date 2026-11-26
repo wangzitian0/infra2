@@ -378,17 +378,20 @@ def test_audit_from_observations_stays_pass_with_only_stale_render_and_healthy_c
 
 
 def test_mount_exempt_app_container_not_flagged_for_missing_secrets_mount() -> None:
-    """#531: platform-prefect-worker genuinely has no secrets mount by design (it only
-    needs PREFECT_API_URL, a plain env var -- confirmed against the live compose file
-    and #163's independent investigation). Fixing the restart-count false positive
-    unmasked this pre-existing, different check-vs-reality mismatch: applying
-    app_secret_mount_path uniformly to every app_container assumed a uniformity that
-    doesn't hold. The prefect SecretsFacet's `mount_exempt_containers` (#542, formerly
-    the MOUNT_EXEMPT_CONTAINERS constant) must suppress the mount check for it, while
-    every OTHER app_container in the same service (e.g. platform-prefect-services,
-    which genuinely does read secrets) keeps being checked normally."""
+    """A SecretsFacet with mount_exempt_containers suppresses mount checks for the
+    exempted container while still failing unexempt app_containers without mounts."""
+    from dataclasses import replace
+
     services = load_inventory()
-    prefect = next(service for service in services if service.id == "platform/prefect")
+    prefect_real = next(
+        service for service in services if service.id == "platform/prefect"
+    )
+    assert prefect_real.mount_exempt_containers == ()
+    prefect = replace(
+        prefect_real,
+        app_containers=(*prefect_real.app_containers, "platform-prefect-worker"),
+        mount_exempt_containers=("platform-prefect-worker",),
+    )
 
     worker_state = {
         "name": "platform-prefect-worker",

@@ -20,7 +20,6 @@ from common.core.facets import SecretsFacet
 from common.security import vault_audit as vault_audit_module
 from common.security.vault_audit import (
     VaultService,
-    _resolve_env_suffix,
     _vault_service_from_facet,
     inventory_ids_not_in_production,
     load_inventory,
@@ -31,25 +30,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_absorbed_constants_equivalence() -> None:
-    """The retired audit-module constant lives on as a facet field with the
-    exact same content:
-      MOUNT_EXEMPT_CONTAINERS == {platform-prefect-worker, -staging} — one
-        symbolic ${ENV_SUFFIX} entry on platform/prefect resolves to exactly
-        those two names across the audit's production/staging runs."""
+    """With codeless platform-prefect-worker removed, no service carries a mount exemption."""
     by_id = {service.id: service for service in load_inventory()}
-    assert by_id["platform/prefect"].mount_exempt_containers == (
-        "platform-prefect-worker${ENV_SUFFIX}",
-    )
-    resolved = {
-        _resolve_env_suffix(name, env)
-        for env in ("production", "staging")
-        for name in by_id["platform/prefect"].mount_exempt_containers
-    }
-    assert resolved == {"platform-prefect-worker", "platform-prefect-worker-staging"}
+    assert by_id["platform/prefect"].mount_exempt_containers == ()
+    assert "platform/prefect" in by_id
     exempt_elsewhere = {
         sid: svc.mount_exempt_containers
         for sid, svc in by_id.items()
-        if svc.mount_exempt_containers and sid != "platform/prefect"
+        if svc.mount_exempt_containers
     }
     assert exempt_elsewhere == {}
 
