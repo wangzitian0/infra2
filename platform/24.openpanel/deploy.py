@@ -139,7 +139,7 @@ class OpenPanelDeployer(Deployer):
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
-        """Ensure every Vault key referenced by secrets.ctmpl exists."""
+        """Ensure every Vault key that the vault-agent template reads exists."""
         e = cls.env()
         env_name = e.get("ENV", "production")
         project = e.get("PROJECT", "platform")

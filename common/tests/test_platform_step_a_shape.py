@@ -18,13 +18,12 @@ from common.deploy.compose_compile import compile_stack, vault_template_for
 from common.deploy.compose_equivalence import equivalence_problems
 
 ROOT = Path(__file__).resolve().parents[2]
-# platform/02.redis, platform/01.postgres, platform/23.prefect, platform/03.s3 and
-# platform/10.authentik left this list in #1822 step B: each file is an x-infra2 source
-# now, and `tools.compose_compile check` proves it against the step-A file.
-STACKS = (
-    "platform/12.alerting",
-    "platform/24.openpanel",
-)
+# platform/02.redis, platform/01.postgres, platform/23.prefect, platform/03.s3,
+# platform/10.authentik and platform/24.openpanel left this list in #1822 step B: each
+# file is an x-infra2 source now, and `tools.compose_compile check` proves it against
+# the step-A file. When platform/12.alerting moves too, no step-A stack is left: delete
+# this file.
+STACKS = ("platform/12.alerting",)
 SUFFIX = "-vault-agent${ENV_SUFFIX}"
 #: Each service that reads /secrets/.env without the SDK wait entrypoint.
 NOT_X_VAULT = {"platform/12.alerting": {"infra-probe-runner"}}
@@ -79,15 +78,15 @@ def test_a_step_b_dry_run_has_no_problem(stack: str) -> None:
 
 
 def test_the_dry_run_finds_a_hand_sidecar_value() -> None:
-    # The sample is a step-A stack. platform/01.postgres, platform/03.s3 and
-    # platform/10.authentik moved to x-infra2 (#1822 step B) and have no hand sidecar
-    # now, so the sample is platform/24.openpanel.
-    hand = (ROOT / "platform/24.openpanel/compose.yaml").read_text(encoding="utf-8")
+    # The sample is a step-A stack. platform/10.authentik and platform/24.openpanel
+    # moved to x-infra2 (#1822 step B) and have no hand sidecar now, so the sample is
+    # platform/12.alerting, the last step-A stack.
+    hand = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
     assert hand.count("      retries: 12\n") == 1
     changed = hand.replace("      retries: 12\n", "      retries: 3\n")
     source, _ = draft_step_b(changed)
-    path = "platform/24.openpanel/compose.yaml"
+    path = "platform/12.alerting/compose.yaml"
     compiled = compile_stack(source, vault_template=vault_template_for(path, source))
     assert equivalence_problems(
-        source, compiled, changed, _base_files("platform/24.openpanel")
+        source, compiled, changed, _base_files("platform/12.alerting")
     ) == ["services.vault-agent.healthcheck.retries: compiled 12 != base 3"]

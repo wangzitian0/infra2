@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **服务定义** | `platform/24.openpanel/compose.yaml` | 资源与容器拓扑声明 |
+| **服务定义** | `platform/24.openpanel/compose.yaml` | x-infra2 源文件（#1822 step B）：编译器加入 vault-agent sidecar，部署以 Dokploy `sourceType=raw` 上传编译文本。读编译文本：`python -m tools.compose_compile print platform/24.openpanel/compose.yaml` |
 | **部署任务** | `platform/24.openpanel/deploy.py` | Invoke 自动化部署流程入口 |
 | **专属 ClickHouse** | compose `op-ch` 服务（`entrypoint` 内联三个文件） | 版本匹配的 ClickHouse 25.10 容器；配置与 init-db 脚本 |
 | **运行时密钥** | **Vault** (`secret/platform/<env>/openpanel`) | 仅 `cookie_secret` 与 `resend_api_key`。Postgres 口令读自 `secret/platform/<env>/postgres` (`root_password`)，Redis 口令读自 `secret/platform/<env>/redis` (`password`)，专属 ClickHouse（`op-ch`）走无鉴权端口、不存凭据 |

@@ -61,7 +61,10 @@ paths and rendered into `DATABASE_URL`/`DATABASE_URL_DIRECT`/`REDIS_URL`.
 ### Environment Variables (upstream contract)
 
 Secrets are rendered to `/secrets/.env` by vault-agent; non-secrets are set in
-compose `environment:`.
+compose `environment:`. The compose is an x-infra2 source (#1822 step B): the
+compiler adds the vault-agent sidecar, and its template renders from
+`env.manifest.json`. No `vault-agent.hcl` or `secrets.ctmpl` file is in git. Read the
+compiled text with `python -m tools.compose_compile print platform/24.openpanel/compose.yaml`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

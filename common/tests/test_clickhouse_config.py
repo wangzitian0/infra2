@@ -81,9 +81,11 @@ def test_authentik_resource_and_healthcheck_limits() -> None:
 
 
 def test_openpanel_and_finance_report_resource_bounds() -> None:
-    openpanel_path = ROOT / "platform/24.openpanel/compose.yaml"
-    assert openpanel_path.exists()
-    op_data = yaml.safe_load(openpanel_path.read_text(encoding="utf-8")) or {}
+    from common.deploy.compose_compile import load_stack
+
+    # The OpenPanel compose is an x-infra2 source (#1822 step B): the compiler adds the
+    # vault-agent sidecar, so the limits are read from the compiled text.
+    op_data = yaml.safe_load(load_stack("platform/24.openpanel/compose.yaml").compiled)
     op_services = op_data.get("services", {})
 
     assert op_services.get("vault-agent", {}).get("mem_limit") == "128m"
