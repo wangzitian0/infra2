@@ -18,9 +18,10 @@ runtime roles:
 
 All three roles use the same image digest, isolated environment credentials, the
 environment's TrueAlpha Postgres, and a dedicated artifact directory. Dagster
-run/event/schedule metadata is stored in Postgres's `dagster` schema. Staging is
-bounded to the immutable TOPT 20-issuer/21-instrument canary; Production expansion
-requires a separate approved release/scope and remains shadow until graduation.
+run/event/schedule metadata is stored in Postgres's `dagster` schema. Each
+environment's scheduled universes and cadence live in `truealpha`'s
+`common/contracts/src/truealpha_contracts/data/environment_contract.v1.json`;
+Production graduation remains gated by owner approval.
 
 ## Network Boundary
 
