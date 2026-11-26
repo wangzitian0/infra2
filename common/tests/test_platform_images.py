@@ -227,7 +227,9 @@ def test_the_real_s3_hash_reads_the_dockerfile_without_the_vault_mounts() -> Non
     ]
 
 
-def test_the_real_alerting_hash_reads_the_image_inputs_without_the_vault_mounts() -> None:
+def test_the_real_alerting_hash_reads_the_image_inputs_without_the_vault_mounts() -> (
+    None
+):
     """Measured on this tree: both alerting services give the image input files only."""
     from common.deploy import config_hash
 

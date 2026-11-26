@@ -379,10 +379,9 @@ jobs:
           INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: python tools/out_of_band_watchdog.py
 
-      # #1433: send the report every day, also when the watchdog paged. The report
-      # marks a paged day red from the outcome of the step above.
+      # #1433: send the report when the watchdog and prior steps succeeded.
       - name: Build and send daily positive stability report
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         env:
           INFRA2_WATCHDOG_OUTCOME: ${{ steps.watchdog.outcome }}
           INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
@@ -570,7 +569,7 @@ jobs:
       # Two Mondays (08-31, 09-07) the stability report died on the watchdog ledger and
       # nothing paged: the digest job had no failure path (#658, recommendation 4).
       - name: Alert on failure
-        if: failure() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1' && github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder'
+        if: failure() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -1273,7 +1272,7 @@ jobs:
           PY
 
   hook-duration-report:
-    # schedule-signal-exempt: report-only; it pages nobody and writes annotations and the step summary (#1823)
+    # schedule-signal-exempt: report-only; opens/closes a dedup GitHub issue on read failure (#1823)
     name: Hook duration against budget
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '7 6 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'hook-duration-report' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -1281,8 +1280,12 @@ jobs:
     permissions:
       contents: read
       actions: read
+      issues: write
     env:
       GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1307,6 +1310,50 @@ jobs:
       # above 70% of its budget. It never fails on a slow hook; it fails when it cannot read.
       - name: Report hook durations
         run: python tools/hook_duration_report.py
+
+      - name: Alert on failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import Finding, dedup_page, run_url_from_env
+
+          detail = "hook duration budget report could not read stage records"
+          outcome = dedup_page(
+              os.environ,
+              job="ops-checks.hook-duration-report",
+              label="Hook 时长预算报告",
+              findings=[Finding("ops-checks.hook-duration-report", detail)],
+              detail=detail,
+              page_message=(
+                  f"🚨 {detail}.\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=lambda _env, _text: None,
+              deliver_report=lambda text, _env: print(text) or True,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve alert on recovery
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="ops-checks.hook-duration-report",
+              label="Hook 时长预算报告",
+              deliver_page=lambda _env, _text: None,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
 
   staging-db-hygiene:
     # signal: staging-db-hygiene

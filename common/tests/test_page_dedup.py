@@ -1574,3 +1574,22 @@ def test_audit_steps_page_report_and_resolve(step_env, tmp_path) -> None:
         clean_step="resolve",
         resolved_header="✅ [已恢复] 部署守卫与应用运行态审计",
     )
+
+
+def test_hook_duration_report_steps_page_report_and_resolve(step_env, capsys) -> None:
+    api, ch, _ = step_env
+    alert, resolve = "Alert on failure", "Resolve alert on recovery"
+
+    assert _execute("hook-duration-report", alert) == 0
+    assert ch.pages == []  # GitHub-issue-only: no Feishu secrets
+    assert api.open_titles() == ["ops-checks paged: ops-checks.hook-duration-report"]
+
+    age_state(api, "ops-checks.hook-duration-report", 1)
+    assert _execute("hook-duration-report", alert) == 0
+    assert (
+        "仍未恢复 · 第 2 天 · ops-checks.hook-duration-report"
+        in capsys.readouterr().out
+    )
+
+    assert _execute("hook-duration-report", resolve) == 0
+    assert api.open_titles() == []

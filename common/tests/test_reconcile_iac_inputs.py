@@ -5262,6 +5262,76 @@ def test_the_schedule_branch_runs_the_canary_pin_bot() -> None:
     assert branch.index("--sync-app-releases") < branch.index("--sync-sdk-pins")
 
 
+def test_sync_sdk_pins_skips_scan_when_bumping_and_passes_wanted_when_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When verified_versions is None: bumping skips verified_sdk_versions; matching passes wanted={target_sdk}."""
+    import shutil
+
+    from common.deploy.canary_pin import CANARY_COMPOSE_RELS, canary_sdk_version
+
+    for rel in CANARY_COMPOSE_RELS:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, tmp_path / rel)
+    current = canary_sdk_version(tmp_path)
+    major, minor, patch = (int(part) for part in current.split("."))
+    newer = f"{major}.{minor}.{patch + 1}"
+    monkeypatch.setattr(
+        reconcile, "APP_SOURCES", {"finance_report/app": "w/f", "truealpha/app": "w/t"}
+    )
+    monkeypatch.setenv("GITHUB_REPOSITORY", "wangzitian0/infra2")
+
+    def fail_if_scanned(**_kw):
+        raise AssertionError("verified_sdk_versions must not be called during bump")
+
+    monkeypatch.setattr(reconcile, "verified_sdk_versions", fail_if_scanned)
+    res_bump = reconcile.sync_sdk_pins(
+        tmp_path,
+        create_pr=False,
+        latest_sdk=newer,
+        verified_versions=None,
+    )
+    assert res_bump["needs_canary_bump"] is True
+    assert res_bump["canary_verified"] is False
+    assert res_bump["held_apps"] == ["finance_report/app", "truealpha/app"]
+    assert res_bump["eligible_apps"] == []
+
+    calls: list[dict[str, object]] = []
+
+    def fake_verified(**kw):
+        calls.append(kw)
+        return {current}
+
+    monkeypatch.setattr(reconcile, "verified_sdk_versions", fake_verified)
+    res_match = reconcile.sync_sdk_pins(
+        tmp_path,
+        create_pr=False,
+        latest_sdk=current,
+        verified_versions=None,
+    )
+    assert calls == [{"repo": "wangzitian0/infra2", "wanted": {current}}]
+    assert res_match["needs_canary_bump"] is False
+    assert res_match["canary_verified"] is True
+    assert res_match["held_apps"] == []
+    assert res_match["eligible_apps"] == ["finance_report/app", "truealpha/app"]
+
+    monkeypatch.setattr(
+        reconcile,
+        "verified_sdk_versions",
+        lambda **kw: calls.append(kw) or set(),
+    )
+    res_unverified = reconcile.sync_sdk_pins(
+        tmp_path,
+        create_pr=False,
+        latest_sdk=current,
+        verified_versions=None,
+    )
+    assert calls[-1] == {"repo": "wangzitian0/infra2", "wanted": {current}}
+    assert res_unverified["canary_verified"] is False
+    assert res_unverified["held_apps"] == ["finance_report/app", "truealpha/app"]
+    assert res_unverified["eligible_apps"] == []
+
+
 def test_sync_sdk_pins_holds_app_prs_until_canary_verified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
