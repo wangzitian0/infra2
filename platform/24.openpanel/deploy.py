@@ -249,7 +249,8 @@ class OpenPanelDeployer(Deployer):
         # ClickHouse (op-ch in compose.yaml) because the shared
         # platform-clickhouse is pinned to 25.5 by SigNoz while OpenPanel v2
         # requires 25.10. The op-ch container self-creates the `openpanel`
-        # database via clickhouse/init-db.sh, so no provisioning is needed here.
+        # database via init-db.sh (inline in the op-ch entrypoint), so no provisioning
+        # is needed here.
         #
         # op-ch data lives on a durable host bind mount (${DATA_PATH}/op-ch) rather
         # than a Dokploy named volume, which gets recreated with a new hash on

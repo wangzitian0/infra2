@@ -13,7 +13,7 @@
 |------|----------------|------|
 | **服务定义** | `platform/24.openpanel/compose.yaml` | 资源与容器拓扑声明 |
 | **部署任务** | `platform/24.openpanel/deploy.py` | Invoke 自动化部署流程入口 |
-| **专属 ClickHouse** | `platform/24.openpanel/clickhouse/` + compose `op-ch` 服务 | 版本匹配的 ClickHouse 25.10 容器；配置与 init-db 脚本 |
+| **专属 ClickHouse** | compose `op-ch` 服务（`entrypoint` 内联三个文件） | 版本匹配的 ClickHouse 25.10 容器；配置与 init-db 脚本 |
 | **运行时密钥** | **Vault** (`secret/platform/<env>/openpanel`) | 仅 `cookie_secret` 与 `resend_api_key`。Postgres 口令读自 `secret/platform/<env>/postgres` (`root_password`)，Redis 口令读自 `secret/platform/<env>/redis` (`password`)，专属 ClickHouse（`op-ch`）走无鉴权端口、不存凭据 |
 | **外部路由** | Dokploy / Traefik ingress | 域名解析与 /api 路径 Stripping 配置 |
 
@@ -61,7 +61,7 @@ graph TD
 ### ✅ 推荐模式 (Whitelist)
 
 - **Postgres 库分离**：必须在共享 `platform-postgres` 中为 OpenPanel 创建专属数据库 `openpanel`。
-- **专属 ClickHouse**：`op-ch` 容器经 `clickhouse/init-db.sh` 自建 `openpanel` 库；版本须匹配 OpenPanel（当前 25.10）。
+- **专属 ClickHouse**：`op-ch` 的 `entrypoint` 在启动时写入 server 配置、user 配置与 `init-db.sh`，再运行镜像的 `/entrypoint.sh`（raw Dokploy stack 无 checkout，不能 bind-mount 仓库文件，#1822）。`init-db.sh` 仅在数据目录为空时运行一次，自建 `openpanel` 库；版本须匹配 OpenPanel（当前 25.10）。
 - **Redis 独立 DB**：使用 `platform-redis` 的 `DB 3` 进行隔离，避免缓存键值与 App 冲突。
 - **Traefik 标签显式定义**：在 `compose.yaml` 中显式定义路由规则与 API Stripping 中间件，端口指向 `3000`。
 

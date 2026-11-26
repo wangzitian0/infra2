@@ -33,11 +33,5 @@ def test_every_clickhouse_service_has_a_compose_mem_limit():
         )
 
 
-def test_op_ch_has_an_absolute_server_memory_cap():
-    cfg = (ROOT / "platform/24.openpanel/clickhouse/clickhouse-config.xml").read_text(
-        encoding="utf-8"
-    )
-    assert "<max_server_memory_usage>" in cfg, (
-        "op-ch must set an absolute <max_server_memory_usage> so ClickHouse rejects "
-        "oversized work before the cgroup OOM-kills the container."
-    )
+# The op-ch absolute server cap is in
+# test_openpanel_clickhouse_files.py::test_the_wrapper_writes_the_server_config.
