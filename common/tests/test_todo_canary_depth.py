@@ -1109,3 +1109,57 @@ def test_probe_health_retries_transient_http_zero_and_fails_when_exhausted(
         probe.main(["https://x.example", "--attempts", "0"])
     with pytest.raises(SystemExit):
         probe.main(["https://x.example", "--retry-interval", "-1"])
+
+
+def test_probe_health_runs_standalone_with_hook_pythonpath() -> None:
+    """Hook runner runs probe_health with cwd=platform/30.todo and PYTHONPATH=. only."""
+    import ast
+    import os
+    import socket
+    import sys
+
+    script = SERVICE_DIR / "probe_health.py"
+    tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+    imported = [
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    ] + [
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    ]
+    assert not any(mod == "common" or mod.startswith("common.") for mod in imported), (
+        f"probe_health.py must stay standalone under hook PYTHONPATH=.: {imported}"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "probe_health.py", "--help"],
+        cwd=SERVICE_DIR,
+        env={"PYTHONPATH": ".", "PATH": os.environ.get("PATH", "")},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "--gate" in proc.stdout
+    assert "ModuleNotFoundError" not in proc.stderr
+
+    probe = _load("probe_health_standalone", script)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed_port = sock.getsockname()[1]
+    status, detail = probe.default_http_get(timeout=0.5)(
+        f"http://127.0.0.1:{closed_port}/api/health"
+    )
+    assert status == 0
+    assert detail
+
+    sleeps: list[float] = []
+    with pytest.raises(RuntimeError, match="after 2 attempts"):
+        probe.poll_until_healthy(
+            "http://127.0.0.1/api/health",
+            http_get=lambda _u: (503, "starting"),
+            max_attempts=2,
+            interval_seconds=1.5,
+            sleep=sleeps.append,
+        )
+    assert sleeps == [1.5]

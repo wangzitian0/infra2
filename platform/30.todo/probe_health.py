@@ -14,8 +14,6 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 
-from common.deploy.evidence import default_http_get, poll_until_healthy
-
 GATE_VERDICT_WAIT_SECONDS = 90
 GATE_MAX_VERDICT_AGE_SECONDS = 180
 GATE_REQUEST_TIMEOUT_SECONDS = 10
@@ -54,6 +52,70 @@ def pinned_canary_sdk(ref: str, runner=subprocess.run) -> str:
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+class HealthCheckResult:
+    """Result returned by ``poll_until_healthy``."""
+
+    __slots__ = ("attempts", "status_code", "body")
+
+    def __init__(self, attempts: int, status_code: int, body: str) -> None:
+        self.attempts = attempts
+        self.status_code = status_code
+        self.body = body
+
+
+def default_http_get(
+    *, timeout: float = 10.0, follow_redirects: bool = True
+) -> Callable[[str], tuple[int, str]]:
+    """Return a stdlib GET probe returning ``(status_code, body_text)`` or ``(0, error)``."""
+    opener = (
+        urllib.request.build_opener()
+        if follow_redirects
+        else urllib.request.build_opener(_NoRedirectHandler())
+    )
+
+    def _http_get(url: str) -> tuple[int, str]:
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={"User-Agent": "canary-todo-probe/1.0"},
+        )
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                return int(resp.status), resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as err:
+            body = err.read().decode("utf-8", errors="replace") if err.fp else ""
+            return int(err.code), body
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            return 0, str(exc)
+
+    return _http_get
+
+
+def poll_until_healthy(
+    url: str,
+    *,
+    http_get: Callable[[str], tuple[int, str]],
+    max_attempts: int = HEALTH_POLL_MAX_ATTEMPTS,
+    interval_seconds: float = HEALTH_POLL_RETRY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> HealthCheckResult:
+    """Poll ``url`` until HTTP 200 or raise ``RuntimeError`` after ``max_attempts``."""
+    last_status = 0
+    for attempt in range(1, max_attempts + 1):
+        status_code, body = http_get(url)
+        last_status = status_code
+        if status_code == 200:
+            return HealthCheckResult(
+                attempts=attempt, status_code=status_code, body=body
+            )
+        if attempt < max_attempts:
+            sleep(interval_seconds)
+    raise RuntimeError(
+        f"{url}: did not become healthy after {max_attempts} attempts "
+        f"(last status: HTTP {last_status})"
+    )
 
 
 def _default_summary_sso_probe(summary_url: str, timeout: float) -> int:
