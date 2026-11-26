@@ -340,9 +340,9 @@ def test_script_runs_in_the_raw_compose_directory(st, tmp_path, suffix, chosen):
     lines = log.read_text().splitlines()
     assert len(lines) == 1
     assert lines[0].startswith(f"{tmp_path}/compose/{chosen}/code ENV=")
-    assert (
-        f" -p proj-x run --rm --no-deps -e ENV_SUFFIX={suffix} token-init" in lines[0]
-    )
+    assert f" ENV_SUFFIX={suffix} VAULT_ADDR=" in lines[0]
+    # #2049 removed `-e ENV_SUFFIX`: Compose reads the shell ENV_SUFFIX above.
+    assert lines[0].endswith(" -p proj-x run --rm --no-deps token-init")
 
 
 def test_script_gives_compose_no_stdin(st, tmp_path):
