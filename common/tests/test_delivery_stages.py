@@ -7,7 +7,7 @@ from pathlib import Path
 
 import infra2_sdk
 import yaml
-from infra2_sdk.ci import load_delivery_stages
+from common.core.ci_contract import load_delivery_stages
 
 ROOT = Path(__file__).resolve().parents[2]
 SSOT = ROOT / "docs/ssot"

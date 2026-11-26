@@ -11,8 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # runnable as a script
 
-from infra2_sdk.ci import validate_manifest_offline  # noqa: E402
-from infra2_sdk.secrets import render_agent_policy, render_agent_template  # noqa: E402
+from common.core.ci_contract import validate_manifest_offline
+from common.security.backends import render_agent_policy, render_agent_template
 
 from common.security.registry import (  # noqa: E402
     SERVICES,

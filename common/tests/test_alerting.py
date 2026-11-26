@@ -1392,7 +1392,7 @@ def test_breakdown_watch_rebreak_suppression_ceiling_escalates() -> None:
         RE_BREAK_SUPPRESSION_CEILING,
         evaluate,
     )
-    from infra2_sdk.observability import ConsecutiveObservationState
+    from common.observability.liveness import ConsecutiveObservationState
 
     name = "test-worker"
     b = Breakdown(

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from infra2_sdk.ci import (
+from common.core.ci_contract import (
     CoverageArtifactMissing,
     CoverageBaselineInvalid,
     check_no_regression,

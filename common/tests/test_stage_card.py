@@ -6,7 +6,7 @@ import json
 
 import pytest
 from infra2_sdk.observability import CheckVerdict
-from infra2_sdk.stage_record import StageRecord
+from common.deploy.stage_record import StageRecord
 
 import common.alerting
 from common.alerting import card_body_bytes, card_budget

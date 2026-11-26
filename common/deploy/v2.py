@@ -73,7 +73,7 @@ from common.deploy.promote import PromoteDeps, PromoteOptions, deploy as _deploy
 from common.deploy.preview import PreviewDeps, PreviewOptions, _validate_domain
 from common.deploy.preview import down as _preview_down
 from common.deploy.preview import up as _preview_up
-from infra2_sdk.refs import (
+from common.deploy.git_refs import (
     ResolvedRef,
     classify_ref,
     resolve_image_ref,

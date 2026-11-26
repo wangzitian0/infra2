@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from infra2_sdk.ci import (  # noqa: E402
+from common.core.ci_contract import (  # noqa: E402
     EPSILON,
     CoverageArtifactMissing,
     CoverageBaselineInvalid,

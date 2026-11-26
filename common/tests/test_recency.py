@@ -6,7 +6,7 @@ in count/timestamp/now terms.
 
 from __future__ import annotations
 
-from infra2_sdk.observability import (
+from common.observability.liveness import (
     ConsecutiveObservationState,
     evaluate_consecutive_hysteresis,
     is_recently_flapping,

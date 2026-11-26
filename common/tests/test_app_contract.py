@@ -14,7 +14,7 @@ from common.deploy import app_contract
 from common.deploy.release_markers import newest_release_tag, production_marker
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import HookRunResult, RuntimeHooksManifest
-from infra2_sdk.refs import ResolvedRef
+from common.deploy.git_refs import ResolvedRef
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 
 TA_REPO = "wangzitian0/truealpha"

@@ -36,7 +36,7 @@ from common.deploy.v2 import (
     enforce_data_lane_red_lines,
     resolve_data_lane,
 )
-from infra2_sdk.refs import ResolvedRef, classify_ref
+from common.deploy.git_refs import ResolvedRef, classify_ref
 
 SHA_CODE = "c" * 40
 SHA_IAC = "d" * 40
@@ -2195,7 +2195,7 @@ def test_image_manifest_exists_success(monkeypatch):
 
 
 def test_image_manifest_exists_not_found(monkeypatch):
-    from infra2_sdk.refs import ReleaseError
+    from common.deploy.git_refs import ReleaseError
     import common.deploy.preflight as preflight
 
     def fake_resolve(*, image, reference, registry):
@@ -2208,7 +2208,7 @@ def test_image_manifest_exists_not_found(monkeypatch):
 
 
 def test_image_manifest_exists_error_raises_runtime_error(monkeypatch):
-    from infra2_sdk.refs import ReleaseError
+    from common.deploy.git_refs import ReleaseError
     import common.deploy.preflight as preflight
 
     def fake_resolve(*, image, reference, registry):

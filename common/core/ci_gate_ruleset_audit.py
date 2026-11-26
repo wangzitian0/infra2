@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from infra2_sdk import ci as ci_spec
+from common.core import ci_contract as ci_spec
 
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = ROOT / "docs/ssot/ci-gate-inventory.yaml"

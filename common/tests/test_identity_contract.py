@@ -455,7 +455,7 @@ def test_scanner_finds_the_infra2_sdk_imports_of_the_tree() -> None:
     found = scan(names=frozenset(), modules=frozenset({"infra2_sdk"}))
     assert {
         "platform/12.alerting/app.py",
-        "common/deploy/v2.py",
+        "common/deploy/app_contract.py",
         "common/deploy/preview.py",
     } <= set(found)
     assert len(found) >= 15
@@ -477,6 +477,19 @@ def _is_const(node: ast.AST | None, value: str) -> bool:
     return isinstance(node, ast.Constant) and node.value == value
 
 
+def _is_compose_template_passthrough(path: Path, value: ast.expr) -> bool:
+    return (
+        path.relative_to(ROOT).as_posix() == "common/deploy/compose_rules.py"
+        and isinstance(value, ast.JoinedStr)
+        and len(value.values) == 3
+        and isinstance(value.values[0], ast.Constant)
+        and value.values[0].value == "${"
+        and isinstance(value.values[1], ast.FormattedValue)
+        and isinstance(value.values[2], ast.Constant)
+        and value.values[2].value == ":-}"
+    )
+
+
 def otel_attribute_sites() -> dict[str, list[ast.expr]]:
     """The expressions that non-test code assigns to `OTEL_RESOURCE_ATTRIBUTES`."""
     sites: dict[str, list[ast.expr]] = {}
@@ -496,6 +509,9 @@ def otel_attribute_sites() -> dict[str, list[ast.expr]]:
                     for key, value in zip(node.keys, node.values, strict=True)
                     if _is_const(key, "OTEL_RESOURCE_ATTRIBUTES")
                 ]
+            values = [
+                v for v in values if not _is_compose_template_passthrough(path, v)
+            ]
             if values:
                 sites.setdefault(path.relative_to(ROOT).as_posix(), []).extend(values)
     return sites
@@ -524,6 +540,14 @@ def test_site_check_rejects_an_attribute_string_built_by_hand() -> None:
     hand_built = ast.parse("env['OTEL_RESOURCE_ATTRIBUTES'] = 'a=b'").body[0]
     assert isinstance(hand_built, ast.Assign)
     assert not _renders_from_service_identity(hand_built.value)
+    assert not _is_compose_template_passthrough(
+        ROOT / "common/deploy/compose_rules.py", hand_built.value
+    )
+    passthrough = ast.parse('x = f"${{{attrs_var}:-}}"').body[0]
+    assert isinstance(passthrough, ast.Assign)
+    assert _is_compose_template_passthrough(
+        ROOT / "common/deploy/compose_rules.py", passthrough.value
+    )
     rendered = ast.parse("x = identity.otel_resource_attributes()").body[0]
     assert isinstance(rendered, ast.Assign)
     assert _renders_from_service_identity(rendered.value)

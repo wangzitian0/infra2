@@ -11,9 +11,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from infra2_sdk.deploy import canonical_json_bytes
+from common.core._sdk_wire import canonical_json_bytes
 
-from infra2_sdk.observability import GitHubIssues, issue_trail_mode, scrub
+from common.observability.issue_trail import GitHubIssues, issue_trail_mode, scrub
 
 from common.alerting import (
     DISPLAY_TIMEZONE,

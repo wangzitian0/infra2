@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from infra2_sdk.observability import (  # noqa: E402
+from common.observability.issue_trail import (  # noqa: E402
     GitHubIssues,
     issue_trail_mode,
     load_trail,

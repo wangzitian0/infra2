@@ -308,7 +308,7 @@ def get_service_url(
     else:
         tier = _routing_tier(norm)
 
-    from infra2_sdk.routing import resolve_service_url
+    from common.deploy.routing import resolve_service_url
 
     return resolve_service_url(subdomain, tier=tier, base_domain=domain).rstrip("/")
 
@@ -327,7 +327,7 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
     if not subdomain or not domain:
         return ""
     tier = _routing_tier(normalize_env_name(e.get("ENV")))
-    from infra2_sdk.routing import resolve_app_hostname
+    from common.deploy.routing import resolve_app_hostname
 
     return resolve_app_hostname(subdomain, tier=tier, base_domain=domain)
 

@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-from infra2_sdk.secrets import policy_name
+from common.security.backends import policy_name
 
 from common.tests.fakes import FakeDokployDeployments
 

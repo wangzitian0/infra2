@@ -4,7 +4,7 @@ the store contract that tasks and Deployers rely on."""
 
 import pytest
 
-from infra2_sdk.secrets import SecretsError, WriteResult
+from common.security.backends import SecretsError, WriteResult
 
 
 class FakeBackend:

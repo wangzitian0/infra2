@@ -1,4 +1,4 @@
-from infra2_sdk.rules.compose import (
+from common.deploy.compose_rules import (
     find_bare_latest_violations as bare_latest_violations,
 )
 

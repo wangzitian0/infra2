@@ -91,8 +91,6 @@ def test_load_manifest_reads_the_local_file_and_never_uses_the_network(
 def test_every_provided_by_names_a_store_backed_field_of_that_provider() -> None:
     """The prune keeps a provider's key because the provider declares it; if a consumer
     named a key its provider does not own, the prune would delete a live credential."""
-    from infra2_sdk.secrets import vault_path  # noqa: F401  (documents the path shape)
-
     by_id = {service.id: service for service in SERVICES}
     for service in SERVICES:
         for field in secrets_registry.merged_manifest(service).fields:

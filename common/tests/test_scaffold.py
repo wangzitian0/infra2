@@ -11,7 +11,7 @@ import pytest
 from packaging.version import Version
 
 import infra2_sdk
-from infra2_sdk.ci import validate_manifest_offline
+from common.core.ci_contract import validate_manifest_offline
 from common.core.scaffold import (
     _generate_requirements_txt,
     _scaffold_manifest,
@@ -638,7 +638,7 @@ def test_generated_postgres_app_uses_a_set_database_url(tmp_path: Path, profile:
 def test_scaffold_compose_passes_the_sdk_memory_lint(
     tmp_path: Path, profile: str
 ) -> None:
-    from infra2_sdk.rules.compose import inspect_compose
+    from common.deploy.compose_rules import inspect_compose
     from common.core.scaffold import _generate_compose_yaml
 
     report = inspect_compose(

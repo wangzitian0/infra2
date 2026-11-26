@@ -22,37 +22,34 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from infra2_sdk.deploy import (
+from common.deploy.evidence import (
     PRODUCTION_DEPLOY_BUDGET_SECONDS,
     PRODUCTION_REQUEST_MAX_AGE_SECONDS,
     VERSION_KEYS,
+    validate_evidence_urls,
+    verify_production_evidence,
+)
+from infra2_sdk.deploy import (
     DeployOperation,
     DeployRequest,
     DeployType,
     default_http_get,
     parse_sender_deadline,
     production_request_accept_until,
-    validate_evidence_urls,
-    verify_production_evidence,
 )
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
     FORBIDDEN_HOOK_ENV_PREFIXES,
     HookRunResult,
     RuntimeHooksManifest,
-    load as load_sdk_manifest,
-    load_hooks_manifest,
     resolve_check_cells,
     run_cell,
 )
-from infra2_sdk.refs import (
-    ResolvedRef,
-    next_patch_tag,
-    resolve_image_ref,
-)
-from infra2_sdk.runtime import merge_manifests
+from common.deploy.stage_hooks import load as load_sdk_manifest, load_hooks_manifest
+from common.deploy.git_refs import ResolvedRef, next_patch_tag, resolve_image_ref
+from common.security.manifest_merge import merge_manifests
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
-from infra2_sdk.secrets import render_agent_policy, render_agent_template
+from common.security.backends import render_agent_policy, render_agent_template
 
 from common.security.secrets_render import escape_composed_url_secrets
 

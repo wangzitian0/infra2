@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from infra2_sdk.secrets import SecretsError, WriteResult, vault_path
+from common.security.backends import SecretsError, WriteResult, vault_path
 
 from common.security.registry import SERVICES, Service
 from common.security import secrets_prune

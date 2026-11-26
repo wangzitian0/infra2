@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from infra2_sdk.ci import parse_github_time
+from common.core.ci_contract import parse_github_time
 
 FEISHU_WEBHOOK_HOSTS = {"open.feishu.cn", "open.larksuite.com"}
 FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"

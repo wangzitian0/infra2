@@ -28,7 +28,7 @@ import subprocess
 import sys
 from typing import Any, Literal, Optional
 
-from infra2_sdk.secrets import (
+from common.security.backends import (
     OnePasswordBackend,
     SecretsError,
     VaultKvBackend,

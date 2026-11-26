@@ -72,7 +72,7 @@ def parse_epoch_seconds(value) -> float | None:
             return None
         if s.isdigit():
             return parse_epoch_seconds(int(s))
-        from infra2_sdk.ci import parse_github_time
+        from common.core.ci_contract import parse_github_time
 
         try:
             dt = parse_github_time(s)

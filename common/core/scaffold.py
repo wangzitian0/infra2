@@ -13,7 +13,7 @@ from infra2_sdk.runtime.config_schema import (
     EnvironmentField,
     EnvironmentManifest,
 )
-from infra2_sdk.secrets import render_agent_policy, render_agent_template
+from common.security.backends import render_agent_policy, render_agent_template
 
 from common.security.secrets_render import escape_composed_url_secrets
 

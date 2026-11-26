@@ -88,7 +88,7 @@ def compile_stack(
     if not has_x_infra2(text):
         return text
     # Imported here: only an x-infra2 stack needs the SDK 4.x compiler (infra2#1822).
-    from infra2_sdk.rules import ComposeCompileError, compile_compose
+    from common.deploy.compose_rules import ComposeCompileError, compile_compose
 
     try:
         return compile_compose(text, vault_template=vault_template, mode=mode)

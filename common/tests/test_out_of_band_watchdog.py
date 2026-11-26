@@ -1503,7 +1503,7 @@ def test_main_records_the_paging_verdicts_for_the_issue_trail(
     monkeypatch, tmp_path
 ) -> None:
     """truealpha#876 W4 / #908: paging verdicts reach the trail, green included."""
-    from infra2_sdk.observability import load_trail
+    from common.observability.issue_trail import load_trail
 
     watchdog = _load_watchdog()
     peer = watchdog.CheckResult(
@@ -1546,7 +1546,7 @@ def test_a_configuration_failure_on_a_report_only_check_pages_as_the_watchdog(
     The next run that records cleanly closes that issue, which a report-only
     check's own name never would (it is never recorded again).
     """
-    from infra2_sdk.observability import load_trail
+    from common.observability.issue_trail import load_trail
 
     watchdog = _load_watchdog()
     missing_key = watchdog.CheckResult(
@@ -1942,7 +1942,7 @@ def _run_day(
     code = watchdog.main(
         {key: value for key, value in env.items() if value is not None}
     )
-    from infra2_sdk.observability import load_trail
+    from common.observability.issue_trail import load_trail
 
     trail = load_trail(verdicts, expected_sources=["out-of-band-watchdog"])
     return code, pages, reports, trail, events
@@ -2396,7 +2396,7 @@ def test_page_findings_key_each_failing_unit_with_its_domain_and_level() -> None
 def test_main_pages_as_before_when_the_page_state_cannot_be_read(
     monkeypatch, tmp_path
 ) -> None:
-    from infra2_sdk.observability import ListingFailed
+    from common.observability.issue_trail import ListingFailed
     from common.tests.test_page_dedup import FakeIssues
 
     api = FakeIssues()

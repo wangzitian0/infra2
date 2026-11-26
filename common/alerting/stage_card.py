@@ -27,7 +27,7 @@ from typing import Any
 import common.alerting
 from common.alerting.card import build_feishu_report_card
 from common.alerting.types import redact_secrets
-from infra2_sdk.stage_record import StageRecord
+from common.deploy.stage_record import StageRecord
 
 MAX_CHECK_LINES = 12
 MAX_DETAIL_CHARS = 80

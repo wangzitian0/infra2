@@ -944,7 +944,7 @@ def test_wait_for_new_deployment_record_surfaces_log_tail_on_error(
 def test_the_default_op_runner_cannot_reach_an_op_binary_on_path(tmp_path, monkeypatch):
     """#1470: default OnePasswordBackend raises FileNotFoundError and honours explicit runner."""
     import subprocess
-    from infra2_sdk.secrets import OnePasswordBackend
+    from common.security.backends import OnePasswordBackend
 
     marker = tmp_path / "op-ran"
     script = tmp_path / "op"

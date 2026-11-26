@@ -266,7 +266,7 @@ def test_each_dagster_service_runs_the_entrypoint_after_the_vault_wait():
     dagster-entrypoint.sh at its image path. The image carries the script since
     truealpha v0.2.144 (truealpha#1866), so no service mounts it from the checkout.
     """
-    from infra2_sdk.rules import compile_compose
+    from common.deploy.compose_rules import compile_compose
 
     source = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     for name in DAGSTER_SERVICES:
@@ -493,7 +493,7 @@ def test_pin_release_gives_up_after_the_last_transport_failure(monkeypatch):
 def test_pin_release_never_retries_a_registry_answer(monkeypatch):
     """A 404 or a refusal is an answer: retrying cannot change it, so it fails at once."""
     import pytest
-    from infra2_sdk import refs
+    from common.deploy import git_refs as refs
 
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
@@ -524,7 +524,7 @@ def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatc
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.46")
     monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
-    from infra2_sdk import refs
+    from common.deploy import git_refs as refs
 
     monkeypatch.setattr(
         refs,
@@ -549,7 +549,7 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     )
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
-    from infra2_sdk import refs
+    from common.deploy import git_refs as refs
 
     monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
@@ -596,7 +596,7 @@ def test_ensure_runtime_secrets_accepts_env_parameter(monkeypatch):
         classmethod(lambda cls, env=None: mock_secrets_backend(env)),
     )
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.48")
-    from infra2_sdk import refs
+    from common.deploy import git_refs as refs
 
     monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)

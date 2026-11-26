@@ -43,7 +43,7 @@ from functools import lru_cache
 from typing import Literal
 
 import yaml
-from infra2_sdk.refs import classify_ref
+from common.deploy.git_refs import classify_ref
 from infra2_sdk.runtime.environment import is_preview_alias
 
 from common.core.constants import APP_REPO_ID_TO_SERVICE, REPO_ROOT

@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from infra2_sdk import refs
+from common.deploy import git_refs as refs
 
 DEFAULT_REPO = "https://github.com/wangzitian0/finance_report.git"
 

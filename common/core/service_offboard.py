@@ -19,7 +19,7 @@ from typing import Any
 
 from invoke import Context, task
 
-from infra2_sdk.secrets import policy_name
+from common.security.backends import policy_name
 
 from common.console import error, header, info, success, warning
 from common.core.environ import get_env, infra_domain, with_env_suffix

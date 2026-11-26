@@ -9,7 +9,7 @@ import re
 import time
 
 from invoke import task
-from infra2_sdk.secrets import (
+from common.security.backends import (
     VaultTokenTarget,
     normalize_selector,
     policy_name as vault_policy_name,

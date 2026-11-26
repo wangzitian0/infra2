@@ -8,8 +8,8 @@ from pathlib import Path
 
 import yaml
 
-from infra2_sdk.capacity import CapacityReading
-from infra2_sdk.secrets import SecretsError, WriteResult, op_item, vault_path
+from common.observability.capacity import CapacityReading
+from common.security.backends import SecretsError, WriteResult, op_item, vault_path
 
 from common.security.registry import SERVICES, Service
 from common.security import secrets_reconcile
@@ -121,7 +121,7 @@ def test_previews_are_skipped_and_bootstrap_is_production_only(
 
 
 def test_capacity_report_uses_readings_and_flags_exceeded() -> None:
-    from infra2_sdk.capacity import CLOUDFLARE_FREE_TIER
+    from common.observability.capacity import CLOUDFLARE_FREE_TIER
 
     limit = next(entry for entry in CLOUDFLARE_FREE_TIER if entry.window == "day")
     used = limit.limit + 500
@@ -283,7 +283,7 @@ def test_render_lists_findings_per_row() -> None:
 
 
 def _resolver_for_root(root):
-    from infra2_sdk.secrets import SecretsResolver
+    from common.security.backends import SecretsResolver
 
     from common.security.registry import merged_manifest
 

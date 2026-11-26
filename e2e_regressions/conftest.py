@@ -136,7 +136,7 @@ URL_SUBDOMAIN_KEYS = {
 
 def _host_for_subdomain(subdomain: str, env_suffix: str, internal_domain: str) -> str:
     """Return the canonical host for a subdomain via infra2_sdk.routing."""
-    from infra2_sdk.routing import resolve_app_hostname
+    from common.deploy.routing import resolve_app_hostname
 
     tier_or_alias = env_suffix.lstrip("-") or "production"
     return resolve_app_hostname(

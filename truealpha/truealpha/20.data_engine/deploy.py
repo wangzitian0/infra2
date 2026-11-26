@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from invoke.exceptions import CommandTimedOut
 from common.console import error, success
-from infra2_sdk.refs import classify_ref
+from common.deploy.git_refs import classify_ref
 from common.deploy.deployer import Deployer, make_tasks
 from common.core.facets import BackupFacet, Exemption, SecretsFacet
 
@@ -28,7 +28,7 @@ _TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 
 def _registry_digest(image: str, ref: str) -> str:
     """``registry/owner/name`` + tag (or digest) → ``sha256:…`` via infra2-sdk."""
-    from infra2_sdk.refs import resolve_image_digest
+    from common.deploy.git_refs import resolve_image_digest
 
     registry, _, name = image.partition("/")
     return resolve_image_digest(image=name, reference=ref, registry=registry)

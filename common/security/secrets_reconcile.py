@@ -13,14 +13,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # runnable as a script
 
-from infra2_sdk.capacity import (  # noqa: E402
+from common.observability.capacity import (
     CLOUDFLARE_FREE_TIER,
     CapacityReading,
     CapacityReport,
     cloudflare_readings,
     evaluate,
 )
-from infra2_sdk.secrets import OnePasswordBackend, SecretsError, vault_path  # noqa: E402
+from common.security.backends import OnePasswordBackend, SecretsError, vault_path
 
 from common.security.registry import SERVICES, Service  # noqa: E402
 from common.security.supply import ONEPASSWORD_VAULT, resolver_for, vault_backend  # noqa: E402
