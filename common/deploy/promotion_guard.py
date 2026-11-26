@@ -7,29 +7,147 @@ question: may this tag go to production? The `pre` job of the release train call
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import tomllib
+import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from common.core.constants import APP_SOURCES
+from common.deploy.canary_pin import APP_SDK_RANGE, in_app_sdk_range
 from common.deploy.stage_record import CI_ENV
 from common.deploy.stage_record_reader import (
     EXIT_UNREADABLE,
+    open_url,
     read_record,
     staging_gates_verdict,
+    verified_sdk_versions,
 )
 from infra2_sdk.manifests import stage_hook_plan
 
+_CANARY_TRIGGER_PREFIXES = (
+    "platform/",
+    "common/deploy/",
+    "common/security/",
+    "common/observability/",
+)
+
 
 def required_staging_gates(plan: Any) -> dict[str, str]:
-    """``service -> release tag`` of each App whose release this promotion carries (#1563)."""
-    return {
+    """``service -> release tag`` of each App or platform/todo release this promotion carries (#1563)."""
+    required = {
         svc: tag
         for svc in sorted(plan.selected)
         if svc in APP_SOURCES and (tag := plan.app_release_tags.get(svc, ""))
     }
+    canary_ref = str(getattr(plan, "canary_version_ref", "") or "").strip()
+    changed_files = getattr(plan, "changed_files", ()) or ()
+    platform_or_shared = "platform/todo" in plan.selected or any(
+        f == "uv.lock" or f.startswith(_CANARY_TRIGGER_PREFIXES) for f in changed_files
+    )
+    if canary_ref and platform_or_shared:
+        required["platform/todo"] = canary_ref
+    return required
+
+
+def check_prod_canary_health(
+    *,
+    domain: str = "zitian.party",
+    http_get: Callable[[str, float], tuple[int, str]] | None = None,
+) -> None:
+    """Require live production Canary Todo /api/health and canary verdict to pass."""
+    url = f"https://todo.{domain.strip()}/api/health"
+    try:
+        if http_get is not None:
+            status, raw = http_get(url, 10.0)
+        else:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "infra2-promotion-guard/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                status = int(resp.status)
+                raw = resp.read().decode("utf-8", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            f"::error::upstream_post refused: live prod todo canary health failed ({exc})"
+        ) from exc
+    if status != 200:
+        raise SystemExit(
+            f"::error::upstream_post refused: live prod todo canary returned HTTP {status}"
+        )
+    try:
+        body = json.loads(raw)
+    except ValueError as exc:
+        raise SystemExit(
+            f"::error::upstream_post refused: live prod todo canary returned invalid JSON ({exc})"
+        ) from exc
+    canary = body.get("canary") if isinstance(body, dict) else None
+    if (
+        not isinstance(body, dict)
+        or body.get("ok") is not True
+        or not isinstance(canary, dict)
+        or canary.get("ok") is not True
+    ):
+        raise SystemExit(
+            f"::error::upstream_post refused: live prod todo canary unhealthy ({body!r})"
+        )
+
+
+def _infra2_sdk_from_uv_lock_text(text: str) -> str:
+    data = tomllib.loads(text)
+    for pkg in data.get("package") or ():
+        if isinstance(pkg, Mapping) and pkg.get("name") == "infra2-sdk":
+            return str(pkg.get("version") or "").strip()
+    return ""
+
+
+def assert_uv_lock_sdk_verified(
+    after: str,
+    repo_root: Path,
+    *,
+    repo: str,
+    token: str,
+    verified_versions: set[str] | None = None,
+) -> None:
+    """When ``uv.lock`` exists at ``after``, require its infra2-sdk version to be Canary-verified."""
+    shown = subprocess.run(
+        ["git", "-C", str(repo_root), "show", f"{after}:uv.lock"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown.returncode != 0:
+        if (repo_root / "uv.lock").is_file():
+            raise SystemExit(
+                f"::error::upstream_post refused: cannot read {after}:uv.lock ({shown.stderr.strip()})"
+            )
+        return
+    sdk_ver = _infra2_sdk_from_uv_lock_text(shown.stdout)
+    if not sdk_ver:
+        raise SystemExit(
+            f"::error::upstream_post refused: {after}:uv.lock declares no infra2-sdk package"
+        )
+    if not in_app_sdk_range(sdk_ver):
+        low, high = APP_SDK_RANGE
+        raise SystemExit(
+            f"::error::upstream_post refused: {after}:uv.lock pins infra2-sdk {sdk_ver}, "
+            f"outside range [{low}, {high})"
+        )
+    verified = (
+        set(verified_versions)
+        if verified_versions is not None
+        else verified_sdk_versions(
+            repo=repo, token=token, opener=open_url, wanted={sdk_ver}
+        )
+    )
+    if sdk_ver not in verified:
+        raise SystemExit(
+            f"::error::upstream_post refused: {after}:uv.lock pins infra2-sdk {sdk_ver}, "
+            f"which has no unrevoked Canary staging_gate pass (verified={sorted(verified)})"
+        )
 
 
 def require_upstream_post(
@@ -62,6 +180,10 @@ def require_upstream_post(
         text=True,
         check=True,
     ).stdout.strip()
+    domain = (env.get("INTERNAL_DOMAIN") or "zitian.party").strip()
+    if "platform/todo" not in required:
+        check_prod_canary_health(domain=domain)
+    assert_uv_lock_sdk_verified(after, repo_root, repo=repo, token=token)
     staging_env = stage_hook_plan("staging").stage_id
 
     def staging(tag: str):

@@ -88,9 +88,9 @@ def test_the_sdk_unit_names_the_canary_image_not_the_runner(
     assert reconcile.plan_units(plan)[-1] == "sdk:9.8.7"
 
 
-def test_an_unreadable_pin_gives_sdk_unknown(tmp_path, capsys) -> None:
-    assert canary_sdk_unit(tmp_path) == "sdk:unknown"
-    assert "::warning::" in capsys.readouterr().out
+def test_an_unreadable_pin_fails_closed(tmp_path) -> None:
+    with pytest.raises((FileNotFoundError, CanaryPinError)):
+        canary_sdk_unit(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -136,12 +136,13 @@ def test_an_sdk_inside_the_range_still_needs_the_canary(monkeypatch) -> None:
     )
 
 
-def test_plan_units_carry_sdk_unknown_when_the_pin_is_unreadable(
+def test_plan_units_fail_closed_when_the_pin_is_unreadable(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.setattr(reconcile, "canary_sdk_unit", lambda: canary_sdk_unit(tmp_path))
     plan = reconcile.build_plan(["platform/12.alerting/compose.yaml"])
-    assert reconcile.plan_units(plan)[-1] == "sdk:unknown"
+    with pytest.raises((FileNotFoundError, CanaryPinError)):
+        reconcile.plan_units(plan)
 
 
 def test_canary_verify_production_fallback_never_reads_the_new_pin(tmp_path) -> None:

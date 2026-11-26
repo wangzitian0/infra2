@@ -93,11 +93,15 @@ services:
       - truealpha/truealpha/observability/dashboard.json
 
   platform/todo:
-    # The image comes prebuilt from infra2-sdk (infra2-sdk#247): the pin in compose.yaml is the
-    # only SDK input, and the compose file is hashed already.
+    # Canary Todo gates platform/, shared deploy/security/observability modules, uv.lock,
+    # and Preview S3 builds whenever any of those change (#1647).
     depends_on:
-      # The Preview compose builds the slot's own S3 from this Dockerfile (#1647).
       - platform/03.s3/Dockerfile
+      - platform/**
+      - common/deploy/**
+      - common/security/**
+      - common/observability/**
+      - uv.lock
 
   bootstrap/iac-runner:
     depends_on:

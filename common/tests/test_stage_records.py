@@ -58,14 +58,20 @@ def _drive_staging_reconcile(monkeypatch, tmp_path, *, returncode=0) -> Path:
         "run_post_deploy_app_hooks",
         lambda *_a, slot, **_k: [
             {
-                "service": "platform/alerting",
+                "service": svc,
                 "slot": slot,
                 "status": "pass",
                 "summary": "ok",
                 "version_ref": "v3.1.23",
                 "duration_seconds": 3.0,
             }
+            for svc in ("platform/alerting", "platform/todo")
         ],
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "run_canary_reality_gate",
+        lambda **_k: (True, "canary_verify passed (staging, sdk=4.9.1)"),
     )
     rc = reconcile.main(
         [
@@ -105,15 +111,19 @@ def test_writer_emits_three_valid_records(monkeypatch, tmp_path) -> None:
         "app_pins",
     ]
     # `hook_env` needs the secret values, which only the `operation` job holds (#1646)
-    assert [(c.name, c.seconds) for c in loaded["operation"].checks][2:] == [
-        ("staging:platform/alerting", 12.5),
+    assert [(c.name, c.seconds) for c in loaded["operation"].checks][2:-1] == [
+        ("staging:platform/alerting,platform/todo", 12.5),
         ("platform/alerting:smoke", 3.0),
+        ("platform/todo:smoke", 3.0),
     ]
+    assert loaded["operation"].checks[-1].name == "canary_verify"
+    assert loaded["operation"].checks[-1].ok is True
     assert loaded["operation"].checks[0].name == "hook_env"
     # the runner SDK check runs before the first deploy unit (#1822)
     assert loaded["operation"].checks[1].name == "runner_sdk"
     assert [(c.name, c.seconds) for c in loaded["post"].checks] == [
-        ("platform/alerting:staging_gate", 3.0)
+        ("platform/alerting:staging_gate", 3.0),
+        ("platform/todo:staging_gate", 3.0),
     ]
     # the gate hook records the version it checked: the production guard reads it back (#1563)
     assert loaded["post"].checks[0].detail == "[v3.1.23] ok"
@@ -209,6 +219,7 @@ def test_each_reconcile_upload_step_reads_the_variable_the_writer_sets() -> None
         step = uploads[f"Upload stage record {phase}"]
         var = f"STAGE_RECORD_{phase.upper()}"
         assert step["if"] == f"always() && env.{var} != ''"
+        assert step.get("continue-on-error") is not True
         assert step["with"]["name"] == f"${{{{ env.{var} }}}}"
         assert step["with"]["path"] == f"stage-records/${{{{ env.{var} }}}}.json"
 
@@ -830,6 +841,9 @@ def _drive_prod_promotion(monkeypatch, tmp_path, marker):
         ],
     )
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        reconcile, "run_canary_reality_gate", lambda *_a, **_k: (True, "ok")
+    )
     argv = [
         "--before", "v3.1.22", "--after", "v3.1.23", "--promote-prod",
         "--changed-file", "platform/12.alerting/compose.yaml",
@@ -909,17 +923,22 @@ def test_the_sdk_unit_never_raises(monkeypatch, capsys) -> None:
     assert "::warning::" in capsys.readouterr().out
 
 
-def test_every_record_upload_step_is_allowed_to_fail() -> None:
-    for rel, job in (
-        (RECONCILE, "pre"),
-        (RECONCILE, "operation"),
-        (RECONCILE, "post"),
-        (".github/workflows/infra-ci.yml", "record"),
-    ):
-        steps = yaml.safe_load((ROOT / rel).read_text())["jobs"][job]["steps"]
+def test_reconcile_record_upload_steps_fail_closed() -> None:
+    for job in ("pre", "operation", "post"):
+        steps = yaml.safe_load((ROOT / RECONCILE).read_text())["jobs"][job]["steps"]
         uploads = [s for s in steps if "STAGE_RECORD_" in str(s.get("if", ""))]
-        assert len(uploads) == 1, (rel, job)
-        assert all(s["continue-on-error"] is True for s in uploads), (rel, job)
+        assert len(uploads) == 1, (RECONCILE, job)
+        assert all(s.get("continue-on-error") is not True for s in uploads), (
+            RECONCILE,
+            job,
+        )
+
+    ci_steps = yaml.safe_load((ROOT / ".github/workflows/infra-ci.yml").read_text())[
+        "jobs"
+    ]["record"]["steps"]
+    ci_uploads = [s for s in ci_steps if "STAGE_RECORD_" in str(s.get("if", ""))]
+    assert len(ci_uploads) == 1
+    assert all(s.get("continue-on-error") is True for s in ci_uploads)
 
 
 def test_one_github_get_helper_and_one_card_publish_flow() -> None:
@@ -1073,7 +1092,10 @@ def test_verified_sdk_scan_keeps_the_verdict_of_the_full_scan() -> None:
     ):
         gh = _sdk_window()
         assert _verified(gh, wanted=wanted) & wanted == full & wanted, wanted
-    for unverified in ({"4.5.0"}, {"4.6.0"}, {"9.9.9"}):
+    revoked = _sdk_window()
+    assert _verified(revoked, wanted={"4.5.0"}) == {"4.4.0"}
+    assert revoked.run_reads == 2  # stops early once 4.5.0 is revoked on run 2
+    for unverified in ({"4.6.0"}, {"9.9.9"}):
         gh = _sdk_window()
         assert _verified(gh, wanted=unverified) == full
         assert gh.run_reads == 3, unverified  # the full window, as without `wanted`
@@ -1088,6 +1110,65 @@ def test_verified_sdk_scan_with_records_ignores_wanted() -> None:
         "4.4.0",
         "4.3.0",
     }
+
+
+def test_verified_sdk_versions_revokes_on_newer_failure_and_restores_on_newer_pass() -> (
+    None
+):
+    """Latest-wins revocation: newer operation/post failure revokes older pass; newer pass restores."""
+    from common.deploy.stage_record_reader import verified_sdk_versions
+
+    revoked_records = [
+        _sdk_record("4.9.1", "v3.2.15", run=105, canary_ok=False),
+        _sdk_record("4.9.1", "v3.2.14", run=104, canary_ok=True),
+    ]
+    assert verified_sdk_versions(revoked_records) == set()
+
+    # Failure in operation (`canary_verify`) also revokes an older post pass.
+    op_fail = {
+        **_record(subject="tag:v3.2.15", phase="operation", run=105),
+        "units": ["platform/todo", "sdk:4.9.1"],
+        "checks": [{"name": "canary_verify", "ok": False}],
+    }
+    assert (
+        verified_sdk_versions([op_fail, _sdk_record("4.9.1", "v3.2.14", run=104)])
+        == set()
+    )
+
+    # An operation canary_verify pass alone does NOT verify an SDK version without post staging_gate.
+    op_pass = {
+        **_record(subject="tag:v3.2.15", phase="operation", run=105),
+        "units": ["platform/todo", "sdk:4.9.1"],
+        "checks": [{"name": "canary_verify", "ok": True}],
+    }
+    assert verified_sdk_versions([op_pass]) == set()
+
+    # End-to-end via FakeGitHub: skips `pre`, revokes on `operation` canary_verify fail.
+    gh = _CountingGitHub()
+    gh.add(
+        {
+            **_record(subject="tag:v3.2.15", phase="pre", run=105),
+            "units": ["platform/todo", "sdk:4.9.1"],
+            "checks": [{"name": "upstream_post", "ok": False}],
+        },
+        run=105,
+        created="2026-11-05T00:00:00Z",
+    )
+    gh.add(op_fail, run=105, created="2026-11-05T00:00:00Z")
+    gh.add(
+        _sdk_record("4.9.1", "v3.2.14", run=104, canary_ok=True),
+        run=104,
+        created="2026-11-04T00:00:00Z",
+    )
+    assert _verified(gh, wanted={"4.9.1"}) == set()
+    assert gh.run_reads == 1
+
+    # Recovery: newest pass supersedes older failure.
+    recovered = [
+        _sdk_record("4.9.1", "v3.2.16", run=106, canary_ok=True),
+        op_fail,
+    ]
+    assert verified_sdk_versions(recovered) == {"4.9.1"}
 
 
 # -- a GitHub GET that fails with 5xx is sent again (#1645) -------------------------------------

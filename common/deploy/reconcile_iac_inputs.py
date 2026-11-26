@@ -182,6 +182,7 @@ class ReconcilePlan:
     # plan shows WHY a service is absent instead of failing on it (v1.1.34).
     not_yet_in_production: list[str] = field(default_factory=list)
     app_release_tags: dict[str, str] = field(default_factory=dict)
+    canary_version_ref: str = ""
 
     @property
     def services(self) -> list[str]:
@@ -2449,6 +2450,53 @@ def run_scheduled_app_audits(
     return results
 
 
+def _latest_canary_release_tag(
+    repo_root: Path | None,
+    *,
+    before: str | None,
+    after: str | None,
+) -> str:
+    """Return the latest release tag in ``(before, after]`` that triggered ``platform/todo``."""
+    after_ref = str(after or "").strip()
+    if (
+        not after_ref
+        or repo_root is None
+        or not before
+        or not RELEASE_TAG_RE.fullmatch(after_ref)
+    ):
+        return after_ref
+    try:
+        tags = releases_between(before, after_ref, repo_root)
+        if len(tags) <= 1:
+            return after_ref
+        for tag in reversed(tags):
+            prev = plan_base(
+                tag, "", promote_prod=False, repo_root=repo_root, previous_tag=True
+            )
+            tag_files = changed_files_from_git(repo_root, prev or None, tag)
+            if (
+                "platform/todo" in explain_fanout(tag_files).selected
+                or MANIFEST_PATH in tag_files
+                or any(path in SOURCE_HASH_FORMULA_PATHS for path in tag_files)
+                or any(
+                    f == "uv.lock"
+                    or f.startswith(
+                        (
+                            "platform/",
+                            "common/deploy/",
+                            "common/security/",
+                            "common/observability/",
+                        )
+                    )
+                    for f in tag_files
+                )
+            ):
+                return tag
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        return after_ref
+    return after_ref
+
+
 def build_plan(
     changed_files: Sequence[str],
     *,
@@ -2544,6 +2592,11 @@ def build_plan(
         prod_services=prod_services,
         not_yet_in_production=not_yet_in_production,
         app_release_tags=dict(sorted(effective_app_tags.items())),
+        canary_version_ref=(
+            _latest_canary_release_tag(repo_root, before=before, after=after)
+            if "platform/todo" in selected
+            else ""
+        ),
     )
 
 

@@ -120,7 +120,7 @@ def test_companion_service_promoted_once_after_app_and_excluded_from_platform_ba
     )
     staging_cmds = [c for c in commands if c.deploy_type == "staging"]
     assert [c.service for c in staging_cmds] == [
-        "platform/alerting",
+        "platform/alerting,platform/todo",
         "truealpha/app",
         "truealpha/data_engine",
     ]
@@ -268,7 +268,9 @@ def test_prod_only_services_skip_staging() -> None:
     plan = build_plan(["platform/11.signoz/compose.yaml"])
 
     assert "platform/signoz" not in plan.staging_services
-    assert plan.prod_services == ["platform/signoz"]
+    assert "platform/signoz" in plan.prod_services
+    assert "platform/todo" in plan.staging_services
+    assert "platform/todo" in plan.prod_services
 
 
 def test_not_yet_in_production_services_skip_prod() -> None:
@@ -307,7 +309,8 @@ def test_deploy_commands_use_deploy_v2_and_prod_review_signals() -> None:
     assert [command.deploy_type for command in commands] == ["staging", "prod"]
     assert commands[0].argv[:3] == ["python", "-m", "tools.deploy_v2"]
     assert (
-        commands[0].argv[commands[0].argv.index("--service") + 1] == "platform/alerting"
+        commands[0].argv[commands[0].argv.index("--service") + 1]
+        == "platform/alerting,platform/todo"
     )
     assert "--code-reviewed" not in commands[0].argv
     assert "--code-reviewed" in commands[1].argv
@@ -334,7 +337,7 @@ def test_deploy_commands_batch_services_by_environment() -> None:
     assert [command.deploy_type for command in commands] == ["staging", "prod"]
     assert (
         commands[0].argv[commands[0].argv.index("--service") + 1]
-        == "platform/alerting,platform/prefect"
+        == "platform/alerting,platform/prefect,platform/todo"
     )
     assert commands[0].argv[commands[0].argv.index("--timeout") + 1] == "3600"
 
@@ -1602,6 +1605,10 @@ def _run_promotion_main(monkeypatch, capsys, record, returncode=0, extra_args=()
             }
             for c in cmds
         ],
+    )
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_kw: [])
+    monkeypatch.setattr(
+        reconcile, "run_canary_reality_gate", lambda *_a, **_kw: (True, "ok")
     )
     rc = main([*PROMOTION_ARGV, *extra_args])
     lines = capsys.readouterr().out.splitlines()
@@ -5932,6 +5939,10 @@ def _train_stubs(monkeypatch, tmp_path, *, returncode: int = 0) -> list[str]:
             ]
         ),
     )
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_kw: [])
+    monkeypatch.setattr(
+        reconcile, "run_canary_reality_gate", lambda *_a, **_kw: (True, "ok")
+    )
     return order
 
 
@@ -6624,3 +6635,57 @@ def test_run_canary_reality_gate_blocks_prod_marker_and_fails_staging(
     assert rc_batch_fail == 1
     assert marker_calls == []
     assert seen_envs == ["production"]
+
+
+def test_cumulative_promotion_pins_canary_version_ref_to_latest_canary_release(
+    tmp_path,
+) -> None:
+    """Cumulative prod promotion uses the newest release in (before, after] that triggered platform/todo."""
+    from common.deploy.promotion_guard import required_staging_gates
+
+    repo = tmp_path / "repo"
+    (repo / "docs/ssot").mkdir(parents=True)
+    (repo / "platform/12.alerting").mkdir(parents=True)
+    (repo / "docs/ssot/deploy-dependencies.yaml").write_text(
+        (ROOT / "docs/ssot/deploy-dependencies.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (repo / "platform/12.alerting/compose.yaml").write_text("services: {}\n")
+    (repo / "docs/README.md").write_text("v1\n")
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-q", "-m", "v3.2.13")
+    git("tag", "v3.2.13")
+    git("tag", "production/v3.2.13")
+
+    (repo / "platform/12.alerting/compose.yaml").write_text(
+        "services:\n  alerting:\n    image: x\n"
+    )
+    git("commit", "-qam", "v3.2.14")
+    git("tag", "v3.2.14")
+
+    (repo / "docs/README.md").write_text("v2\n")
+    git("commit", "-qam", "v3.2.15")
+    git("tag", "v3.2.15")
+
+    changed = reconcile.changed_files_from_git(repo, "v3.2.13", "v3.2.15")
+    plan = build_plan(
+        changed,
+        repo_root=repo,
+        before="v3.2.13",
+        after="v3.2.15",
+        app_release_tags={},
+    )
+    assert "platform/todo" in plan.selected
+    assert plan.canary_version_ref == "v3.2.14"
+    assert required_staging_gates(plan) == {"platform/todo": "v3.2.14"}
