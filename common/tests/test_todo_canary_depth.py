@@ -390,8 +390,48 @@ def test_ensure_role_fails_closed_when_the_password_is_not_in_vault(
 def test_ensure_role_fails_closed_when_psql_fails(deploy, monkeypatch) -> None:
     deployer = deploy.TodoDeployer
     _stub_role_env(monkeypatch, deployer, {"TODO_POSTGRES_PASSWORD": PG_PASSWORD})
+    monkeypatch.setattr(deployer, "PG_RETRY_SECONDS", 0)
     host = _Host(ok=False, stderr="psql: error: connection refused")
     assert deployer._ensure_todo_postgres_role(host) is False
+    assert len(host.commands) == deployer.PG_ATTEMPTS == 6
+
+
+class _FlakyHost(_Host):
+    """psql fails ``failures`` times, then succeeds: Postgres still starting."""
+
+    def __init__(self, failures):
+        super().__init__()
+        self._failures = failures
+
+    def run(self, command, in_stream=None, hide=True, warn=True, **kwargs):
+        self.commands.append(command)
+        self.stdin.append(in_stream.read() if in_stream is not None else "")
+        ok = len(self.commands) > self._failures
+        return _Run(ok, stderr="" if ok else "")
+
+
+def test_ensure_role_waits_for_a_postgres_that_the_same_batch_recreated(
+    deploy, monkeypatch
+) -> None:
+    """Replay of staging v3.2.22: psql failed with an empty stderr right after the
+    platform batch recreated platform-postgres. The next tries succeed.
+
+    ### Mutation evidence
+    - One try only (``PG_ATTEMPTS = 1``, or no loop) fails this test.
+    """
+    deployer = deploy.TodoDeployer
+    _stub_role_env(monkeypatch, deployer, {"TODO_POSTGRES_PASSWORD": PG_PASSWORD})
+    slept: list[float] = []
+    monkeypatch.setattr(deploy.time, "sleep", slept.append)
+    host = _FlakyHost(failures=2)
+
+    assert deployer._ensure_todo_postgres_role(host) is True
+
+    assert len(host.commands) == 3
+    assert len(set(host.commands)) == 1, "every try runs the same command"
+    assert host.stdin == [deployer.todos_storage_sql(PG_PASSWORD)] * 3
+    assert slept == [deployer.PG_RETRY_SECONDS] * 2
+    assert deployer.PG_ATTEMPTS * deployer.PG_RETRY_SECONDS <= 30
 
 
 def test_supply_hook_provisions_the_role_only_after_the_supply_succeeded(
@@ -500,6 +540,7 @@ def test_a_failed_role_sync_never_prints_the_password(deploy, monkeypatch) -> No
         "                                                  ^\n"
         f"DETAIL: rejected {PG_PASSWORD}"
     )
+    monkeypatch.setattr(deployer, "PG_RETRY_SECONDS", 0)
     host = DockerHost(other_ok=False, other_stderr=stderr)
     printed: list[str] = []
     monkeypatch.setattr(

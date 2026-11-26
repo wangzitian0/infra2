@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import re
 import sys
+import time
 
 from invoke import task
 from invoke.exceptions import Exit
@@ -76,6 +77,12 @@ class TodoDeployer(Deployer):
     # The one Postgres login of the Canary Todo. The Vault template composes DATABASE_URL
     # with this role (common/tests/test_preview_platform_render.py keeps them equal).
     TODO_PG_ROLE = "todo_app"
+    # Staging v3.2.22 (run 45754381410): one platform batch recreated platform-postgres and
+    # then ran this psql before the new container accepted it, so the deploy failed. The
+    # SQL is idempotent, so a failed run gets another try; 6 tries 5 s apart cover a
+    # Postgres restart. The last failure still fails the deploy.
+    PG_ATTEMPTS = 6
+    PG_RETRY_SECONDS = 5.0
     TODO_PG_CONNECTION_LIMIT = 20
     # token_urlsafe(32), the SDK's generator for runtime secrets, yields only these characters.
     # A value outside this set is refused: it cannot be quoted into SQL or a URL without doubt.
@@ -181,13 +188,21 @@ class TodoDeployer(Deployer):
             error(f"{cls.service}: {exc}")
             return False
         container = f"platform-postgres{e.get('ENV_SUFFIX') or ''}"
-        result = c.run(
-            f"ssh root@{e['VPS_HOST']} "
-            f"'docker exec -i {container} psql -U postgres -v ON_ERROR_STOP=1 -q'",
-            in_stream=io.StringIO(sql),
-            hide=True,
-            warn=True,
-        )
+        for attempt in range(1, cls.PG_ATTEMPTS + 1):
+            result = c.run(
+                f"ssh root@{e['VPS_HOST']} "
+                f"'docker exec -i {container} psql -U postgres -v ON_ERROR_STOP=1 -q'",
+                in_stream=io.StringIO(sql),
+                hide=True,
+                warn=True,
+            )
+            if not result.failed or attempt == cls.PG_ATTEMPTS:
+                break
+            info(
+                f"{cls.service}: psql in {container} failed (attempt {attempt} of "
+                f"{cls.PG_ATTEMPTS}); trying again in {cls.PG_RETRY_SECONDS:g} s"
+            )
+            time.sleep(cls.PG_RETRY_SECONDS)
         if result.failed:
             stderr_clean = cls.redact_password((result.stderr or "").strip(), password)
             error(
