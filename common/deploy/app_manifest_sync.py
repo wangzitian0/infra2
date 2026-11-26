@@ -24,7 +24,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from common.security.manifest_merge import merge_manifests
-from infra2_sdk.runtime.config_schema import EnvironmentManifest
+from infra2_sdk.config import EnvironmentManifest
 
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.fetch_app_manifests import http_get

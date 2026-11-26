@@ -303,8 +303,8 @@ entries:
     description: >-
       Coordinate-ized inventory of infra CI gates, validated fail-closed against the shared
       schema and the actual workflows by tools/ci_gate_audit.py. Gate ids carry the infra_ci.
-      prefix so the app and infra inventories cannot overlap. The stage vocabulary comes
-      from the installed infra2-sdk release (infra2_sdk.ci.load_delivery_stages); infra2 keeps no copy.
+      prefix so the app and infra inventories cannot overlap. The stage vocabulary derives
+      from `infra2_sdk.delivery.load_stages` through `common.core.ci_contract.load_delivery_stages`; infra2 keeps no copy.
     proofs:
       - common/tests/test_ci_gate_meta.py
       - common/tests/test_delivery_stages.py

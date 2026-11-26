@@ -16,8 +16,8 @@ import pytest
 import yaml
 
 import common.observability.issue_trail as trail_lib
-from infra2_sdk.observability import CheckVerdict, record_verdicts
 from common.observability.issue_trail import (
+    CheckVerdict,
     GitHubIssues,
     ListingFailed,
     Trail,
@@ -25,6 +25,7 @@ from common.observability.issue_trail import (
     issue_trail_mode,
     load_trail,
     reconcile_issue_trail,
+    record_verdicts,
     title_for,
 )
 

@@ -32,6 +32,7 @@ from common.security.backends import (
     vault_path,
 )
 
+from common.core._sdk_wire import field_store_key
 from common.security.registry import Service, merged_manifest
 
 ONEPASSWORD_VAULT = "Infra2"
@@ -177,6 +178,7 @@ def resolver_for(
         env=env,
         store=store or vault_backend(),
         human=human if human is not None else OnePasswordBackend(ONEPASSWORD_VAULT),
+        mirror_keys=service.mirror_to_1password_keys,
     )
 
 
@@ -209,7 +211,7 @@ def apply(
     runtime = resolver.ensure_runtime()
     changed.update(runtime.changed)
     if not service.preview and hasattr(resolver.store, "replace"):
-        allowed = {f.key for f in resolver.manifest.store_backed} | set(
+        allowed = {field_store_key(f) for f in resolver.manifest.store_backed()} | set(
             service.store_only_keys
         )
         path = vault_path(service.project, env, service.service)

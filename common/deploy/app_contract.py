@@ -18,37 +18,40 @@ import os
 import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from common.core._sdk_wire import field_rendered, strip_legacy_manifest_fields
 from common.deploy.evidence import (
     PRODUCTION_DEPLOY_BUDGET_SECONDS,
     PRODUCTION_REQUEST_MAX_AGE_SECONDS,
     VERSION_KEYS,
-    validate_evidence_urls,
-    verify_production_evidence,
-)
-from infra2_sdk.deploy import (
     DeployOperation,
     DeployRequest,
     DeployType,
     default_http_get,
     parse_sender_deadline,
     production_request_accept_until,
+    validate_evidence_urls,
+    verify_production_evidence,
 )
-from infra2_sdk.manifests import (
-    FORBIDDEN_HOOK_ENV_NAMES,
-    FORBIDDEN_HOOK_ENV_PREFIXES,
+from common.deploy.stage_hooks import (
     HookRunResult,
-    RuntimeHooksManifest,
-    resolve_check_cells,
+    load as load_sdk_manifest,
+    load_hooks_manifest,
+    parse_hooks_manifest,
     run_cell,
 )
-from common.deploy.stage_hooks import load as load_sdk_manifest, load_hooks_manifest
+from infra2_sdk.delivery import (
+    FORBIDDEN_HOOK_ENV_NAMES,
+    FORBIDDEN_HOOK_ENV_PREFIXES,
+    RuntimeHooksManifest,
+    resolve_check_cells,
+)
 from common.deploy.git_refs import ResolvedRef, next_patch_tag, resolve_image_ref
 from common.security.manifest_merge import merge_manifests
-from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+from infra2_sdk.config import EnvironmentField, EnvironmentManifest
 from common.security.backends import render_agent_policy, render_agent_template
 
 from common.security.secrets_render import escape_composed_url_secrets
@@ -107,7 +110,6 @@ CONTRACT_ATTRIBUTES: tuple[str, ...] = (
     "store_key",
     "empty_ok",
     "required",
-    "mirror_to_1password",
     "group",
     "injected",
     "aliases",
@@ -181,7 +183,8 @@ def parse_manifest(body: str | bytes, *, label: str) -> EnvironmentManifest:
     Raises ``ValueError`` when ``body`` is not valid manifest JSON or declares no fields.
     """
     try:
-        manifest = EnvironmentManifest.from_dict(json.loads(body))
+        raw = strip_legacy_manifest_fields(json.loads(body))
+        manifest = EnvironmentManifest.from_dict(raw)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise ValueError(f"{label} is not an App env manifest: {exc!r}") from None
     if not manifest.fields:
@@ -220,12 +223,17 @@ def parse_compose_contract(body: str | bytes, *, label: str) -> Contract:
     return {
         field.env: {name: _attribute(field, name) for name in CONTRACT_ATTRIBUTES}
         for field in manifest.fields
-        if _supplied_by_infra2(field) and not field.rendered
+        if _supplied_by_infra2(field) and not field_rendered(field)
     }
 
 
 def _supplied_by_infra2(field: EnvironmentField) -> bool:
-    return field.source != "code" or field.rendered or field.required or field.injected
+    return (
+        field.source != "code"
+        or field_rendered(field)
+        or field.required
+        or field.injected
+    )
 
 
 def _attribute(field: EnvironmentField, name: str) -> object:
@@ -318,10 +326,11 @@ def render_release_template(
                 continue
             existing = release_fields.get(entry.env)
             if existing is not None:
-                release_fields[entry.env] = replace(
-                    existing,
-                    required=existing.required or entry.required,
-                    injected=existing.injected or entry.injected,
+                release_fields[entry.env] = existing.model_copy(
+                    update={
+                        "required": existing.required or entry.required,
+                        "injected": existing.injected or entry.injected,
+                    }
                 )
                 continue
             release_fields[entry.env] = entry
@@ -639,7 +648,7 @@ def fetch_hooks_manifest(
             f"failed to fetch hooks manifest {hooks_path} from {url}: {exc}"
         ) from None
     raw = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
-    return RuntimeHooksManifest.from_dict(raw)
+    return parse_hooks_manifest(raw)
 
 
 #: App hook manifest schemas this runner accepts (infra2#1823 "infra2 accepts ranges").
@@ -663,12 +672,7 @@ def schema3_empty_cells(manifest: RuntimeHooksManifest, slot: str) -> tuple[str,
 
     ``run_cell`` fails a cell with 0 active checks, so an empty cell would fail its stage.
     """
-    filled = {
-        cell
-        for check in manifest.checks
-        if check.off is None
-        for cell in resolve_check_cells(check)
-    }
+    filled = {cell for check in manifest.checks for cell in resolve_check_cells(check)}
     return tuple(cell for cell in _SLOT_CELLS.get(slot, ()) if cell not in filled)
 
 
@@ -678,7 +682,6 @@ def slot_checkout_lineage(manifest: RuntimeHooksManifest, slot: str) -> bool:
     return any(
         check.checkout_lineage and cells & set(resolve_check_cells(check))
         for check in manifest.checks
-        if check.off is None
     )
 
 
@@ -688,7 +691,7 @@ def schema3_required_env(manifest: RuntimeHooksManifest, slot: str) -> tuple[str
     cells = set(_SLOT_CELLS.get(slot, ()))
     names = list(manifest.required_env)
     for check in manifest.checks:
-        if check.off is None and cells & set(resolve_check_cells(check)):
+        if cells & set(resolve_check_cells(check)):
             names.extend(check.required_env)
     return tuple(dict.fromkeys(names))
 
@@ -726,7 +729,12 @@ def _schema3_env(
     optional = tuple(
         dict.fromkeys([*manifest.optional_env, *_HOOK_OPTIONAL_CONTEXT_ENV])
     )
-    return replace(manifest, optional_env=optional), effective_ambient
+    return (
+        RuntimeHooksManifest.from_dict(
+            {**manifest.model_dump(), "optional_env": optional}
+        ),
+        effective_ambient,
+    )
 
 
 def hook_env_for_slot(

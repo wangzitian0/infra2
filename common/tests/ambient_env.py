@@ -17,15 +17,15 @@ from __future__ import annotations
 import os
 
 import pytest
-from infra2_sdk.runtime.environment import runtime_env_contract
+from infra2_sdk.config import shared_env_contract
 
 
 def _contract_names() -> set[str]:
     """Every variable and every alias that the SDK contract declares."""
     names: set[str] = set()
-    for variable in runtime_env_contract()["variables"]:
+    for variable in shared_env_contract()["groups"]["runtime"]:
         names.add(variable["name"])
-        names.update(variable["aliases"])
+        names.update(variable.get("aliases") or ())
     return names
 
 

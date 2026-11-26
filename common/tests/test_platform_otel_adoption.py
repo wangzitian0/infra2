@@ -186,19 +186,19 @@ def test_the_scanner_tells_a_call_from_a_mention() -> None:
     assert len(init_service_calls("init_service(app, name='a')")) == 1
     assert len(init_service_calls("import sdk\nsdk.init_service(app, name='a')")) == 1
     assert init_service_calls("# init_service(app)\nx = 'init_service(app)'") == []
-    assert init_service_calls("from infra2_sdk.fastapi import init_service") == []
+    assert init_service_calls("from infra2_sdk.service import init_service") == []
 
 
 @pytest.mark.parametrize(
     "source",
     [
-        "from infra2_sdk.fastapi import init_service as boot\nboot(app, name='a')",
-        "from infra2_sdk.fastapi import init_service\nboot = init_service\n"
+        "from infra2_sdk.service import init_service as boot\nboot(app, name='a')",
+        "from infra2_sdk.service import init_service\nboot = init_service\n"
         "run = boot\nrun(app, name='a')",
-        "import infra2_sdk.fastapi as sdk\nsdk.init_service(app, name='a')",
-        "import infra2_sdk.fastapi as sdk\nboot = sdk.init_service\nboot(app, name='a')",
-        "import infra2_sdk.fastapi as sdk\ngetattr(sdk, 'init_service')(app, name='a')",
-        "def start():\n    from infra2_sdk.fastapi import init_service as boot\n"
+        "import infra2_sdk.service as sdk\nsdk.init_service(app, name='a')",
+        "import infra2_sdk.service as sdk\nboot = sdk.init_service\nboot(app, name='a')",
+        "import infra2_sdk.service as sdk\ngetattr(sdk, 'init_service')(app, name='a')",
+        "def start():\n    from infra2_sdk.service import init_service as boot\n"
         "    boot(app, name='a')",
     ],
     ids=[
@@ -219,10 +219,10 @@ def test_the_scanner_follows_every_name_of_init_service(source: str) -> None:
 @pytest.mark.parametrize(
     "source",
     [
-        "from infra2_sdk.fastapi import init_service as boot",
+        "from infra2_sdk.service import init_service as boot",
         "from elsewhere import other as boot\nboot(app)",
         "boot = print\nboot(app)",
-        "import infra2_sdk.fastapi as sdk\nx = sdk.init_service",
+        "import infra2_sdk.service as sdk\nx = sdk.init_service",
     ],
     ids=["alias-not-called", "other-function", "other-assignment", "not-called"],
 )
@@ -234,7 +234,7 @@ def test_the_scanner_ignores_a_name_that_does_not_call_init_service(
 
 def test_the_second_bootstrap_scan_follows_an_alias_too() -> None:
     source = (
-        "from infra2_sdk.runtime.otel import configure_telemetry as start\n"
+        "from infra2_sdk.telemetry import configure_telemetry as start\n"
         "start(settings, set_global=True)"
     )
     assert len(calls_named(source, OWN_BOOTSTRAPS)) == 1
@@ -250,7 +250,7 @@ OWN_BOOTSTRAPS = {"configure_telemetry", "configure_service_telemetry"}
 
 
 def test_the_scanner_tells_a_second_bootstrap_from_a_mention() -> None:
-    own = "from infra2_sdk.runtime import otel\notel.configure_telemetry(settings)"
+    own = "from infra2_sdk import telemetry as otel\notel.configure_telemetry(settings)"
     assert len(calls_named(own, OWN_BOOTSTRAPS)) == 1
     assert len(calls_named("configure_service_telemetry()", OWN_BOOTSTRAPS)) == 1
     assert (
@@ -275,7 +275,7 @@ def test_the_app_starts_telemetry_when_the_deploy_issued_the_endpoint(
 ) -> None:
     """With the issued identity and a valid endpoint, loading the app starts the one
     bootstrap and keeps its providers. `enable_otel=False` would leave both out."""
-    import infra2_sdk.runtime.otel as sdk_otel
+    import infra2_sdk.telemetry as sdk_otel
 
     from common.core.service_identity import ServiceIdentity
 
@@ -379,7 +379,7 @@ def _otel_extra_requirements() -> list[Requirement]:
     declared = [
         Requirement(requirement.split(";")[0].strip())
         for requirement in (importlib.metadata.requires("infra2-sdk") or [])
-        if 'extra == "otel"' in requirement
+        if 'extra == "telemetry"' in requirement
     ]
     assert declared, "the installed SDK declares no otel extra"
     return declared

@@ -478,15 +478,10 @@ def test_active_docs_imports_dotted_refs_and_test_paths_resolve() -> None:
 
 
 def test_sdk_dotted_reference_resolver_rejects_hyphen_and_missing_attr() -> None:
-    assert _resolve_dotted("infra2_sdk.secrets", sdk=True) is None
-    assert (
-        _resolve_dotted(
-            "infra2_sdk.observability.evaluate_consecutive_hysteresis", sdk=True
-        )
-        is None
-    )
-    assert "hyphenated" in (_resolve_dotted("infra2-sdk.secrets", sdk=True) or "")
-    assert _resolve_dotted("infra2_sdk.ci.coverage_regression", sdk=True) is not None
+    assert _resolve_dotted("infra2_sdk.config", sdk=True) is None
+    assert _resolve_dotted("infra2_sdk.delivery.resolve_check_cells", sdk=True) is None
+    assert "hyphenated" in (_resolve_dotted("infra2-sdk.config", sdk=True) or "")
+    assert _resolve_dotted("infra2_sdk.config.nonexistent_attr", sdk=True) is not None
 
 
 def test_domain_readme_module_map_guard_rejects_phantom_export(tmp_path: Path) -> None:
@@ -505,7 +500,7 @@ def test_domain_readme_module_map_guard_rejects_phantom_export(tmp_path: Path) -
 
 
 def test_python_import_and_dotted_repo_ref_guards_reject_invalid_symbols() -> None:
-    bad_md = "```python\nfrom infra2_sdk.observability import GhIssueApi\n```\n"
+    bad_md = "```python\nfrom infra2_sdk.delivery import GhIssueApi\n```\n"
     assert any("GhIssueApi" in e for e in _block_import_errors(bad_md, "README.md"))
     ok = "common.deploy.deployer.Deployer._assert_approle_creds_present"
     assert _resolve_dotted(ok, sdk=False) is None

@@ -171,10 +171,10 @@ def test_truealpha_deploy_s3_fails_closed(monkeypatch) -> None:
         AppDeployer, "secrets_backend", classmethod(lambda cls, env=None: mock_backend)
     )
 
-    def broken_ensure_bucket(*args, **kwargs):
+    def broken_probe_s3(*args, **kwargs):
         raise ConnectionRefusedError("S3 connection failed")
 
-    monkeypatch.setattr("infra2_sdk.runtime.s3.ensure_bucket", broken_ensure_bucket)
+    monkeypatch.setattr("infra2_sdk.storage.probe_s3", broken_probe_s3)
 
     with pytest.raises(RuntimeError, match="unreachable; failing deploy closed"):
         AppDeployer._ensure_s3_bucket(MagicMock())

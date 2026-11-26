@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from infra2_sdk.runtime.environment import EnvironmentTier, is_preview_alias
+from infra2_sdk.config import EnvironmentTier, is_preview_alias
 
 CANARY_SLOT = "canary-preview"
 _LOCAL_DEV_ALIASES = frozenset({"dev", "development", "local", "local_dev"})

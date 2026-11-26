@@ -1048,8 +1048,8 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     assert health["status"] == "healthy"
     assert health["service"] == "platform-alerting"
     assert health["reasons"] == []
-    assert health["checks"]["database"]["status"] == "present"
-    assert health["checks"]["database"]["detail"] == "delivery config valid"
+    assert health["checks"]["delivery"]["status"] == "present"
+    assert health["checks"]["delivery"]["detail"] == "delivery config valid"
 
     # 4. /health/feishu
     feishu_res = client.get("/health/feishu")
@@ -1154,9 +1154,9 @@ def test_alerting_health_and_readyz_fail_on_a_bad_delivery_config(
     assert health_res.status_code == 503
     health = health_res.json()
     assert health["status"] == "unhealthy"
-    assert health["checks"]["database"]["status"] == "absent"
+    assert health["checks"]["delivery"]["status"] == "absent"
     assert health["reasons"] == [
-        "database: Unsupported ALERT_DELIVERY_MODE: no-such-mode"
+        "delivery: Unsupported ALERT_DELIVERY_MODE: no-such-mode"
     ]
 
     ready_res = client.get("/readyz")
@@ -1174,7 +1174,7 @@ def test_alerting_health_route_is_the_sdk_route(
         for route in module.fastapi_app.router.routes
         if getattr(route, "path", None) == "/health"
     ]
-    assert route.endpoint.__module__ == "infra2_sdk.fastapi"
+    assert route.endpoint.__module__ == "infra2_sdk.service"
 
 
 def test_alerting_webhook_delivery_does_not_block_the_event_loop(
@@ -1353,7 +1353,7 @@ def test_alerting_bridge_health_timeout_is_below_the_container_healthcheck(
 ) -> None:
     """The SDK default of 10 s is above the 3 s the container healthcheck waits. A slow
     check would then make the healthcheck fail on its own timeout, with no reason (#1209)."""
-    import infra2_sdk.fastapi as sdk_fastapi
+    import infra2_sdk.service as sdk_fastapi
 
     seen: list[dict] = []
     original = sdk_fastapi.init_service
@@ -1680,7 +1680,7 @@ def _unalerted_counters(rules: list[dict], counters: set[str]) -> list[str]:
 
 
 def _active_routes() -> set[str]:
-    from infra2_sdk.runtime.otel import PROBE_PATHS
+    from infra2_sdk.telemetry import PROBE_PATHS
 
     from common.tests import finance_report_sources as fr
 
@@ -1703,7 +1703,7 @@ def test_finance_report_route_tokens_match_active_openapi_or_probe_routes() -> N
 
 def test_finance_report_route_exclusions_leave_out_every_sdk_probe_path() -> None:
     """#1816: /livez and /readyz were missing from the exclusions."""
-    from infra2_sdk.runtime.otel import PROBE_PATHS
+    from infra2_sdk.telemetry import PROBE_PATHS
 
     rules = _finance_report_alert_rules()
     exclusions = [

@@ -16,9 +16,8 @@ from typing import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres
-from infra2_sdk.runtime.health import DependencyStatus
-from infra2_sdk.runtime.s3 import S3Settings, probe_s3
+from infra2_sdk.service import DependencyStatus
+from infra2_sdk.storage import PostgresSettings, S3Settings, probe_postgres, probe_s3
 
 from common.observability.probe_environment import resolve_probe_environment
 
@@ -394,19 +393,24 @@ def _check_dep(prober, settings) -> str:
 def _run_postgres(
     spec: ProbeSpec,
     *,
-    prober: Callable[[PostgresSettings], object] | None,
+    prober: Callable[..., object] | None,
 ) -> str:
     """Real ``SELECT 1`` reachability, not just a TCP handshake."""
     password = os.environ.get("PROBE_POSTGRES_PASSWORD", "").strip()
     if not password:
         raise RuntimeError("PROBE_POSTGRES_PASSWORD is not set")
     user = os.environ.get("PROBE_POSTGRES_USER", "probe_monitor").strip()
+    settings = PostgresSettings(
+        url=f"postgresql://{user}:{password}@{spec.target}",
+        connect_timeout_seconds=max(1, min(60, int(spec.timeout_seconds))),
+    )
+    if prober is not None:
+        return _check_dep(prober, settings)
     return _check_dep(
-        prober or probe_postgres,
-        PostgresSettings(
-            dsn=f"postgresql://{user}:{password}@{spec.target}",
-            connect_timeout_seconds=max(1, min(60, int(spec.timeout_seconds))),
+        lambda cfg: probe_postgres(
+            cfg.url, connect_timeout=cfg.connect_timeout_seconds
         ),
+        settings,
     )
 
 
@@ -430,7 +434,7 @@ def _run_s3(
             endpoint_url=spec.target,
             access_key_id=access_key,
             secret_access_key=secret_key,
-            addressing_style="path",
+            use_path_style=True,
             connect_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
             read_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
         ),

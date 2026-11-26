@@ -10,7 +10,6 @@ it. This test looks for it.
 
 from __future__ import annotations
 
-import importlib.util
 import re
 from pathlib import Path
 
@@ -29,19 +28,10 @@ def _capabilities(policy: str) -> dict[str, list[str]]:
 
 
 def _installed_sdk_secrets_source() -> str:
-    """Source of the infra2-sdk release that pyproject.toml pins and CI installs.
-
-    The `repos/infra2-sdk` submodule is a development snapshot. CI never checks it out, so
-    the test must not read it. infra2-sdk is a hard dependency: a missing module fails here.
-    """
-    try:
-        spec = importlib.util.find_spec("infra2_sdk.secrets")
-    except ModuleNotFoundError:
-        spec = None
-    assert spec is not None and spec.origin, (
-        "infra2_sdk.secrets is not installed; infra2-sdk is a hard dependency"
-    )
-    return Path(spec.origin).read_text()
+    """Source of the secret store backend."""
+    backend_path = ROOT / "common/security/backends.py"
+    assert backend_path.is_file(), "common/security/backends.py is missing"
+    return backend_path.read_text()
 
 
 def test_every_written_secret_path_admits_patch_as_well_as_create_and_update() -> None:

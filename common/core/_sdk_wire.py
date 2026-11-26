@@ -6,7 +6,9 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -124,17 +126,107 @@ def _yaml() -> Any:
     return yaml
 
 
+_LEGACY_TRUEALPHA_SOURCES = frozenset(
+    {
+        "apps/llm-service",
+        "apps/data-engine",
+        "infra2/truealpha/app",
+        "infra2/truealpha/data_engine",
+    }
+)
+
+
+def strip_legacy_manifest_fields(raw: Any) -> Any:
+    """Strip retired v4.9 manifest fields before strict v4.11 ContractModel validation."""
+    # TODO(wave3): remove once apps release v4.11.1 manifests (no mirror_to_1password, sensitive DATABASE_URL).
+    if not isinstance(raw, Mapping):
+        return raw
+    if "contract_version" not in raw:
+        raise ValueError("environment manifest requires 'contract_version'")
+    parse_contract_version(raw, 2, description="environment manifest version")
+    fields = raw.get("fields")
+    if not isinstance(fields, list):
+        return raw
+    is_legacy_truealpha = str(raw.get("source") or "") in _LEGACY_TRUEALPHA_SOURCES
+    cleaned_fields = []
+    for fld in fields:
+        if isinstance(fld, Mapping):
+            item = {k: v for k, v in fld.items() if k != "mirror_to_1password"}
+            if (
+                is_legacy_truealpha
+                and item.get("env") == "DATABASE_URL"
+                and item.get("sensitive") is False
+            ):
+                item["sensitive"] = True
+            cleaned_fields.append(item)
+        else:
+            cleaned_fields.append(fld)
+    return {**raw, "fields": cleaned_fields}
+
+
+@dataclass(frozen=True)
+class CheckVerdict:
+    name: str
+    ok: bool
+    detail: str = ""
+    severity: str = ""
+    failure_domain: str = ""
+    seconds: float = field(default=0.0, kw_only=True)
+    skipped: bool = field(default=False, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if type(self.skipped) is not bool:
+            raise ValueError("skipped must be a bool")
+        if self.skipped and self.ok:
+            raise ValueError("a skipped check cannot have ok=True")
+
+    @property
+    def status(self) -> str:
+        return "skipped" if self.skipped else ("pass" if self.ok else "fail")
+
+
+def record_verdicts(
+    path: str | Path,
+    *,
+    source: str,
+    checks: Iterable[CheckVerdict],
+    complete: bool = True,
+) -> None:
+    line = json.dumps(
+        {"source": source, "checks": [asdict(c) for c in checks], "complete": complete},
+        sort_keys=True,
+    )
+    target = Path(path)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def field_store_key(field: Any) -> str:
+    """Return the Vault key name for an ``EnvironmentField``."""
+    return field.store_key or field.env
+
+
+def field_rendered(field: Any) -> bool:
+    """Return True when an ``EnvironmentField`` is rendered into the Vault template."""
+    return field.store_backed or bool(field.provided_by) or bool(field.composed_from)
+
+
 __all__ = [
+    "CheckVerdict",
     "_is_loopback_host",
     "_yaml",
     "canonical_json_bytes",
     "canonical_sha256",
+    "field_rendered",
+    "field_store_key",
     "parse_bool",
     "parse_contract_version",
     "parse_iso_utc",
     "parse_string",
+    "record_verdicts",
     "redact_text",
     "reject_unknown",
     "require_contract_version",
+    "strip_legacy_manifest_fields",
     "validate_http_url",
 ]

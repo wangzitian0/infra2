@@ -12,13 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from common.core._sdk_wire import field_store_key, strip_legacy_manifest_fields
 from common.core.constants import REPO_ROOT
 
 # The SERVICES table is plain data and is read by contexts without the SDK (the ops-checks
 # vault audit installs neither the SDK nor a manifest loader); only manifest loading needs
 # infra2_sdk, so it is imported where it is used.
 if TYPE_CHECKING:
-    from infra2_sdk.runtime.config_schema import EnvironmentManifest
+    from infra2_sdk.config import EnvironmentManifest
 
 ROOT = REPO_ROOT
 ENVIRONMENTS = ("production", "staging")
@@ -48,6 +49,8 @@ class Service:
     # The IaC runner's policy is its *writer* identity (create/update on every project),
     # a bootstrap concern that no manifest describes; its template is still generated.
     policy: bool = True
+    # Store keys mirrored back to 1Password when generated at runtime (owned by infra2).
+    mirror_to_1password_keys: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:
@@ -66,6 +69,7 @@ SERVICES: tuple[Service, ...] = (
         ("bootstrap/06.iac_runner/env.manifest.json",),
         policy=False,
         environments=("production",),
+        mirror_to_1password_keys=("WEBHOOK_SECRET",),
     ),
     Service(
         "platform/01.postgres",
@@ -84,6 +88,7 @@ SERVICES: tuple[Service, ...] = (
         "platform",
         "minio",
         ("platform/03.s3/env.manifest.json",),
+        mirror_to_1password_keys=("root_password",),
     ),
     Service(
         "platform/10.authentik",
@@ -93,6 +98,7 @@ SERVICES: tuple[Service, ...] = (
         # platform/10.authentik/shared_tasks.py reads root_token for the admin API; it is
         # an operator credential and deliberately never rendered into the container.
         store_only_keys=("root_token",),
+        mirror_to_1password_keys=("bootstrap_password",),
     ),
     Service(
         "platform/12.alerting",
@@ -164,6 +170,7 @@ SERVICES: tuple[Service, ...] = (
         ("truealpha/truealpha/10.app/env.manifest.json",),
         # same bucket-provisioning read as finance_report/app
         store_only_keys=("S3_BUCKET",),
+        mirror_to_1password_keys=("MCP_BEARER_TOKEN",),
     ),
     Service(
         "truealpha/truealpha/preview",
@@ -208,11 +215,12 @@ def manifest_file(path: str, *, root: Path = ROOT) -> Path:
 
 def load_manifest(path: str, *, root: Path = ROOT) -> EnvironmentManifest:
     """Read one manifest from its stack directory under ``root``."""
-    from infra2_sdk.runtime.config_schema import EnvironmentManifest
+    from infra2_sdk.config import EnvironmentManifest
 
-    return EnvironmentManifest.from_dict(
+    raw = strip_legacy_manifest_fields(
         json.loads(manifest_file(path, root=root).read_text(encoding="utf-8"))
     )
+    return EnvironmentManifest.from_dict(raw)
 
 
 def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManifest:
@@ -253,5 +261,6 @@ def store_keys(service: Service, *, root: Path = ROOT) -> frozenset[str]:
     """
     manifest = merged_manifest(service, root=root)
     return frozenset(
-        {field.key for field in manifest.store_backed} | set(service.store_only_keys)
+        {field_store_key(field) for field in manifest.store_backed()}
+        | set(service.store_only_keys)
     )

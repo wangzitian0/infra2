@@ -38,10 +38,10 @@
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
   - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）
-  - [x] Stage 2: Pre-flight Gate（`infra2_sdk.runtime.schema_check` in the app image since #1824; before that `tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；已接入 `deploy_v2`——`common/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用 `common/deploy/schema_gate.py`，SSH 到 VPS 用即将部署的应用镜像跑检查，退出码 1/3 及任何传输失败均阻断，详见 TODOWRITE 第 20 条）
+  - [x] Stage 2: Pre-flight Gate（`infra2_sdk.storage` `check-schema` in the app image since #1824; before that `tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；已接入 `deploy_v2`——`common/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用 `common/deploy/schema_gate.py`，SSH 到 VPS 用即将部署的应用镜像跑检查，退出码 1/3 及任何传输失败均阻断，详见 TODOWRITE 第 20 条）
   - [ ] Stage 3: Deploy + Synthetic Probes（部署后打真实业务探针，设 10 分钟观察烘焙期 T_Bake）
 - [ ] **T3.2 安全回滚守则与人工刹车（#722）**：
-  - [x] 明确 `ROLLBACK_CLASS`：仅 Class A（无破坏性 DDL）允许自动回滚；出现 DROP/RENAME/收紧约束（Class C）**严禁自动回滚**，必须人工挂起并 forward-fix。`infra2_sdk.runtime.schema_check.classify_rollback` (moved from `tools/pre_deploy_schema_check.py` in #1824) 已实现并随 Stage 2 门禁的每次比对一起计算、打印（`ROLLBACK_CLASS: A|C`）——门禁本身只有两档可达（casing 漂移必然同时触发 missing_in_code，不存在可达的中间档）。**这只是分类，不是执行器**. Correction (#1824): #722 later added both executors. `common/deploy/promote.py:_handle_post_deploy_failure` runs the automatic rollback with a circuit breaker and refuses it for Class C. `tools/deploy_v2.py --force-promote` (`common/deploy/v2.py`) bypasses the schema and smoke gates and writes `[AUDIT]` lines to stderr. No workflow exposes `force_promote`.
+  - [x] 明确 `ROLLBACK_CLASS`：仅 Class A（无破坏性 DDL）允许自动回滚；出现 DROP/RENAME/收紧约束（Class C）**严禁自动回滚**，必须人工挂起并 forward-fix。`infra2_sdk.storage.classify_rollback` (moved from `tools/pre_deploy_schema_check.py` in #1824) 已实现并随 Stage 2 门禁的每次比对一起计算、打印（`ROLLBACK_CLASS: A|C`）——门禁本身只有两档可达（casing 漂移必然同时触发 missing_in_code，不存在可达的中间档）。**这只是分类，不是执行器**. Correction (#1824): #722 later added both executors. `common/deploy/promote.py:_handle_post_deploy_failure` runs the automatic rollback with a circuit breaker and refuses it for Class C. `tools/deploy_v2.py --force-promote` (`common/deploy/v2.py`) bypasses the schema and smoke gates and writes `[AUDIT]` lines to stderr. No workflow exposes `force_promote`.
   - [ ] 自动回滚上限熔断：最多自动回滚 1 次，严禁运行 `migrate down`。
   - [ ] 支持 `--force-promote` 强行放行参数（必须携带 `--reason` 与 `--operator` 并留痕）。
 - [ ] **T3.3 告警信噪比治理与 P0 Runbook（#723）**：
@@ -54,7 +54,7 @@
 2. `tools/disk_guardian.sh` 与 systemd timer 磁盘自愈组件。
 3. `tools/host_backup.sh` 异地加密备份脚本（Google Drive / rclone crypt）+ `tools/run_restore_rehearsal.py` 沙箱恢复演练（VPS crontab 周期执行）。
 4. 带外死人开关配置与 Cloudflare Worker 探针集成。
-5. `infra2_sdk.runtime.schema_check` 双向比对与回滚安全门禁（已加固；#1824 removed the infra2 copy `tools/pre_deploy_schema_check.py`）。
+5. `infra2_sdk.storage` `check-schema` 双向比对与回滚安全门禁（已加固；#1824 removed the infra2 copy `tools/pre_deploy_schema_check.py`）。
 6. P0 告警 Runbook 文档集 (`docs/runbooks/`).
 
 ## PR Links

@@ -119,7 +119,7 @@ def test_the_registry_table_is_readable_without_the_sdk() -> None:
     root = Path(__file__).resolve().parents[2]
     code = (
         "import sys\n"
-        "for name in ('infra2_sdk', 'infra2_sdk.runtime', 'infra2_sdk.runtime.config_schema'):\n"
+        "for name in ('infra2_sdk', 'infra2_sdk.config'):\n"
         "    sys.modules[name] = None\n"
         "from common.security.registry import SERVICES\n"
         "from common.security.vault_audit import load_inventory\n"

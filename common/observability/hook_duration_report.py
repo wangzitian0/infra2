@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import sys
@@ -37,15 +36,13 @@ def hook_budget_from_manifest(manifest: Any, cell_id: str) -> int | None:
     Equals the smaller of ``CELL_POLICIES[cell_id].budget_seconds`` and the sum of
     active check ``timeout_seconds`` in that cell, or ``None`` when no active check runs.
     """
-    from infra2_sdk.manifests import CELL_POLICIES, resolve_check_cells
+    from infra2_sdk.delivery import CELL_POLICIES, resolve_check_cells
 
     policy = CELL_POLICIES.get(cell_id)
     if policy is None:
         return None
     active = [
-        check
-        for check in manifest.checks
-        if check.off is None and cell_id in resolve_check_cells(check)
+        check for check in manifest.checks if cell_id in resolve_check_cells(check)
     ]
     if not active:
         return None
@@ -77,14 +74,12 @@ def load_hook_budgets(
     manifest_fetcher: Callable[[str], bytes | str] | None = None,
 ) -> dict[str, int]:
     """Load local and pinned App hook manifests and derive hook budgets without overrides."""
-    from infra2_sdk.manifests import RuntimeHooksManifest
+    from common.deploy.stage_hooks import load_hooks_manifest
 
     manifests: dict[str, Any] = {}
     todo_manifest = repo_root / "platform/30.todo/runtime-hooks.manifest.json"
     if todo_manifest.is_file():
-        manifests["platform/todo"] = RuntimeHooksManifest.from_dict(
-            json.loads(todo_manifest.read_text(encoding="utf-8"))
-        )
+        manifests["platform/todo"] = load_hooks_manifest(todo_manifest)
 
     repos_yaml = repo_root / "harness/repos.yaml"
     tags_by_slug: dict[str, str] = {}
@@ -117,7 +112,7 @@ def load_hook_budgets(
 
 def cell_budgets() -> dict[tuple[str, str], int]:
     """Budget in seconds per (stage id, phase), from the policy of the pinned SDK."""
-    from infra2_sdk.manifests import CELL_POLICIES
+    from infra2_sdk.delivery import CELL_POLICIES
 
     budgets: dict[tuple[str, str], int] = {}
     for policy in CELL_POLICIES.values():

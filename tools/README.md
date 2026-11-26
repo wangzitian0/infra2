@@ -52,7 +52,7 @@ automatically from the service's `ProbeFacet`/`SignalFacet` declarations);
 `reconcile-iac-inputs.yml`. It detects changed `iac_pinned` platform services and App `release_tag`
 or `10.app/**` updates in `harness/repos.yaml`, emits per-service `deploy_v2` commands for Apps and
 their declared `companions` (`truealpha/data_engine`) while excluding companions from the platform
-batch, and executes App runtime hooks (`infra2_sdk.manifests.run_cell`) and release evidence
+batch, and executes App runtime hooks (`common.deploy.stage_hooks.run_cell`) and release evidence
 checks (`common/deploy/app_contract.py`). `common/deploy/release_markers.py` (`python -m common.deploy.release_markers`)
 prints the production marker next to the newest release and exits non-zero once the marker is too
 old to pin the data engine from the release being promoted (#650) — the ops-checks
@@ -66,7 +66,7 @@ unread. A quiet hook is not a finding and neither is one bad delivery among good
 It needs a token with `admin:repo_hook` read scope; the Actions token cannot carry that,
 so its ops-checks step stays inert until `INFRA2_HOOKS_READ_TOKEN` is configured.
 
-`ci_gate_audit.py` imports the released `infra2_sdk.ci` schema directly and validates
+`ci_gate_audit.py` reads the `common.core.ci_contract` schema directly and validates
 the infra-owned gate inventory against live workflow jobs. No local compatibility schema
 or application source checkout participates in the audit.
 
@@ -310,7 +310,7 @@ step recorded completely, closes issues of checks nobody records any more), titl
 close when green in a scheduled run (or a plain dispatch on main). Drills and
 branch dispatches never close; dry runs and SSH-override runs write nothing. A
 failed listing never falls through to create; a failed write exits 1. Logic in
-`infra2_sdk.observability` and `common/observability/watchdog_issue_trail_cli.py`.
+`common.observability.issue_trail` and `common/observability/watchdog_issue_trail_cli.py`.
 
 ```bash
 GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/feature \

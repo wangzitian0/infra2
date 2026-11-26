@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import httpx
-from infra2_sdk.deploy import poll_until_healthy
+from common.deploy.evidence import poll_until_healthy
 from common.deploy.routing import PreviewStackCoordinates, derive_preview_coordinates
 
 from common.core.environ import infra_domain

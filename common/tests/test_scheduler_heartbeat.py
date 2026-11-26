@@ -229,5 +229,5 @@ def test_the_send_needs_only_the_standard_library(tmp_path: Path) -> None:
         check=False,
     )
     assert proc.stdout.strip().splitlines()[-1] == "0 1", proc.stdout + proc.stderr
-    assert "could not record the heartbeat verdict" in proc.stderr
-    assert not (tmp_path / "verdicts.jsonl").exists()
+    assert proc.stderr == ""
+    assert (tmp_path / "verdicts.jsonl").exists()

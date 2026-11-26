@@ -11,7 +11,7 @@ over in-memory stores and a small manifest with one field of each source class.
 
 from __future__ import annotations
 
-from infra2_sdk.runtime.config_schema import EnvironmentManifest
+from infra2_sdk.config import EnvironmentManifest
 from common.security.backends import (
     SecretsError,
     SecretsResolver,
@@ -52,7 +52,6 @@ MANIFEST = EnvironmentManifest.from_dict(
                 "env": "INFRA_PROBE_HEARTBEAT_TOKEN",
                 "source": "runtime",
                 "sensitive": True,
-                "mirror_to_1password": True,
             },
         ],
     }
@@ -89,6 +88,7 @@ def _apply(*, store: MemoryBackend, human: MemoryBackend, restarts: list):
         env="staging",
         store=store,
         human=human,
+        mirror_keys=("INFRA_PROBE_HEARTBEAT_TOKEN",),
     )
     return secrets_supply.apply(
         SERVICE,

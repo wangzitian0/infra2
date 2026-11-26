@@ -170,7 +170,7 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
     url = fields["DATABASE_URL"]
     assert url.source == "runtime" and url.sensitive and not url.empty_ok
     assert not url.provided_by, "a generated value, not the Postgres superuser password"
-    assert url.store_backed and url.key == "TODO_POSTGRES_PASSWORD"
+    assert url.store_backed and url.store_key == "TODO_POSTGRES_PASSWORD"
     assert url.composed_keys == ("TODO_POSTGRES_PASSWORD",)
     template = _todo_template()
     assert "TODO_POSTGRES_PASSWORD=" not in template
@@ -193,13 +193,12 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
         assert fields[env].empty_ok and fields[env].sensitive
         assert not fields[env].store_key, "the Vault key is the canonical env name"
 
-    from infra2_sdk.runtime.environment import check_shared_env_conformance
+    from infra2_sdk.config import check_shared_env
 
     # Every todo field name conforms to shared_env.yaml: no exemption.
-    assert check_shared_env_conformance(fields) == []
-    assert (
-        "CANARY_S3_BUCKET is deprecated: use S3_BUCKET"
-        in check_shared_env_conformance([*fields, "CANARY_S3_BUCKET"])
+    assert check_shared_env(fields) == []
+    assert any(
+        "DATABASE_URL" in issue for issue in check_shared_env([*fields, "database_url"])
     )
 
 
@@ -641,7 +640,7 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:
         load_hooks_manifest,
         schema3_empty_cells,
     )
-    from infra2_sdk.manifests import resolve_check_cells
+    from infra2_sdk.delivery import resolve_check_cells
 
     manifest = load_hooks_manifest(SERVICE_DIR / "runtime-hooks.manifest.json")
     assert manifest.schema_version == 3

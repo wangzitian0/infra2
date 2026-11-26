@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from infra2_sdk.manifests import RuntimeHooksManifest
+from infra2_sdk.delivery import RuntimeHooksManifest
 
 from tools import hook_duration_report as report
 

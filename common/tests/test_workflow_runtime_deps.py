@@ -49,7 +49,7 @@ INVOKE_ENTRY = "tasks"
 # does, so a `try/except ImportError` fallback still takes its fallback -- which is
 # the behaviour being checked, not a case to special-case.
 _PROBE = """
-import json, os, sys
+import json, os, sys, sysconfig
 
 # The jobs run `python -m tools.X` from the repo root, where the root is on
 # sys.path. This probe can itself run under PYTHONSAFEPATH=1 (infra-ci sets it),
@@ -58,7 +58,11 @@ import json, os, sys
 # the probe and not about the job it is meant to be judging.
 sys.path.insert(0, os.getcwd())
 
-ALLOWED = set(json.loads(sys.argv[1])) | set(sys.stdlib_module_names)
+ALLOWED = (
+    set(json.loads(sys.argv[1]))
+    | set(sys.stdlib_module_names)
+    | {sysconfig._get_sysconfigdata_name()}
+)
 
 
 class Blocker:

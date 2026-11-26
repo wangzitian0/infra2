@@ -48,7 +48,7 @@ Use this page for the five failure classes named by [#723](https://github.com/wa
 
 ## Schema divergence
 
-**Symptom:** the pre-deploy schema gate (`common/deploy/schema_gate.py`, which runs `infra2_sdk.runtime.schema_check` in the app image) blocks with missing/extra enum labels, `NOT EVALUATED`, or `ROLLBACK_CLASS: C`. An image whose SDK has no `runtime.schema_check` (finance_report before v0.2.92) is always `NOT EVALUATED`.
+**Symptom:** the pre-deploy schema gate (`common/deploy/schema_gate.py`, which runs `infra2_sdk.storage` `check-schema` in the app image) blocks with missing/extra enum labels, `NOT EVALUATED`, or `ROLLBACK_CLASS: C`. An image whose SDK has no `infra2_sdk.storage` `check-schema` (finance_report before v0.2.92) is always `NOT EVALUATED`.
 
 **30 seconds:** Open the exact deploy run's Schema Gate output and read service, environment, `missing_in_db`, `missing_in_code`, and `ROLLBACK_CLASS`. `NOT EVALUATED` is a blocked check, not a passing schema.
 
@@ -58,7 +58,7 @@ Use this page for the five failure classes named by [#723](https://github.com/wa
 
 **Brake / recovery:** Stop promotion. There is no reverse-migration command. Revert the unpromoted code commit with `git revert <commit>` if needed, then submit and review a new release. A production database already changed requires a forward fix and owner decision.
 
-**Rollback target older than finance_report v0.2.92:** these images have no `infra2_sdk.runtime.schema_check`. The gate always stops them with `NOT EVALUATED` (exit 3). This is intended; there is no fallback to an infra2 copy of the check. Recover in this order:
+**Rollback target older than finance_report v0.2.92:** these images have no `infra2_sdk.storage` `check-schema`. The gate always stops them with `NOT EVALUATED` (exit 3). This is intended; there is no fallback to an infra2 copy of the check. Recover in this order:
 
 1. Roll forward to v0.2.92 or v0.2.93. Run `deploy.yml` with `service=finance_report/app`, `type=prod`, `version_ref=<tag>`, `bootstrap=true`, `staging_validated=true` and `code_reviewed=true`. The owner approves the run in the `production` environment.
 2. Only when no v0.2.92 or newer release is safe: run deploy_v2 locally, with the owner present:

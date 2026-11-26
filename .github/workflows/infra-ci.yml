@@ -83,7 +83,7 @@ jobs:
 
       - name: Install the SDK that uv.lock pins
         run: |
-          pip install pyyaml
+          pip install "pydantic>=2.7,<3" pyyaml
           pip install --no-deps "$(python tools/sdk_requirement.py)"
 
       - name: Check whether every changed file is Markdown
@@ -738,7 +738,7 @@ jobs:
 
       - name: Install the SDK that uv.lock pins
         run: |
-          pip install pyyaml httpx
+          pip install "pydantic>=2.7,<3" pyyaml httpx
           pip install --no-deps "$(python tools/sdk_requirement.py)"
 
       # --report-only: the inventory gives this job blocks_merge: false; a refusal of the
@@ -774,7 +774,7 @@ jobs:
 
       - name: Install the SDK that uv.lock pins
         run: |
-          pip install pyyaml
+          pip install "pydantic>=2.7,<3" pyyaml
           pip install --no-deps "$(python tools/sdk_requirement.py)"
 
       - name: Write the post record of this commit
@@ -814,7 +814,7 @@ jobs:
 
       - name: Install the SDK that uv.lock pins
         run: |
-          pip install pyyaml rich invoke
+          pip install "pydantic>=2.7,<3" pyyaml rich invoke
           pip install --no-deps "$(python tools/sdk_requirement.py)"
 
       - name: Replay last 20 merged PRs against origin/main
@@ -876,7 +876,7 @@ jobs:
           import json, os, subprocess
           from pathlib import Path
           from common.gate.self_governance import is_self_governing
-          from infra2_sdk.observability import CheckVerdict
+          from common.observability.issue_trail import CheckVerdict
           from common.deploy.stage_record import utc_now, write_stage_record
 
           diff = subprocess.check_output(

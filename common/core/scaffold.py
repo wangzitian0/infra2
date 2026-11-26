@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import infra2_sdk
-from infra2_sdk.runtime.config_schema import (
+from infra2_sdk.config import (
     EnvironmentField,
     EnvironmentManifest,
 )
@@ -339,25 +339,25 @@ def _generate_fastapi_app(
     if db == "postgres":
         imports = (
             "import os\n\nfrom fastapi import FastAPI\n"
-            "from infra2_sdk.fastapi import init_service\n"
-            "from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres"
+            "from infra2_sdk.service import CallableCheck, init_service\n"
+            "from infra2_sdk.storage import PostgresSettings, probe_postgres"
         )
         db_blk = """
 database_url = os.environ.get("DATABASE_URL", "").strip()
 if not database_url:
     raise RuntimeError("DATABASE_URL is required")
 
-db_settings = PostgresSettings(dsn=database_url)
+db_settings = PostgresSettings(url=database_url)
 
 
 def check_db() -> tuple[bool, str]:
-    res = probe_postgres(db_settings)
+    res = probe_postgres(db_settings.url)
     return (res.status.value == "present", res.detail or "ok")
 """
-        db_kw = ", db_checker=check_db"
+        db_kw = ', checks=(CallableCheck("db", check_db),)'
     else:
         imports = (
-            "from fastapi import FastAPI\nfrom infra2_sdk.fastapi import init_service"
+            "from fastapi import FastAPI\nfrom infra2_sdk.service import init_service"
         )
         db_blk = db_kw = ""
     return f'''"""Application entry point for {svc}."""
@@ -408,7 +408,9 @@ def _sdk_release_version() -> str:
 
 
 def _generate_requirements_txt(template: str = "fastapi", db: str = "postgres") -> str:
-    extras = ",".join(["fastapi", "otel", *(["postgres"] if db == "postgres" else [])])
+    extras = ",".join(
+        ["fastapi", "telemetry", *(["postgres"] if db == "postgres" else [])]
+    )
     return f"uvicorn[standard]>=0.28.0,<1.0.0\ninfra2-sdk[{extras}]>={_sdk_release_version()}\n"
 
 

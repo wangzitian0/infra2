@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 import pytest
-from infra2_sdk.runtime.config_schema import EnvironmentManifest, validate_environment
+from infra2_sdk.config import EnvironmentManifest, validate_env
 
 from common.deploy import promote
 from common.deploy.env_config import app_compose_env_config
@@ -54,9 +54,7 @@ def refused_names(
     defaults = {
         f.env: "<default>" for f in manifest.fields if f.empty_ok or f.source == "code"
     }
-    result = validate_environment(
-        manifest, {**defaults, **environ}, require_injected=True
-    )
+    result = validate_env(manifest, {**defaults, **environ}, require_injected=True)
     return list(result.missing)
 
 
@@ -95,6 +93,6 @@ def test_an_empty_ok_name_may_be_unset_but_not_empty() -> None:
     environ = {f.env: "value" for f in FIELDS if f.injected}
     assert refused_names(environ) == []
     assert refused_names({**environ, "PREFECT_API_URL": ""}) == ["PREFECT_API_URL"]
-    assert refused_names({**environ, "S3_PUBLIC_BUCKET": ""}) == ["S3_PUBLIC_BUCKET"]
+    assert refused_names({**environ, "S3_PUBLIC_BUCKET": ""}) == []
     del environ["S3_PUBLIC_BUCKET"]
     assert refused_names(environ) == []

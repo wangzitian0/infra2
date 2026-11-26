@@ -12,10 +12,11 @@ import pytest
 
 from common.deploy import app_contract
 from common.deploy.release_markers import newest_release_tag, production_marker
-from infra2_sdk.deploy import DeployRequest
-from infra2_sdk.manifests import HookRunResult, RuntimeHooksManifest
+from common.deploy.evidence import DeployRequest
+from common.deploy.stage_hooks import HookRunResult
 from common.deploy.git_refs import ResolvedRef
-from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+from infra2_sdk.config import EnvironmentField, EnvironmentManifest
+from infra2_sdk.delivery import RuntimeHooksManifest
 
 TA_REPO = "wangzitian0/truealpha"
 FR_REPO = "wangzitian0/finance_report"
@@ -68,7 +69,7 @@ def _manifest(*fields: EnvironmentField) -> bytes:
 
 
 DATABASE = _field("DATABASE_URL", "human")
-BEARER = _field("MCP_BEARER_TOKEN", "runtime", mirror_to_1password=True, sensitive=True)
+BEARER = _field("MCP_BEARER_TOKEN", "runtime", sensitive=True)
 DECISION_FLAG = _field("ENABLE_REALTIME_QUOTES", "decision")
 
 
@@ -679,3 +680,87 @@ def test_render_release_template_renders_canonical_release_field() -> None:
     )
     assert "LLM_API_KEY=" in post_tpl
     assert "AI_API_KEY=" not in post_tpl
+
+
+def test_parse_manifest_strips_legacy_mirror_to_1password_and_registry_owns_mirror_keys() -> (
+    None
+):
+    """Wave 1B -> Wave 3 bridge: upstream v4.9 manifests with mirror_to_1password parse cleanly
+    while infra2 Service.mirror_to_1password_keys owns which runtime keys mirror to 1Password."""
+    from common.security.backends import SecretsResolver, WriteResult
+    from common.security.registry import SERVICES
+
+    legacy_body = json.dumps(
+        {
+            "contract_version": 2,
+            "source": "truealpha/app",
+            "fields": [
+                {
+                    "field": "mcp_bearer_token",
+                    "env": "MCP_BEARER_TOKEN",
+                    "source": "runtime",
+                    "sensitive": True,
+                    "mirror_to_1password": True,
+                },
+                {
+                    "field": "other_runtime",
+                    "env": "OTHER_RUNTIME_SECRET",
+                    "source": "runtime",
+                    "sensitive": True,
+                    "mirror_to_1password": False,
+                },
+            ],
+        }
+    )
+    manifest = app_contract.parse_manifest(legacy_body, label="legacy-upstream")
+    assert [f.env for f in manifest.fields] == [
+        "MCP_BEARER_TOKEN",
+        "OTHER_RUNTIME_SECRET",
+    ]
+    mirrored = {
+        s.id: s.mirror_to_1password_keys for s in SERVICES if s.mirror_to_1password_keys
+    }
+    assert mirrored == {
+        "bootstrap/iac_runner": ("WEBHOOK_SECRET",),
+        "platform/minio": ("root_password",),
+        "platform/authentik": ("bootstrap_password",),
+        "truealpha/app": ("MCP_BEARER_TOKEN",),
+    }
+
+    class _Mem:
+        def __init__(self, data=None):
+            self.data = dict(data or {})
+            self.written = {}
+
+        def read(self, _path):
+            return dict(self.data)
+
+        def write(self, _path, vals):
+            self.written.update(vals)
+            self.data.update(vals)
+            return WriteResult(changed=tuple(vals))
+
+    human = _Mem()
+    resolver = SecretsResolver(
+        manifest,
+        project="truealpha",
+        service="app",
+        env="staging",
+        store=_Mem({"MCP_BEARER_TOKEN": "tok-1", "OTHER_RUNTIME_SECRET": "tok-2"}),
+        human=human,
+        mirror_keys=("MCP_BEARER_TOKEN",),
+    )
+    rep = resolver.mirror()
+    assert rep.changed == ("MCP_BEARER_TOKEN",)
+    assert human.written == {"MCP_BEARER_TOKEN": "tok-1"}
+
+    with pytest.raises(ValueError, match="contract_version"):
+        app_contract.parse_manifest(
+            json.dumps(
+                {
+                    "source": "app",
+                    "fields": [{"field": "x", "env": "X", "source": "runtime"}],
+                }
+            ),
+            label="missing-version",
+        )

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from common.core.ci_contract import validate_manifest_offline
-from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+from infra2_sdk.config import EnvironmentField, EnvironmentManifest
 
 from common.security import secrets_render
 
@@ -78,9 +78,9 @@ def test_merged_manifest_rejects_conflicting_declarations(
     a = tmp_path / "a.json"
     b = tmp_path / "b.json"
     field_a = EnvironmentField(
-        "k", "KEY", source="runtime", required=True, has_default=False
+        field="k", env="KEY", source="runtime", required=True, has_default=False
     )
-    field_b = EnvironmentField("k", "KEY", source="human", empty_ok=True)
+    field_b = EnvironmentField(field="k", env="KEY", source="human", empty_ok=True)
     a.write_text(
         json.dumps(EnvironmentManifest(source="a", fields=(field_a,)).to_dict()),
         encoding="utf-8",
@@ -105,7 +105,11 @@ def test_check_reports_a_stale_file(
         source="x",
         fields=(
             EnvironmentField(
-                "p", "PASSWORD", source="runtime", required=True, has_default=False
+                field="p",
+                env="PASSWORD",
+                source="runtime",
+                required=True,
+                has_default=False,
             ),
         ),
     )
@@ -125,7 +129,11 @@ def _one_key_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, compose: s
         source="x",
         fields=(
             EnvironmentField(
-                "p", "PASSWORD", source="runtime", required=True, has_default=False
+                field="p",
+                env="PASSWORD",
+                source="runtime",
+                required=True,
+                has_default=False,
             ),
         ),
     )
@@ -204,7 +212,7 @@ def test_composed_url_templates_wrap_secrets_with_urlquery_for_reserved_chars(
     """v3.2.14 root cause: a 44-char base64 password containing `/`, `+`, `=` breaks URL parsing unless urlquery-escaped."""
     import urllib.parse
 
-    from infra2_sdk.runtime.redis import RedisSettings
+    from infra2_sdk.storage import RedisSettings
 
     (tmp_path / "svc").mkdir()
     (tmp_path / "svc/compose.yaml").write_text(_X_INFRA2, encoding="utf-8")
@@ -212,16 +220,16 @@ def test_composed_url_templates_wrap_secrets_with_urlquery_for_reserved_chars(
         source="x",
         fields=(
             EnvironmentField(
-                "redis_url",
-                "REDIS_URL",
+                field="redis_url",
+                env="REDIS_URL",
                 source="runtime",
                 provided_by="platform/redis:password",
                 composed_from="redis://:{password}@platform-redis{env:ENV_SUFFIX}:6379/0",
                 sensitive=True,
             ),
             EnvironmentField(
-                "api_key",
-                "API_KEY",
+                field="api_key",
+                env="API_KEY",
                 source="human",
                 sensitive=True,
                 empty_ok=True,
@@ -242,7 +250,8 @@ def test_composed_url_templates_wrap_secrets_with_urlquery_for_reserved_chars(
     raw_pw = "aB+cD/eF1234567890123456789012345678901234="
     encoded = urllib.parse.quote(raw_pw, safe="")
     parsed = RedisSettings(url=f"redis://:{encoded}@platform-redis-staging:6379/0")
-    assert parsed.host == "platform-redis-staging"
-    assert parsed.port == 6379
-    assert parsed.db == 0
-    assert parsed.password == raw_pw
+    split = urllib.parse.urlsplit(parsed.url)
+    assert split.hostname == "platform-redis-staging"
+    assert split.port == 6379
+    assert split.path == "/0"
+    assert urllib.parse.unquote(split.password or "") == raw_pw
