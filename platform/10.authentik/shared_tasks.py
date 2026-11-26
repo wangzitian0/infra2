@@ -51,9 +51,9 @@ def build_remote_script(
     environment's running `platform-authentik-server${ENV_SUFFIX}` container.
     It runs compose in the project of that container, because the `secrets`
     volume that token-init mounts belongs to that project, and it starts no
-    dependency, so the running server and worker stay as they are. It passes
-    `ENV_SUFFIX` into the container, because the token-init script waits for the server
-    `platform-authentik-server${ENV_SUFFIX}` of this environment.
+    dependency, so the running server and worker stay as they are. It sets
+    `ENV_SUFFIX` in the shell env of compose, because Compose interpolates it into
+    the readiness host `platform-authentik-server${ENV_SUFFIX}` of the token-init script.
     Exit codes: 11 container missing, 12 directory match is not exactly one,
     13 container has no compose project label.
     """
@@ -94,7 +94,7 @@ trap 'rm -f "$TMPENV"' EXIT
 printf 'VAULT_INIT_TOKEN=%s\\n' "$VAULT_INIT_TOKEN" > "$TMPENV"
 ENV={q(env_name)} ENV_SUFFIX={q(env_suffix)} VAULT_ADDR={q(vault_url)} \
   docker compose --env-file "$TMPENV" -p "$PROJECT" run --rm --no-deps \
-  -e ENV_SUFFIX="$ENV_SUFFIX" token-init </dev/null
+  token-init </dev/null
 """
 
 
