@@ -13,6 +13,19 @@ Prefect is a modern workflow orchestration platform. This deployment includes:
 - **postgres**: Stores flow runs, deployments, and task state (shared platform DB)
 - **redis**: Message broker for event streaming (shared platform Redis, DB 1)
 
+### Files
+
+| File | Purpose |
+|------|---------|
+| `compose.yaml` | x-infra2 source; the compiler adds the vault-agent sidecar (#1822 step B) |
+| `deploy.py` | PrefectDeployer with vault-init |
+| `env.manifest.json` | Secret keys; the vault-agent template renders from it |
+| `shared_tasks.py` | `status` task |
+| `vault-policy.hcl` | Read-only policy for the prefect, postgres and redis secrets |
+
+The compiled text has no `vault-agent.hcl` or `secrets.ctmpl` file in git. Read it with
+`python -m tools.compose_compile print platform/23.prefect/compose.yaml`.
+
 ### Environment Strategy and Multi-Environment Note
 
 Prefect uses a shared deployment topology:
