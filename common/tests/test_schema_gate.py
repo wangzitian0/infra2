@@ -602,7 +602,65 @@ def test_launcher_prefers_storage_check_schema_on_v410_sdk(tmp_path):
         "finance_report/app",
         "--db-url",
         url,
+        "--json",
     ]
+
+
+def test_launcher_storage_emits_rollback_class_and_diff_details_on_blocked(tmp_path):
+    """On blocked exit, _LAUNCHER prints ROLLBACK_CLASS to stdout and SCHEMA_DIFF JSON to stderr."""
+    payload = {
+        "label": "finance_report/app",
+        "rollback_class": "C",
+        "migrations_pending": False,
+        "dropped_tables": [["public", "legacy_tbl"]],
+        "dropped_columns": [],
+        "enum_discrepancies": [],
+        "precondition_failures": [],
+    }
+    stub = _stub_sdk(
+        tmp_path,
+        storage_source=(
+            f"import json\ndef main(argv):\n    print(json.dumps({payload!r}))\n    return 1\n"
+        ),
+    )
+    result = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x", "--label", "finance_report/app"],
+        "postgresql://h/db\n",
+        stub,
+    )
+    assert result.returncode == sg.EXIT_BLOCKED == 1, result.stderr
+    assert "[finance_report/app] ROLLBACK_CLASS: C pending=False" in result.stdout
+    assert "SCHEMA_DIFF:" in result.stderr
+    assert "legacy_tbl" in result.stderr
+
+
+def test_launcher_storage_omits_diff_details_on_ok(tmp_path):
+    """On exit 0 pass, _LAUNCHER prints ROLLBACK_CLASS and emits no SCHEMA_DIFF on stderr."""
+    payload = {
+        "label": "finance_report/app",
+        "rollback_class": "A",
+        "migrations_pending": False,
+        "dropped_tables": [],
+        "dropped_columns": [],
+        "enum_discrepancies": [],
+        "precondition_failures": [],
+    }
+    stub = _stub_sdk(
+        tmp_path,
+        storage_source=(
+            f"import json\ndef main(argv):\n    print(json.dumps({payload!r}))\n    return 0\n"
+        ),
+    )
+    result = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x", "--label", "finance_report/app"],
+        "postgresql://h/db\n",
+        stub,
+    )
+    assert result.returncode == sg.EXIT_OK == 0, result.stderr
+    assert "[finance_report/app] ROLLBACK_CLASS: A pending=False" in result.stdout
+    assert "SCHEMA_DIFF:" not in result.stderr
 
 
 def test_launcher_imports_modules_against_real_storage_cli(tmp_path):
