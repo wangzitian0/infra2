@@ -189,11 +189,15 @@ jobs:
 
       - name: Set up the train
         uses: ./.github/actions/train-setup
+
+      - name: Set up Bun
+        if: ${{ github.event_name != 'schedule' && !inputs.sync_app_releases }}
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun: "true"
+          bun-version: "1.4.4"
 
       - name: Configure SSH key for the pre-deploy schema gate
-        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
+        if: ${{ github.event_name != 'schedule' && !inputs.sync_app_releases && env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != '' }}
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
@@ -344,6 +348,7 @@ jobs:
           # No input skips them: a deploy without its gates is no evidence (#1628).
           if [[ "$promote_prod" == "true" ]]; then
             args+=(--env prod)
+            [[ "$dry_run" != "true" ]] && args+=(--defer-production-marker)
           else
             args+=(--env staging)
           fi
@@ -377,8 +382,10 @@ jobs:
           python -m tools.reconcile_iac_inputs "${args[@]}"
 
           echo "RECONCILE_AFTER=$after" >> "$GITHUB_ENV"
+          echo "RECONCILE_BEFORE=$before" >> "$GITHUB_ENV"
 
       - name: Reconcile SigNoz observability (alerts + dashboard)
+        id: signoz
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prod && !inputs.dry_run }}
         env:
           ENV: production
@@ -406,6 +413,17 @@ jobs:
             uv run --locked python -m invoke fr-observability.shared.apply-alerts
             uv run --locked python -m invoke fr-observability.shared.apply-dashboard
           fi
+
+      - name: Record production marker and stage records
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.promote_prod && !inputs.dry_run && !inputs.sync_app_releases && !inputs.run_hook_slot && (steps.signoz.outcome == 'success' || steps.signoz.outcome == 'failure') }}
+        env:
+          SIGNOZ_OUTCOME: ${{ steps.signoz.outcome }}
+        run: |
+          set -euo pipefail
+          marker_args=(--record-production-marker --after "$RECONCILE_AFTER" --promote-prod --domain "$INTERNAL_DOMAIN" --output-json reconcile-result.json)
+          [[ -n "${RECONCILE_BEFORE:-}" ]] && marker_args+=(--before "$RECONCILE_BEFORE")
+          [[ "$SIGNOZ_OUTCOME" == "failure" ]] && marker_args+=(--observability-failed)
+          python -m tools.reconcile_iac_inputs "${marker_args[@]}"
 
       - name: Upload reconcile result
         uses: actions/upload-artifact@v7

@@ -531,12 +531,20 @@ def test_todos_storage_sql_provisions_todo_app_role_and_table(deploy) -> None:
     assert "CREATE ROLE todo_app LOGIN NOSUPERUSER" in normalized
     assert "ALTER ROLE todo_app WITH LOGIN NOSUPERUSER" in normalized
     assert f"PASSWORD '{PG_PASSWORD}'" in normalized
+    assert "CREATE TYPE canary_todo_capability AS ENUM" in normalized
     assert "CREATE TABLE IF NOT EXISTS todos" in normalized
+    assert normalized.index(
+        "CREATE TYPE canary_todo_capability AS ENUM"
+    ) < normalized.index("CREATE TABLE IF NOT EXISTS todos")
+    assert "capability canary_todo_capability NOT NULL DEFAULT 'general'" in normalized
+    assert (
+        "ALTER TABLE todos ADD COLUMN IF NOT EXISTS capability canary_todo_capability NOT NULL DEFAULT 'general'"
+        in normalized
+    )
     assert (
         "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO todo_app" in normalized
     )
     assert "GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO todo_app" in normalized
-    assert "CREATE TYPE canary_todo_capability AS ENUM" in normalized
     for label in ("general", "postgres", "redis", "s3", "llm", "otel", "sso"):
         assert f"'{label}'" in normalized
         assert (

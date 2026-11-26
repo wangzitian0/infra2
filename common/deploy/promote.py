@@ -559,15 +559,6 @@ def _notify_rollback_event(
         except Exception as exc:  # noqa: BLE001
             warning(f"rollback_notifier callback failed: {exc}")
         return
-    # A production run that has a release card shows the rollback on the card and in its
-    # thread. A run without a release card sends its own rollback card.
-    try:
-        from common.alerting import release_card
-
-        if release_card.note_rollback(os.environ, event):
-            return
-    except Exception as exc:  # noqa: BLE001
-        warning(f"release card update skipped/failed: {exc}")
 
     def send_text() -> None:
         try:
@@ -595,9 +586,9 @@ def _notify_rollback_event(
     # A hung Feishu call must not delay the re-raise of the deploy error. The delivery has
     # the same time budget as the card hook.
     try:
-        from common.alerting import release_card
+        from common.alerting import stage_card
 
-        release_card.bounded(send_text, release_card.ROLLBACK_BUDGET_SECONDS, None)
+        stage_card.bounded(send_text, stage_card.ROLLBACK_BUDGET_SECONDS, None)
     except Exception as exc:  # noqa: BLE001
         warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
 

@@ -15,7 +15,9 @@ def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None
 
     assert "pytest-cov" in pyproject
     assert 'source = ["common", "tools"]' in pyproject
-    assert "uv run --locked python -m pytest common/tests -q -n auto" in workflow
+    assert (
+        "uv run --locked --no-sync python -m pytest common/tests -q -n auto" in workflow
+    )
     assert 'PYTHONSAFEPATH: "1"' in workflow
     assert "--cov=common" in workflow
     assert "--cov=tools" in workflow

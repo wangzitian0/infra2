@@ -112,6 +112,18 @@ def unevaluated_keys(report: dict[str, Any]) -> list[str]:
     ]
 
 
+def load_report(env: Mapping[str, str]) -> dict[str, Any] | None:
+    """Return the JSON report written by `main()`, or None if missing/invalid."""
+    path = (env.get(REPORT_ENV) or "").strip()
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def read_unevaluated(env: Mapping[str, str]) -> list[str]:
     """The prefixes the last `main()` run could not evaluate. No readable passing
     report is everything (``[""]``): without proof of a check, nothing resolves."""

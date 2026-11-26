@@ -215,6 +215,38 @@ def test_ci_runner_vault_mutation_fails(
     assert "Missing 'exit_on_err = true'" in captured.out
 
 
+def test_ci_runner_vault_require_hcl2_fails_when_missing_or_empty_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import builtins
+
+    test_root = tmp_path / "mock_policy_repo"
+    test_root.mkdir()
+    pol = test_root / "vault-policy.hcl"
+    pol.write_text(
+        'path "secret/data/ok" {\n  capabilities = ["read"]\n}\n', encoding="utf-8"
+    )
+    monkeypatch.setattr("common.gate.ci_runner.ROOT", test_root)
+
+    real_import = builtins.__import__
+
+    def no_hcl2(name, *args, **kwargs):
+        if name == "hcl2":
+            raise ImportError("no hcl2")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_hcl2)
+    assert run_vault(policy_only=True, require_hcl2=False) == 0
+    assert run_vault(policy_only=True, require_hcl2=True) == 1
+    assert "python-hcl2 is required (--require-hcl2)" in capsys.readouterr().out
+
+    monkeypatch.undo()
+    monkeypatch.setattr("common.gate.ci_runner.ROOT", test_root)
+    pol.write_text("   \n", encoding="utf-8")
+    assert run_vault(policy_only=True) == 1
+    assert "Empty policy file" in capsys.readouterr().out
+
+
 def test_ci_runner_deployer_mutation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -478,7 +478,10 @@ def run_deployers(verbose: bool = False) -> int:
 
 
 def run_vault(
-    agents_only: bool = False, policy_only: bool = False, verbose: bool = False
+    agents_only: bool = False,
+    policy_only: bool = False,
+    verbose: bool = False,
+    require_hcl2: bool = False,
 ) -> int:
     """Validate Vault agent settings and Vault policy syntax."""
     print("▶ Validating Vault configurations...")
@@ -574,8 +577,24 @@ def run_vault(
         except ImportError:
             hcl2_installed = False
 
+        if require_hcl2 and not hcl2_installed:
+            print(
+                "  ❌ python-hcl2 is required (--require-hcl2) to validate vault-policy.hcl syntax."
+            )
+            return 1
+
         for pol in policy_files:
             rel = pol.relative_to(ROOT)
+            try:
+                content = pol.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                print(f"  ❌ Cannot read {rel}: {exc}")
+                failed = True
+                continue
+            if not content:
+                print(f"  ❌ Empty policy file: {rel}")
+                failed = True
+                continue
             if hcl2_installed:
                 try:
                     with open(pol, "r", encoding="utf-8") as f:
@@ -586,16 +605,7 @@ def run_vault(
                     print(f"  ❌ Invalid HCL in {rel}: {exc}")
                     failed = True
             else:
-                try:
-                    content = pol.read_text(encoding="utf-8").strip()
-                except OSError as exc:
-                    print(f"  ❌ Cannot read {rel}: {exc}")
-                    failed = True
-                    continue
-                if not content:
-                    print(f"  ❌ Empty policy file: {rel}")
-                    failed = True
-                elif content.count("{") != content.count("}"):
+                if content.count("{") != content.count("}"):
                     print(f"  ❌ Unbalanced braces in policy file: {rel}")
                     failed = True
 
@@ -856,6 +866,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="For vault target: validate vault-policy syntax only.",
     )
     parser.add_argument(
+        "--require-hcl2",
+        action="store_true",
+        help="For vault target: fail closed when python-hcl2 is unavailable.",
+    )
+    parser.add_argument(
         "--list", action="store_true", help="List all available targets and exit."
     )
     parser.add_argument(
@@ -886,6 +901,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             agents_only=args.agents_only,
             policy_only=args.policy_only,
             verbose=args.verbose,
+            require_hcl2=args.require_hcl2,
         )
 
     if args.target == "compose":

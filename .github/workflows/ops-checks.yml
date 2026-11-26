@@ -74,7 +74,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'iac-input-reconcile-main' || github.event_name == 'schedule' && github.event.schedule == '47 3 * * *' && 'infra2-staging-db-hygiene' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '0 13 * * *' && 'infra2-promotion-reminder' || github.event_name == 'schedule' && github.event.schedule == '7 6 * * *' && 'infra2-hook-duration-report' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-scheduled-app-audit' || github.event_name == 'schedule' && github.event.schedule == '47 3 * * *' && 'infra2-staging-db-hygiene' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '0 13 * * *' && 'infra2-promotion-reminder' || github.event_name == 'schedule' && github.event.schedule == '7 6 * * *' && 'infra2-hook-duration-report' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
   cancel-in-progress: false
 
 env:
@@ -131,15 +131,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.3.2
         with:
-          # Cache off: a dry run skips the hook step, uv never runs, and the cache
-          # save of the post step would fail with "Cache path does not exist".
-          enable-cache: false
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Restore App tool caches
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
+        uses: ./.github/actions/app-caches
 
       - name: Audit deploy fan-out coverage (sufficiency)
         run: python tools/deploy_guard_audit.py
@@ -326,11 +328,16 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Install Python dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure SSH key
         if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
@@ -493,11 +500,16 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Install Python dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure SSH key
         if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
@@ -617,11 +629,16 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Install runtime dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Detect leaked previews
         run: |
@@ -963,11 +980,16 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Install runtime dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure SSH key
         env:
@@ -1021,12 +1043,19 @@ jobs:
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.vault_self_refresh_audit_check import (
               confirmed_finding_pairs,
-              run,
+              load_report,
               unevaluated_keys,
           )
 
-          report = run()
-          pairs = confirmed_finding_pairs(report)
+          report = load_report(os.environ)
+          if report is None:
+              pairs = []
+              observed_clean = False
+              unevaluated = [""]
+          else:
+              pairs = confirmed_finding_pairs(report)
+              observed_clean = report.get("status") == "pass"
+              unevaluated = unevaluated_keys(report)
           if not pairs:
               # The step failed without a confirmed fail result (e.g. a transient SSH
               # or Dokploy lookup hiccup) -- visible in the run log for a human to
@@ -1042,8 +1071,8 @@ jobs:
               findings=pairs,
               # Only an all-pass run proves the earlier failures are gone, and not
               # for a check that could only say "could not compare".
-              observed_clean=report["status"] == "pass",
-              unevaluated=unevaluated_keys(report),
+              observed_clean=observed_clean,
+              unevaluated=unevaluated,
               detail=detail,
               page_message=(
                   f"🚨 Vault self-refresh audit found {len(pairs)} confirmed failing "
@@ -1120,11 +1149,15 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
       - name: Install runtime dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Configure SSH key
         env:
           INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
@@ -1237,11 +1270,16 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Install Python dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       # Reads the stage records (`checks[].seconds`) and warns when the p95 of a hook is
       # above 70% of its budget. It never fails on a slow hook; it fails when it cannot read.
@@ -1280,11 +1318,16 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Install runtime dependencies
         run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          uv sync --locked --no-dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure SSH key
         env:
@@ -1399,10 +1442,15 @@ jobs:
       # re-resolving and installing whatever it lands on -- a job named "smoke test"
       # should not also be a silent floating-dependency upgrade.
       - name: Install e2e dependency group
-        run: uv sync --group e2e --locked
+        run: |
+          uv sync --group e2e --locked
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Restore App tool caches
+        uses: ./.github/actions/app-caches
 
       - name: Install Playwright chromium
-        run: uv run --group e2e --locked playwright install --with-deps chromium
+        run: playwright install --with-deps chromium
 
       - name: Run e2e_regressions smoke suite against production
         env:
@@ -1414,14 +1462,7 @@ jobs:
         # Proof: common/tests/test_e2e_regressions_ci_wiring.py runs this step for real.
         run: |
           cd ${{ github.workspace }}
-          uv run --group e2e --locked pytest e2e_regressions/tests -m smoke -v
-
-      - name: Install runtime dependencies
-        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
-        run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
+          python -m pytest e2e_regressions/tests -m smoke -v
 
       # A red smoke run opens one issue (key prod.e2e-smoke); the same red on a later
       # day is a `[报告] 仍未恢复 · 第 N 天`; a green run closes it (page_dedup).

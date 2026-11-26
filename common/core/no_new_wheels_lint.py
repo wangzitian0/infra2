@@ -51,7 +51,7 @@ PAGER_ONLY_PRIMITIVES = (
 SCAN_EXEMPT_FILES = {
     "common/observability/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
     "common/alerting/delivery.py",  # defines deliver_infra2_report + the shared engine
-    "common/alerting/release_card.py",  # defines publish_card release/stage card primitive
+    "common/alerting/stage_card.py",  # defines publish_card stage card primitive
     "common/observability/probes.py",  # defines post_alert_bridge_payload
     "common/core/no_new_wheels_lint.py",
 }

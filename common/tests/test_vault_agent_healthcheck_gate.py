@@ -36,11 +36,15 @@ VAULT_AGENT_COMPOSE_FILES = _vault_agent_composes()
 
 def test_gate_selects_files_by_a_marker_the_fleet_still_carries():
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert 'grep -q "^  vault-agent:" "$file"' in workflow, (
-        "validate-vault-agent no longer selects composes by the vault-agent service key"
+    runner = (ROOT / "common/gate/ci_runner.py").read_text(encoding="utf-8")
+    assert "tools.ci_runner vault --require-hcl2" in workflow, (
+        "validate-vault-agent must run tools.ci_runner vault --require-hcl2"
     )
     assert 'grep -q "VAULT_APP_TOKEN" "$file"' not in workflow, (
         "VAULT_APP_TOKEN left every compose with #369; a gate keyed on it checks nothing"
+    )
+    assert '"vault-agent:"' in runner and "compiles_a_vault_sidecar" in runner, (
+        "ci_runner.run_vault must check both hand-written and compiled vault sidecars"
     )
     # 17 sidecars on 2026-11-25: 10 hand-written (the shell gate) and 7 compiled (#1822).
     sidecars = VAULT_AGENT_COMPOSE_FILES + _x_infra2_vault_composes()

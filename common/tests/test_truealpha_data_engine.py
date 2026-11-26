@@ -1014,7 +1014,7 @@ def test_configuration_sha256_ignores_the_files_that_the_stack_no_longer_deploys
     secrets.ctmpl or vault-agent.hcl here (common/security/secrets_render.COMPILED_FILES).
     A file with one of those names does not change it.
     """
-    for name in ("secrets.ctmpl", "vault-agent.hcl"):
+    for name in ("secrets.ctmpl", "vault-agent.hcl", "dagster-entrypoint.sh"):
         assert not (SERVICE_DIR / name).exists(), name
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer

@@ -140,9 +140,12 @@ def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
         assert key not in uv_step, (
             f"the uv step of job audit in ops-checks.yml must not set `{key}`"
         )
-    assert uv_step.get("with") == {"enable-cache": False}, (
-        "the uv step of job audit in ops-checks.yml must set `with` to "
-        f"{{enable-cache: false}} only; found {uv_step.get('with')!r}"
+    assert uv_step.get("with") == {
+        "enable-cache": True,
+        "cache-dependency-glob": "uv.lock",
+    }, (
+        "the uv step of job audit in ops-checks.yml must enable uv.lock caching; "
+        f"found {uv_step.get('with')!r}"
     )
     assert max(python_indexes) < uv_index, (
         "the uv step of job audit in ops-checks.yml must come after the "

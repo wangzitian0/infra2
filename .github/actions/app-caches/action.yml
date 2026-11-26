@@ -10,19 +10,36 @@ inputs:
 runs:
   using: composite
   steps:
-    # The key is the hash of each App lockfile at the commit that `repos/<app>` pins, read from
-    # the raw file (an App checkout does not exist yet). When a file cannot be read, the key
-    # holds the run id, so the cache misses and never serves a stale browser.
+    # The key is the hash of each App lockfile at the pinned `release_tag` from
+    # `harness/repos.yaml` (falling back to the submodule gitlink SHA when absent).
+    # When a file cannot be read, the key holds the run id so the cache misses.
     - name: Fingerprint App lockfiles
       id: keys
       shell: bash
       run: |
         set -uo pipefail
+        resolve_ref() {
+          local repo="$1" tag=""
+          tag="$(awk -v target="repos/${repo}" '
+            /^[[:space:]]*- id:/ {
+              if (cur_path == target && cur_tag != "") { print cur_tag; found=1; exit }
+              cur_tag=""; cur_path=""
+            }
+            $1 == "path:" { gsub(/["'\'']/, "", $2); cur_path=$2 }
+            $1 == "release_tag:" { gsub(/["'\'']/, "", $2); cur_tag=$2 }
+            END { if (!found && cur_path == target && cur_tag != "") print cur_tag }
+          ' harness/repos.yaml)"
+          if [[ -n "$tag" ]]; then
+            printf '%s' "$tag"
+          else
+            git ls-tree HEAD "repos/${repo}" | awk '{print $3}'
+          fi
+        }
         fp() {
-          local repo="$1" path="$2" sha body
-          sha="$(git ls-tree HEAD "repos/${repo}" | awk '{print $3}')"
-          if [[ -n "$sha" ]] && body="$(curl -fsSL --retry 3 --max-time 30 \
-              "https://raw.githubusercontent.com/wangzitian0/${repo}/${sha}/${path}")"; then
+          local repo="$1" path="$2" ref body
+          ref="$(resolve_ref "$repo")"
+          if [[ -n "$ref" ]] && body="$(curl -fsSL --retry 3 --max-time 30 \
+              "https://raw.githubusercontent.com/wangzitian0/${repo}/${ref}/${path}")"; then
             printf '%s' "$body" | sha256sum | cut -c1-16
           else
             echo "unknown-${GITHUB_RUN_ID}"
@@ -55,15 +72,32 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        resolve_ref() {
+          local repo="$1" tag=""
+          tag="$(awk -v target="repos/${repo}" '
+            /^[[:space:]]*- id:/ {
+              if (cur_path == target && cur_tag != "") { print cur_tag; found=1; exit }
+              cur_tag=""; cur_path=""
+            }
+            $1 == "path:" { gsub(/["'\'']/, "", $2); cur_path=$2 }
+            $1 == "release_tag:" { gsub(/["'\'']/, "", $2); cur_tag=$2 }
+            END { if (!found && cur_path == target && cur_tag != "") print cur_tag }
+          ' harness/repos.yaml)"
+          if [[ -n "$tag" ]]; then
+            printf '%s' "$tag"
+          else
+            git ls-tree HEAD "repos/${repo}" | awk '{print $3}'
+          fi
+        }
         base="https://raw.githubusercontent.com/wangzitian0"
-        ta_sha="$(git ls-tree HEAD repos/truealpha | awk '{print $3}')"
-        fr_sha="$(git ls-tree HEAD repos/finance_report | awk '{print $3}')"
+        ta_ref="$(resolve_ref truealpha)"
+        fr_ref="$(resolve_ref finance_report)"
         work="$(mktemp -d)"
         mkdir -p "$work/ta" "$work/fr"
-        curl -fsSL --retry 3 -o "$work/ta/package.json" "$base/truealpha/${ta_sha}/apps/app-web/package.json"
-        curl -fsSL --retry 3 -o "$work/ta/bun.lock" "$base/truealpha/${ta_sha}/apps/app-web/bun.lock"
+        curl -fsSL --retry 3 -o "$work/ta/package.json" "$base/truealpha/${ta_ref}/apps/app-web/package.json"
+        curl -fsSL --retry 3 -o "$work/ta/bun.lock" "$base/truealpha/${ta_ref}/apps/app-web/bun.lock"
         (cd "$work/ta" && bun install --frozen-lockfile && bunx playwright install --only-shell chromium)
-        curl -fsSL --retry 3 -o "$work/fr/requirements.txt" "$base/finance_report/${fr_sha}/tests/e2e/requirements.txt"
+        curl -fsSL --retry 3 -o "$work/fr/requirements.txt" "$base/finance_report/${fr_ref}/tests/e2e/requirements.txt"
         uv venv "$work/fr/venv" --quiet
         uv pip install --python "$work/fr/venv/bin/python" --quiet -r "$work/fr/requirements.txt"
         "$work/fr/venv/bin/playwright" install chromium
