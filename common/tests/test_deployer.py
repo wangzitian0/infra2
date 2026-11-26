@@ -1139,11 +1139,17 @@ def test_alerting_template_fields_are_all_declared_in_its_manifest() -> None:
     service = secrets_registry.lookup("platform", "alerting")
     assert service is not None
     declared = {field.env for field in secrets_registry.merged_manifest(service).fields}
-    ctmpl = (ROOT / "platform/12.alerting/secrets.ctmpl").read_text(encoding="utf-8")
+    # The compile renders the template from the manifest into the sidecar env (#1822).
+    import yaml
+
+    from common.deploy.compose_compile import load_stack
+
+    compiled = yaml.safe_load(load_stack("platform/12.alerting/compose.yaml").compiled)
+    ctmpl = compiled["services"]["vault-agent"]["environment"]["VAULT_SECRETS_TEMPLATE"]
     referenced = set(re.findall(r"\.Data\.data\.([A-Z_0-9]+)", ctmpl)) | set(
         re.findall(r'index \.Data\.data "([A-Z_0-9]+)"', ctmpl)
     )
-    assert referenced, "expected secrets.ctmpl to read at least one Vault field"
+    assert referenced, "expected the template to read at least one Vault field"
     assert referenced <= declared, sorted(referenced - declared)
     for key in ("PROBE_POSTGRES_PASSWORD", "PROBE_S3_SECRET_KEY", "DOKPLOY_API_KEY"):
         assert key in referenced and key in declared

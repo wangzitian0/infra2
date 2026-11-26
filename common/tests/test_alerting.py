@@ -564,15 +564,19 @@ def test_alerting_platform_service_contract_files_exist() -> None:
         "app.py",
         "compose.yaml",
         "deploy.py",
-        "secrets.ctmpl",
+        "env.manifest.json",
         "shared_tasks.py",
-        "vault-agent.hcl",
         "vault-policy.hcl",
     ]
     for name in required:
         assert (base / name).exists(), name
+    # x-infra2 (#1822 step B): the compile renders the agent config and the template.
+    for name in ("secrets.ctmpl", "vault-agent.hcl"):
+        assert not (base / name).exists(), name
 
-    compose = (base / "compose.yaml").read_text(encoding="utf-8")
+    from common.deploy.compose_compile import load_stack
+
+    compose = load_stack("platform/12.alerting/compose.yaml").compiled
     assert "platform-alerting-vault-agent${ENV_SUFFIX}" in compose
     assert "platform-alerting${ENV_SUFFIX}" in compose
     assert "while [ ! -s /secrets/.env ]" in compose
@@ -590,7 +594,10 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     assert "INFRA_PROBE_HEARTBEAT_URL" in deploy
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in deploy
 
-    ctmpl = (base / "secrets.ctmpl").read_text(encoding="utf-8")
+    import yaml
+
+    sidecar = yaml.safe_load(compose)["services"]["vault-agent"]
+    ctmpl = sidecar["environment"]["VAULT_SECRETS_TEMPLATE"]
     assert "INFRA_PROBE_HEARTBEAT_URL" in ctmpl
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in ctmpl
 

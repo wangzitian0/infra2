@@ -36,13 +36,14 @@ X_INFRA2_FILES = {
     "finance_report/finance_report/10.app/compose.yaml",
     "truealpha/truealpha/10.app/compose.yaml",
     "truealpha/truealpha/20.data_engine/compose.yaml",
-    # Platform Redis, Postgres, Prefect, S3 and Authentik moved to x-infra2 in #1822
-    # step B.
+    # Platform Redis, Postgres, Prefect, S3, Authentik and alerting moved to x-infra2 in
+    # #1822 step B.
     "platform/02.redis/compose.yaml",
     "platform/01.postgres/compose.yaml",
     "platform/23.prefect/compose.yaml",
     "platform/03.s3/compose.yaml",
     "platform/10.authentik/compose.yaml",
+    "platform/12.alerting/compose.yaml",
 }
 
 
@@ -246,14 +247,10 @@ def test_real_stacks_classify_as_measured() -> None:
             load_stack("bootstrap/06.iac_runner/compose.yaml").compiled
         )
     )
-    # CI publishes the alerting image (#1822): only the vault-agent mounts block raw now.
-    assert [
-        r
-        for r in raw_ineligibility(
-            load_stack("platform/12.alerting/compose.yaml").compiled
-        )
-        if not r.startswith("services.vault-agent mounts ")
-    ] == []
+    # CI publishes the alerting image and the template is inline (#1822 step B).
+    alerting = load_stack("platform/12.alerting/compose.yaml")
+    assert raw_ineligibility(alerting.compiled) == []
+    assert alerting.source_type == "raw"
     # CI publishes the S3 image and the template is inline (#1822 step B): raw-eligible.
     s3 = load_stack("platform/03.s3/compose.yaml")
     assert raw_ineligibility(s3.compiled) == []
@@ -690,8 +687,8 @@ def test_check_reports_a_plain_file_that_the_compile_changes(monkeypatch) -> Non
     monkeypatch.setattr(eq, "compile_stack", lambda text, **k: text + "\n")
     report = eq.check("HEAD")
     plain = [p for p in report.problems if not p.startswith(tuple(X_INFRA2_FILES))]
-    # 14 plain files on 2026-11-26, after platform/10.authentik moved to x-infra2 (#1822).
-    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 14
+    # 13 plain files on 2026-11-26, after platform/12.alerting moved to x-infra2 (#1822).
+    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 13
     assert all("a plain file changed in the compile" in p for p in plain)
 
 

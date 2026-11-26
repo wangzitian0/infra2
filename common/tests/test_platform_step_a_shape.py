@@ -18,16 +18,12 @@ from common.deploy.compose_compile import compile_stack, vault_template_for
 from common.deploy.compose_equivalence import equivalence_problems
 
 ROOT = Path(__file__).resolve().parents[2]
-# platform/02.redis, platform/01.postgres, platform/23.prefect, platform/03.s3 and
-# platform/10.authentik left this list in #1822 step B: each file is an x-infra2 source
-# now, and `tools.compose_compile check` proves it against the step-A file.
-STACKS = (
-    "platform/12.alerting",
-    "platform/24.openpanel",
-)
+# platform/02.redis, platform/01.postgres, platform/23.prefect, platform/03.s3,
+# platform/10.authentik and platform/12.alerting left this list in #1822 step B: each
+# file is an x-infra2 source now, and `tools.compose_compile check` proves it against the
+# step-A file.
+STACKS = ("platform/24.openpanel",)
 SUFFIX = "-vault-agent${ENV_SUFFIX}"
-#: Each service that reads /secrets/.env without the SDK wait entrypoint.
-NOT_X_VAULT = {"platform/12.alerting": {"infra-probe-runner"}}
 
 
 def _sdk_wait_entrypoint() -> list[str]:
@@ -73,7 +69,7 @@ def test_a_step_b_dry_run_has_no_problem(stack: str) -> None:
         for svc, spec in yaml.safe_load(hand)["services"].items()
         if svc != "vault-agent" and "secrets:/secrets:ro" in (spec.get("volumes") or [])
     }
-    assert set(marked) == readers - NOT_X_VAULT.get(stack, set())
+    assert set(marked) == readers
     compiled = compile_stack(source, vault_template=vault_template_for(path, source))
     assert equivalence_problems(source, compiled, hand, _base_files(stack)) == []
 

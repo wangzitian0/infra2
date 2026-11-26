@@ -40,6 +40,12 @@ uv run invoke alerting.status
 `alerting.pre-compose`, the deployer mirrors those fields into
 `secret/platform/{env}/alerting` so the vault-agent can render runtime secrets.
 
+`compose.yaml` is an x-infra2 source (#1822 step B). The compiler adds the vault-agent
+sidecar and renders its template from `env.manifest.json`; git holds no
+`vault-agent.hcl` or `secrets.ctmpl` file. CI publishes `Dockerfile` as
+`ghcr.io/wangzitian0/infra2-alerting` (`common/deploy/platform_images.py`). Read the
+compiled text with `python -m tools.compose_compile print platform/12.alerting/compose.yaml`.
+
 The probe heartbeat URL/token are runtime-only config inputs: they participate in
 `CONFIGURATION_SHA256` so rotation reconciles the service, but are excluded from the
 secret-independent `IAC_SOURCE_CONFIG_HASH`. The drift workflow therefore does not

@@ -55,14 +55,14 @@ def env_without_environment(text: str) -> list[str]:
 
 def test_scope_is_not_empty() -> None:
     files = _plain_compose_files()
-    # 14 plain files on 2026-11-26 (measured), after platform/10.authentik moved to
+    # 13 plain files on 2026-11-26 (measured), after platform/12.alerting moved to
     # x-infra2 (#1822 step B).
-    assert len(files) >= 14, [str(p.relative_to(ROOT)) for p in files]
+    assert len(files) >= 13, [str(p.relative_to(ROOT)) for p in files]
     with_env = [p for p in files if "ENV: ${ENV" in p.read_text(encoding="utf-8")]
     # The platform sidecars set ENVIRONMENT only, as the compiled sidecar does (#1822
-    # step A), so fewer files set ENV. 5 files still set it (measured 2026-11-26, after
-    # platform/10.authentik moved to x-infra2).
-    assert len(with_env) >= 5, [str(p.relative_to(ROOT)) for p in with_env]
+    # step A), so fewer files set ENV. 4 files still set it (measured 2026-11-26, after
+    # platform/12.alerting moved to x-infra2).
+    assert len(with_env) >= 4, [str(p.relative_to(ROOT)) for p in with_env]
 
 
 @pytest.mark.parametrize(

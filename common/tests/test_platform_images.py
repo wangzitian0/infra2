@@ -238,6 +238,13 @@ def test_the_real_alerting_hash_reads_the_image_inputs_without_the_vault_mounts(
     assert config_hash._compose_artifact_files(str(compose), text) == pi.input_files(
         image
     )
+    # The deploy hashes the compiled text (x-infra2, #1822 step B): no vault mount is left.
+    from common.deploy.compose_compile import load_stack
+
+    compiled = load_stack(image.compose).compiled
+    assert config_hash._compose_artifact_files(
+        str(compose), compiled
+    ) == pi.input_files(image)
 
 
 def test_the_alerting_tag_covers_each_tracked_file_that_the_dockerfile_copies() -> None:

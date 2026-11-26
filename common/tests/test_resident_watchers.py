@@ -306,8 +306,11 @@ def test_probe_runner_touches_state_file_at_loop_start(monkeypatch, tmp_path) ->
 def test_compose_has_single_resident_sidecar_with_watcher_env() -> None:
     """#543 operator decision locked in compose: the two watcher services are
     gone; the probe-runner service carries their env triads (continuity), the
-    read-only docker socket, and the resource budget (ops.standards §5.2)."""
-    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    read-only docker socket, and the resource budget (ops.standards §5.2).
+    The compiled text holds the vault-agent sidecar (x-infra2, #1822 step B)."""
+    from common.deploy.compose_compile import load_stack
+
+    compose = yaml.safe_load(load_stack("platform/12.alerting/compose.yaml").compiled)
     services = compose["services"]
 
     assert "container-breakdown-watch" not in services
