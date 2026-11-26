@@ -426,3 +426,23 @@ def test_the_llm_start_period_is_not_below_the_sdk_standard(tmp_path: Path) -> N
             f"{path.relative_to(ROOT)} llm start period is {llm} s; the SDK standard "
             f"for an app that migrates at start is {standard} s"
         )
+
+
+@pytest.mark.parametrize(
+    "compose_rel",
+    [
+        "truealpha/truealpha/10.app/compose.yaml",
+        "truealpha/truealpha/preview/compose.yaml",
+    ],
+)
+def test_web_service_is_zero_db_and_does_not_wait_on_vault_secrets(
+    compose_rel: str,
+) -> None:
+    raw = yaml.safe_load((ROOT / compose_rel).read_text(encoding="utf-8"))
+    web = raw["services"]["web"]
+    env = raw_environment(web)
+    assert "LLM_SERVICE_URL" in env and "truealpha-llm" in env["LLM_SERVICE_URL"]
+    assert "DATABASE_URL" not in env
+    assert "x-vault" not in web
+    assert "/secrets/.env" not in str(web.get("entrypoint", ""))
+    assert not any(str(v).startswith("secrets:") for v in web.get("volumes", ()))

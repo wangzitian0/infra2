@@ -123,11 +123,9 @@ services:
         max-size: "5m"
         max-file: "2"
     depends_on:
-      vault-agent:
+      llm:
         condition: service_healthy
-    # The web app reads the mart schema directly (truealpha init.md rule 5):
-    # DATABASE_URL comes from Vault like the llm-service's, no API hop.
-    x-vault: {}
+    # Zero-DB web frontend: calls llm over LLM_SERVICE_URL; requires no Vault secrets or direct Postgres access.
     command:
       - node
       - server.js
@@ -160,8 +158,6 @@ services:
       interval: 30s
       retries: 5
       timeout: 10s
-    volumes:
-      - secrets:/secrets:ro
     networks:
       - dokploy-network
     labels:

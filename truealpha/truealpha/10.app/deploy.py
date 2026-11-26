@@ -116,20 +116,14 @@ class AppDeployer(Deployer):
     secrets = (
         SecretsFacet(
             vault_agent_container="truealpha-app-vault-agent${ENV_SUFFIX}",
-            app_containers=(
-                "truealpha-llm${ENV_SUFFIX}",
-                "truealpha-web${ENV_SUFFIX}",
-            ),
+            app_containers=("truealpha-llm${ENV_SUFFIX}",),
             auth_method="approle",
         ),
         SecretsFacet(
             service_id="truealpha/preview",
             compose_path="truealpha/truealpha/preview/compose.yaml",
             vault_agent_container="truealpha-app-vault-agent${ENV_SUFFIX}",
-            app_containers=(
-                "truealpha-llm${ENV_SUFFIX}",
-                "truealpha-web${ENV_SUFFIX}",
-            ),
+            app_containers=("truealpha-llm${ENV_SUFFIX}",),
             auth_method="approle",
         ),
     )
