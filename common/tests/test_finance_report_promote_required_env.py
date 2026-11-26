@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 import pytest
-from infra2_sdk.config import EnvironmentManifest, validate_env
+from infra2_sdk.config import EnvironmentManifest, assert_env
 
 from common.deploy import promote
 from common.deploy.env_config import app_compose_env_config
@@ -54,8 +54,12 @@ def refused_names(
     defaults = {
         f.env: "<default>" for f in manifest.fields if f.empty_ok or f.source == "code"
     }
-    result = validate_env(manifest, {**defaults, **environ}, require_injected=True)
-    return list(result.missing)
+    try:
+        assert_env(manifest, environ={**defaults, **environ}, require_injected=True)
+    except RuntimeError as exc:
+        _, _, missing_part = str(exc).partition(" variable(s): ")
+        return [item.strip() for item in missing_part.split(",") if item.strip()]
+    return []
 
 
 def test_the_frontend_group_is_the_frontend_manifest() -> None:

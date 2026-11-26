@@ -11,8 +11,8 @@ infra2 does not track one SDK version for the apps. It accepts:
 - an app SDK version inside ``APP_SDK_RANGE`` (lower bound inclusive, upper bound exclusive), and
 - only a version that the Canary verified in staging (``verified_sdk_versions``).
 
-The hook manifest schema version is the one of the SDK that infra2 itself pins
-(``infra2_sdk.delivery.HOOKS_SCHEMA_VERSION``); this module does not copy it.
+The hook manifest contract is the one of the SDK that infra2 itself pins
+(``infra2_sdk.delivery.RuntimeHooksManifest``); this module does not copy it.
 """
 
 from __future__ import annotations

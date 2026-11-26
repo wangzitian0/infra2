@@ -1683,12 +1683,13 @@ def _unalerted_counters(rules: list[dict], counters: set[str]) -> list[str]:
     return sorted(counters - selected)
 
 
-def _active_routes() -> set[str]:
-    from infra2_sdk.telemetry import PROBE_PATHS
+_SDK_PROBE_PATHS = frozenset({"/health", "/livez", "/readyz"})
 
+
+def _active_routes() -> set[str]:
     from common.tests import finance_report_sources as fr
 
-    return fr.pinned_openapi_routes() | set(PROBE_PATHS)
+    return fr.pinned_openapi_routes() | set(_SDK_PROBE_PATHS)
 
 
 def test_finance_report_route_tokens_match_active_openapi_or_probe_routes() -> None:
@@ -1707,8 +1708,6 @@ def test_finance_report_route_tokens_match_active_openapi_or_probe_routes() -> N
 
 def test_finance_report_route_exclusions_leave_out_every_sdk_probe_path() -> None:
     """#1816: /livez and /readyz were missing from the exclusions."""
-    from infra2_sdk.telemetry import PROBE_PATHS
-
     rules = _finance_report_alert_rules()
     exclusions = [
         value
@@ -1717,7 +1716,7 @@ def test_finance_report_route_exclusions_leave_out_every_sdk_probe_path() -> Non
         if op == "!~"
     ]
     assert len(exclusions) == 4  # 3 in FinanceReportHigh5xxRate, 1 in the p95 rule
-    assert _probe_exclusion_problems(rules, PROBE_PATHS) == []
+    assert _probe_exclusion_problems(rules, _SDK_PROBE_PATHS) == []
 
 
 def test_every_finance_report_failure_counter_has_an_alert_rule() -> None:

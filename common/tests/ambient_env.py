@@ -14,16 +14,31 @@ follows each SDK release. A test that needs a variable sets it after this call.
 
 from __future__ import annotations
 
+from importlib.resources import files
 import os
 
 import pytest
-from infra2_sdk.config import shared_env_contract
+import yaml
+
+
+def load_shared_env_contract() -> dict:
+    """Load the canonical SDK ``data/shared_env.yaml`` contract."""
+    return (
+        yaml.safe_load(
+            files("infra2_sdk")
+            .joinpath("data/shared_env.yaml")
+            .read_text(encoding="utf-8")
+        )
+        or {}
+    )
 
 
 def _contract_names() -> set[str]:
     """Every variable and every alias that the SDK contract declares."""
     names: set[str] = set()
-    for variable in shared_env_contract()["groups"]["runtime"]:
+    for variable in (load_shared_env_contract().get("groups") or {}).get(
+        "runtime"
+    ) or ():
         names.add(variable["name"])
         names.update(variable.get("aliases") or ())
     return names

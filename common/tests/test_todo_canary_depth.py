@@ -193,13 +193,21 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
         assert fields[env].empty_ok and fields[env].sensitive
         assert not fields[env].store_key, "the Vault key is the canonical env name"
 
-    from infra2_sdk.config import check_shared_env
+    from infra2_sdk.config import EnvironmentField, EnvironmentManifest
 
     # Every todo field name conforms to shared_env.yaml: no exemption.
-    assert check_shared_env(fields) == []
-    assert any(
-        "DATABASE_URL" in issue for issue in check_shared_env([*fields, "database_url"])
+    assert manifest.validate_offline() == []
+    bad_field = EnvironmentField(
+        field="database_url",
+        env="database_url",
+        source="runtime",
+        sensitive=True,
+        injected=True,
     )
+    bad_manifest = EnvironmentManifest(
+        source=manifest.source, fields=(*manifest.fields, bad_field)
+    )
+    assert any("DATABASE_URL" in issue for issue in bad_manifest.validate_offline())
 
 
 def test_todo_policy_never_reads_the_superuser_secrets() -> None:

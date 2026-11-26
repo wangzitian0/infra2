@@ -9,18 +9,18 @@ import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from importlib.resources import files as _pkg_files
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+import yaml
 from infra2_sdk.config import EnvironmentManifest
 from infra2_sdk.delivery import (
     CELL_POLICIES,
     CellPolicy,
     CheckRow,
-    POLICY_VERSION,
     RuntimeHooksManifest,
-    load_stages,
     resolve_check_cells,
 )
 
@@ -30,8 +30,44 @@ from common.core._sdk_wire import (
     record_verdicts,
     redact_text,
 )
+from common.deploy.yaml_text import safe_load_text
 
-BOOTSTRAP_CAP_SECONDS = int(load_stages()["bootstrap_cap_seconds"])
+_STAGES_DOC = (
+    safe_load_text(
+        yaml,
+        _pkg_files("infra2_sdk")
+        .joinpath("data/stages.yaml")
+        .read_text(encoding="utf-8"),
+    )
+    or {}
+)
+POLICY_VERSION = int(_STAGES_DOC["policy_version"])
+BOOTSTRAP_CAP_SECONDS = int(_STAGES_DOC["bootstrap_cap_seconds"])
+FORBIDDEN_HOOK_ENV_NAMES: frozenset[str] = frozenset(
+    {
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "DATABASE_URL",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "LLM_API_KEY",
+        "OP_SERVICE_ACCOUNT_TOKEN",
+        "REDIS_URL",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+    }
+)
+FORBIDDEN_HOOK_ENV_PREFIXES: tuple[str, ...] = (
+    "AWS_",
+    "CLOUDFLARE_",
+    "DOKPLOY_",
+    "INFRA2_SECRET_",
+    "OP_",
+    "PRIVATE_",
+    "SECRET_",
+    "SSH_",
+    "VAULT_",
+)
 HOOK_CHECKS_FILE = "checks.jsonl"
 HOOK_ARTIFACTS_DIR = ".artifacts/hooks"
 _HOOK_FAILED_STEPS = frozenset({"", "env", "bootstrap", "run", "timeout"})

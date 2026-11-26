@@ -18,20 +18,22 @@ import os
 import pytest
 from infra2_sdk.config import (
     EnvironmentTier,
-    resolve_environment,
-    shared_env_contract,
+    RuntimeEnvKey,
+    read_runtime_env,
+    resolve_tier,
 )
 from infra2_sdk.service import init_service
 
 from common.tests import ambient_env
-from common.tests.ambient_env import clear_telemetry_env
+from common.tests.ambient_env import clear_telemetry_env, load_shared_env_contract
 
 
 def _declared() -> dict[str, tuple[str, ...]]:
     """Each variable of the SDK contract with its aliases."""
     return {
         variable["name"]: tuple(variable.get("aliases") or ())
-        for variable in shared_env_contract()["groups"]["runtime"]
+        for variable in (load_shared_env_contract().get("groups") or {}).get("runtime")
+        or ()
     }
 
 
@@ -82,7 +84,7 @@ def test_the_helper_reads_the_contract_and_keeps_no_list_of_its_own(
         },
     }
     others = [name for name in _declared_names() if not name.startswith("OTEL_")]
-    monkeypatch.setattr(ambient_env, "shared_env_contract", lambda: contract)
+    monkeypatch.setattr(ambient_env, "load_shared_env_contract", lambda: contract)
     monkeypatch.setenv("INFRA2_TEST_VARIABLE", "one")
     monkeypatch.setenv("INFRA2_TEST_ALIAS", "two")
     for name in others:
@@ -106,18 +108,10 @@ def test_a_retired_shell_alias_cannot_change_the_tier_a_test_sets(
     monkeypatch.setenv("ENV", "production")
     monkeypatch.setenv("ENVIRONMENT", "local_test")
 
-    # GitHub Actions maps `local_test` to `github_ci`; the test states the mapping it checks.
-    environment = resolve_environment({"ENVIRONMENT": "local_test"})
-    assert environment.tier is EnvironmentTier.LOCAL_TEST
-
-
-class _Providers:
-    tracer_provider = None
-    meter_provider = None
-    logger_provider = None
-
-    def shutdown(self) -> None:
-        return None
+    raw_tier = read_runtime_env(
+        RuntimeEnvKey.ENVIRONMENT, {"ENVIRONMENT": "local_test"}
+    )
+    assert resolve_tier(raw_tier) is EnvironmentTier.LOCAL_TEST
 
 
 @pytest.mark.parametrize(
@@ -130,11 +124,6 @@ def test_a_retired_shell_version_alias_cannot_stop_a_strict_start(
 ) -> None:
     """`SERVICE_VERSION` and the retired `IMAGE_TAG` with different values do not stop a
     strict start, with or without an endpoint: the SDK does not read `IMAGE_TAG`."""
-    import infra2_sdk.telemetry as sdk_otel
-
-    monkeypatch.setattr(
-        sdk_otel, "configure_telemetry", lambda _settings, **kw: _Providers()
-    )
     clear_telemetry_env(monkeypatch)
     monkeypatch.setenv("IMAGE_TAG", "2.0.0")
     monkeypatch.setenv("SERVICE_VERSION", "1.0.0")
@@ -146,5 +135,9 @@ def test_a_retired_shell_version_alias_cannot_stop_a_strict_start(
 
     app = FastAPI()
     init_service(app, "ambient-env-test", strict_otel=True)
-
-    assert {"/livez", "/readyz", "/health"} <= {route.path for route in app.routes}
+    try:
+        assert {"/livez", "/readyz", "/health"} <= {route.path for route in app.routes}
+    finally:
+        providers = getattr(app.state, "telemetry_providers", None)
+        if providers is not None:
+            providers.shutdown()

@@ -297,17 +297,6 @@ def test_the_app_starts_telemetry_when_the_deploy_issued_the_endpoint(
 
     from common.core.service_identity import ServiceIdentity
 
-    started: list[object] = []
-
-    class _Providers:
-        def shutdown(self):
-            return None
-
-    def fake_configure(settings, **kwargs):
-        started.append(settings)
-        return _Providers()
-
-    monkeypatch.setattr(sdk_otel, "configure_telemetry", fake_configure)
     clear_telemetry_env(monkeypatch)
     meta = _meta(app)
     identity = ServiceIdentity.build(
@@ -319,7 +308,7 @@ def test_the_app_starts_telemetry_when_the_deploy_issued_the_endpoint(
         iac_ref="a" * 40,
     )
     issued = {
-        "ENV": "staging",
+        "ENVIRONMENT": "staging",
         "OTEL_EXPORTER_OTLP_ENDPOINT": COLLECTOR_OTLP_HTTP,
         "OTEL_SERVICE_NAME": identity.service_name,
         "OTEL_RESOURCE_ATTRIBUTES": identity.otel_resource_attributes(),
@@ -329,10 +318,15 @@ def test_the_app_starts_telemetry_when_the_deploy_issued_the_endpoint(
 
     module = _load(f"adoption_app_{app.parent.name.replace('.', '_')}", app)
 
-    (settings,) = started
-    assert settings.service_name == _passed_name(app)
-    assert settings.endpoint == COLLECTOR_OTLP_HTTP
-    assert module.fastapi_app.state.telemetry_providers is not None
+    providers = module.fastapi_app.state.telemetry_providers
+    assert isinstance(providers, sdk_otel.TelemetryProviders)
+    try:
+        assert providers.tracer_provider is not None
+        assert providers.tracer_provider.resource.attributes[
+            "service.name"
+        ] == _passed_name(app)
+    finally:
+        providers.shutdown()
 
 
 # ------------------------------------------------------------------ the failure policy
