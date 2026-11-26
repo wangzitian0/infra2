@@ -624,6 +624,7 @@ def test_launcher_imports_modules_against_real_storage_cli(tmp_path):
         text=True,
         capture_output=True,
         cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path)},
         timeout=60,
     )
     assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
