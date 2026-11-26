@@ -473,3 +473,75 @@ def test_run_recorded_check_streams_and_captures_live_subprocess(
         "status": "fail",
         "summary": "failing stream check: boom-err",
     }
+
+
+def test_ops_checks_audit_job_records_staging_canary_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 4: ops-checks.yml audit job invokes tools.canary_verify via --record-check
+    and deploy_guard_audit surfaces fail/skip outcomes for guard:canary-verify-staging."""
+    import sys
+
+    import yaml
+
+    repo_root = Path(__file__).resolve().parents[2]
+    wf = yaml.safe_load(
+        (repo_root / ".github/workflows/ops-checks.yml").read_text(encoding="utf-8")
+    )
+    audit_job = wf["jobs"]["audit"]
+    env = audit_job["env"]
+    assert env["INFRA2_WATCHDOG_SSH_HOST"] == "${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}"
+    assert env["INFRA2_WATCHDOG_SSH_USER"] == "${{ secrets.INFRA2_WATCHDOG_SSH_USER }}"
+    assert (
+        env["INFRA2_WATCHDOG_SSH_PRIVATE_KEY"]
+        == "${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}"
+    )
+    steps = audit_job["steps"]
+    verify_step = next(
+        s for s in steps if s.get("name") == "Verify Canary Todo reality (staging)"
+    )
+    run_script = verify_step["run"]
+    assert (
+        "--record-check guard:canary-verify-staging" in run_script
+        and "python -m tools.canary_verify --env staging --require-platform-deps"
+        in run_script
+    )
+    assert "--skip-check guard:canary-verify-staging missing-ssh-key" in run_script
+
+    assert "guard:canary-verify-staging" in deploy_guard_audit.ALL_GUARD_KEYS
+    guard_report = tmp_path / "guard-canary-report.json"
+    report_env = {deploy_guard_audit.REPORT_ENV: str(guard_report)}
+    monkeypatch.setenv(deploy_guard_audit.REPORT_ENV, str(guard_report))
+
+    assert (
+        deploy_guard_audit.cli(
+            ["--skip-check", "guard:canary-verify-staging", "missing-ssh-key"]
+        )
+        == 0
+    )
+    assert "guard:canary-verify-staging" in deploy_guard_audit.unevaluated_prefixes(
+        report_env
+    )
+
+    rc = deploy_guard_audit.cli(
+        [
+            "--record-check",
+            "guard:canary-verify-staging",
+            "Canary Todo staging reality verification",
+            "--",
+            sys.executable,
+            "-c",
+            "import sys; print('logs pillar failed', file=sys.stderr); raise SystemExit(1)",
+        ]
+    )
+    assert rc == 1
+    assert "guard:canary-verify-staging" not in deploy_guard_audit.unevaluated_prefixes(
+        report_env
+    )
+    assert deploy_guard_audit.observed_all_clean(report_env) is False
+    assert deploy_guard_audit.confirmed_finding_pairs(report_env) == [
+        (
+            "guard:canary-verify-staging",
+            "- guard:canary-verify-staging: Canary Todo staging reality verification: logs pillar failed",
+        )
+    ]

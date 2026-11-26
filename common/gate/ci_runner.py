@@ -283,14 +283,14 @@ def run_compose(verbose: bool = False, changed_only: bool = False) -> int:
 
     # 1. Discover compose files
     compose_files: list[Path] = []
-    for pattern in ("compose.yaml", "compose.yml"):
+    for pattern in ("compose.yaml", "compose.yml", "*.compose.yaml"):
         for path in ROOT.glob(f"**/{pattern}"):
             path_str = str(path)
             if any(skip in path_str for skip in (".venv", "node_modules", ".git")):
                 continue
             compose_files.append(path)
 
-    compose_files.sort()
+    compose_files = sorted(set(compose_files))
     print(f"  Found {len(compose_files)} compose file(s) to validate.")
 
     # 2. Validate YAML syntax for all compose files
@@ -511,11 +511,14 @@ def run_vault(
                 print(f"  ❌ Missing 'exit_on_retry_failure = true' in {rel}")
                 failed = True
 
-        compose_files = [
-            p
-            for p in ROOT.glob("**/compose.yaml")
-            if not any(s in str(p) for s in (".venv", "node_modules", ".git"))
-        ]
+        compose_files = sorted(
+            {
+                p
+                for pattern in ("**/compose.yaml", "**/preview.compose.yaml")
+                for p in ROOT.glob(pattern)
+                if not any(s in str(p) for s in (".venv", "node_modules", ".git"))
+            }
+        )
         for compose in compose_files:
             rel = compose.relative_to(ROOT)
             try:

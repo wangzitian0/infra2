@@ -137,6 +137,7 @@ def _validate_step() -> dict:
 def test_the_ci_job_runs_the_compiled_validation():
     step = _validate_step()
     assert "python3 -m tools.compose_compile validate" in step["run"]
+    assert "*.compose.yaml" in step["run"]
     assert "docker compose -f" not in step["run"]
     # CI_COMPOSE_ENV is the one dummy environment; the step must not define a second one.
     assert "env" not in step
@@ -145,3 +146,13 @@ def test_the_ci_job_runs_the_compiled_validation():
 @pytest.mark.parametrize("key", ["ENV", "ENV_SUFFIX", "VAULT_ADDR", "IMAGE_DIGEST"])
 def test_ci_compose_env_holds_the_deploy_variables(key):
     assert CI_COMPOSE_ENV[key]
+
+
+def test_ci_compose_env_holds_todo_preview_throwaway_secrets():
+    from common.deploy.env_config import preview_service_config
+
+    config = preview_service_config("platform/todo")
+    missing = [
+        name for name in config.throwaway_secrets if not CI_COMPOSE_ENV.get(name)
+    ]
+    assert missing == []

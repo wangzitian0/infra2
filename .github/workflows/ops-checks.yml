@@ -109,6 +109,10 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
       DEPLOY_GUARD_AUDIT_REPORT: ${{ github.workspace }}/deploy-guard-audit-report.json
       GITHUB_SERVER_URL: ${{ github.server_url }}
       GITHUB_REPOSITORY: ${{ github.repository }}
@@ -193,6 +197,24 @@ jobs:
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python tools/deploy_guard_audit.py --record-check guard:scheduled-app-audit "scheduled App runtime audits" -- python -m tools.reconcile_iac_inputs --run-scheduled-audit --output-json scheduled-audit-result.json --artifacts-dir scheduled-audit-artifacts
+
+      - name: Configure SSH key for Canary reality verification
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' && env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_watchdog
+          chmod 600 ~/.ssh/infra2_watchdog
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_watchdog" >> "$GITHUB_ENV"
+
+      - name: Verify Canary Todo reality (staging)
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
+        run: |
+          if [[ -z "${INFRA2_WATCHDOG_SSH_KEY_PATH:-}" ]]; then
+            python tools/deploy_guard_audit.py --skip-check guard:canary-verify-staging missing-ssh-key
+          else
+            python tools/deploy_guard_audit.py --record-check guard:canary-verify-staging "Canary Todo staging reality verification" -- python -m tools.canary_verify --env staging --require-platform-deps
+          fi
 
       - name: Upload scheduled audit artifacts
         if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
