@@ -27,6 +27,7 @@
 | **部署指南** | [Infra-007](../project/archive/README.md#infra-007) | SigNoz 安装 |
 
 In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → platform/12.alerting → Feishu/Lark`。
+整体遵循**一套监控、三个防静默失效模块**：VPS 自有 OTel 接收与探测节点承担重活，Cloudflare Worker 边缘心跳看护整机与网关出网，GitHub Actions 定时巡检与周报看护调度器与数据备份，三者同时失效概率极低。
 带外检测**独立于 VPS**(SigNoz 与 bridge 都在单台机器上,会和宿主一起挂),故走 Cloudflare 边缘 cron 直发 Feishu。
 
 > [!WARNING]
@@ -129,8 +130,8 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
 
 ### 3.1 推送格式(#905)
 
-**统一转换的三个面**——bridge 发的**飞书交互卡片**(`common/alerting/card.py::build_feishu_alert_card`)、Cloudflare Worker 文本、
-以及 GitHub 日级 watchdog 文本——全部使用同一套 `PAGER_FIELDS` 字段、同一顺序、中文标签。
+**统一转换的三个面**——bridge 发的**飞书交互卡片**(`common/alerting/card.py::build_feishu_alert_card`)、Cloudflare Worker 交互卡片、
+以及 GitHub 日级 watchdog 报告卡片——全部使用同一套 `PAGER_FIELDS` 字段、同一顺序、中文标签(见 §3.2「没有文本推送」)。
 
 | # | 字段 | 内容 |
 |---|------|------|
@@ -290,7 +291,7 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 
 ### 4.6 告警/仪表盘 config-as-code(#373 / #1389)
 
-定义签入 `finance_report/finance_report/observability/alert_rules.json`(含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`;任务体在 `common/observability/apply_tasks.py::make_observability_tasks`,#1825)、`truealpha/truealpha/observability/alert_rules.json`、`platform/30.todo/alert_rules.json`、`common/alerting/standard_rules.py`(标准错误日志规则表,#1649;`common/observability_dashboards.py::load_alert_definitions` 合并,#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
+定义签入 `finance_report/finance_report/observability/alert_rules.json`(RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`;任务体在 `common/observability/apply_tasks.py::make_observability_tasks`,#1825)、`truealpha/truealpha/observability/alert_rules.json`、`platform/30.todo/alert_rules.json`、`common/alerting/standard_rules.py`(标准错误日志规则表，含 `FinanceReportBackendErrorLogs`,#1649/#1675;`common/observability_dashboards.py::load_alert_definitions` 合并,#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(已接入 `reconcile-iac-inputs.yml` `promote_prod=true` 流程)。
 
 **Staging(#1649)**:标准规则表与各服务目录里的规则都为 `production` 和 `staging` 各生成一份(PromQL 中的 `{env}` 由加载器填入);staging 规则名加 `Staging` 后缀,桥按 `environment=staging` 标签只发 report 到报告群,从不呼出。`PlatformTodoProbeFailures` 由 `apply-alerts --prune` 删除(#1648)。staging 心跳过期(>90 分钟)在每日 watchdog 报告里是一条 note,不呼出。每日生产 e2e 冒烟(`e2e-regressions-smoke`)红灯时开一个 `prod.e2e-smoke` 状态 issue,每日 watchdog 报告把它列在最前,绿灯关闭。
 
@@ -305,7 +306,7 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
 
 - Every query filters on `deployment.environment.name IN $deployment_environment` and on `service.name`. The legacy key `deployment.environment` is not allowed.
 - `common/tests/test_observability_dashboards.py` holds the catalog of metrics per service and fails on a metric the service does not export.
-- The portal "Applications" group links a dashboard only for a business application (`truealpha/truealpha/observability/dashboard.json`). The platform dashboards have no portal link.
+- The portal "Applications" group links a dashboard for each business application whose `<layer>/observability/dashboard.json` exists (`finance_report` and `truealpha`, built by `common/observability/portal_apps.py`). Platform dashboards have no portal link.
 - Merge deploys nothing. The observability apply is a production job that waits for the owner.
 
 **规则能否触发由下列 SigNoz 行为决定(#906 按 v0.105.1 源码核实;违反任一条,规则照样被 API 接受、状态显示 inactive,但永远不会触发)**:
@@ -328,7 +329,7 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
 |------|-----------|--------|----------|--------|
 | L1 Bootstrap | 1Password Connect | `/health` not active or sync not active | P0 | Live (`op-connect-http`) |
 | L1 Bootstrap | Vault | sealed / unreachable / token validation fails | P0 | Live probe + vault audit |
-| L1 Bootstrap | IaC Runner | `/health` fails before deploy webhook | P1 | Live (`iac-runner-http`) |
+| L1 Bootstrap | IaC Runner | `/health` fails before deploy webhook | P2 | Live (`iac-runner-http`, `iac-runner-public-http`) |
 | L1 Bootstrap | Dokploy | deployment control-plane API/UI unreachable or deploy webhooks fail; app health alerts remain app-owned | P1 | Live probe |
 | Cross-cutting | Docker container health | any container `unhealthy`/`starting`/`Restarting` outside a deploy window | P0/P1 | `container-breakdown-watch`(VPS);GitHub 日审计 `infra2-docker-health` 只报告(#908) |
 | L2 Platform | platform Postgres | TCP readiness fails / restart loop | P0 | Live probe |
@@ -341,14 +342,14 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
 | L2 Platform | OpenPanel API | `/healthcheck` fails or synthetic `/track` nonce not queryable | P1 | `openpanel-api-http`, `openpanel-roundtrip` |
 | L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck + `openpanel-roundtrip` |
 | L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P2 / P2 | Live probes (`openpanel-worker-http`, `openpanel-dashboard-http`);worker 停止落库时由 `openpanel-roundtrip` 以 P1 发 |
-| L2 Platform | Portal / Prefect | frontend / server-health unavailable | P2 / P1 | Planned |
+| L2 Platform | Portal / Prefect | static dashboard (exempt) / server-health unavailable | — / P0 | Exempt (`21.portal`) / Live (`prefect-internal-http`) |
 | L2 Platform | Canary Todo | a write path is red: Redis AUTH+SETEX/GET/DEL, Postgres login as `todo_app` + `SELECT 1`, S3 PUT/GET/DELETE (`fail`), or a missing canary credential (`unconfigured`). SigNoz/OpenPanel/Authentik liveness is informational and never gates | P1 (staging: report) | Live (`todo-canary-status`, internal URL, 3-round debounce, #991) |
-| L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P1 | Planned |
+| L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P0 | Live (`finance-report-postgres-tcp`, `finance-report-redis-tcp`) |
 | L3 Finance Report | fr-app backend | OTEL ERROR/CRITICAL/FATAL > 10 in 15m | P1 | code (`FinanceReportBackendErrorLogs`) |
-| L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`, and the `Stable` pair that reads the stable HTTP metric, #1465) |
+| L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`, #1465) |
 | L3 Finance Report | fr-app backend | business anomaly: parse spike / rate-limit / async failure | P1/P2/P1 | code (`FinanceReport{StatementParseFailureSpike,RateLimitSaturation,AsyncTaskFailures}`) |
 | L3 Finance Report | fr-app backend | no request metrics from production for 10m (backend down or OTLP export stopped) | P1 | code (`FinanceReportBackendTelemetryAbsent`) |
-| L3 TrueAlpha | truealpha-app llm | 端点与身份已签发(#906);`truealpha/truealpha/observability/alert_rules.json` 签入错误日志、RED SLO 与遥测缺失规则(#1389);`common/alerting/standard_rules.py` 签入平台层错误日志规则(`PlatformAlertingErrorLogs`, `PlatformTodoErrorLogs`) | P0/P1 | code (`TrueAlphaAppErrorLogs`, `TrueAlphaHigh5xxRate`, `TrueAlphaP95LatencyHigh`, their `Stable` twins that read the stable HTTP metric (#1465), `TrueAlphaAppTelemetryAbsent`);签发 ✅ `test_truealpha_app.py` |
+| L3 TrueAlpha | truealpha-app llm | 端点与身份已签发(#906);`truealpha/truealpha/observability/alert_rules.json` 签入错误日志、RED SLO 与遥测缺失规则(#1389);`common/alerting/standard_rules.py` 签入平台层错误日志规则(`PlatformAlertingErrorLogs`, `PlatformTodoErrorLogs`) | P0/P1 | code (`TrueAlphaAppErrorLogs`, `TrueAlphaHigh5xxRate`, `TrueAlphaP95LatencyHigh`, `TrueAlphaAppTelemetryAbsent`);签发 ✅ `test_truealpha_app.py` |
 | L3 TrueAlpha | data_engine(Dagster) | host 网络容器经 `http://127.0.0.1:14318` 上报 OTLP(#1231, §4.2);错误日志规则签入 `truealpha/truealpha/observability/alert_rules.json`(#1389),存活同时由容器 healthcheck + breakdown watch 守卫 | P1 | code (`TrueAlphaDataEngineErrorLogs`) |
 | L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` fails | P0 prod / P2 staging | Live in-band public-route probes (`finance-report-{web,api}-public-route`);prod web 另由 Cloudflare 作为产品外部入口(2 次连续失败)|
 | Cross-cutting | Vault app tokens / rendered env | missing / malformed / invalid / low-TTL / `<no value>` | P0/P1 | Docker healthcheck + `vault-audit.self-refresh` |

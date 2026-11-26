@@ -22,7 +22,7 @@
 | **数据目录** | `${DATA_PATH}` |
 | **容器名** | `platform-redis${ENV_SUFFIX}` |
 | **端口** | `6379` |
-| **环境变量** | `REDIS_PASSWORD` |
+| **环境变量** | `PASSWORD`（`platform/02.redis/compose.yaml` 读取；消费方通过 Vault 模板组合为 `REDIS_URL`） |
 
 ---
 

@@ -116,7 +116,7 @@ python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref v
 | 命令 | 说明 |
 |------|------|
 | `invoke env.get KEY --project=<project> --env=<env> --service=<service>` | 读取密钥 |
-| `invoke env.set KEY=VAL --project=<project> --env=<env> --service=<service>` | 写入密钥 |
+| `invoke env.set KEY=VAL --project=<project> --env=<env> --service=<service> --type=root_vars` | 写入 1Password 根密钥 |
 | `invoke env.list-all --project=<project> --service=<service>` | 列出密钥（masked） |
 | `invoke env.init-status` | 查看 init/env_vars |
 
@@ -158,7 +158,7 @@ DEPLOY_ENV=production invoke fr-app.shared.status
 
 ## 📦 业务应用接入与部署（Finance Report / TrueAlpha）
 
-应用仓库（`repos/finance_report`、`repos/truealpha`）保持独立发布节奏，通过 GitHub Actions 发送签名的 `AppDeployRequest` 或调用 `python -m tools.deploy_v2` 统一前门完成部署。完整契约与操作手册见：
+应用仓库（`repos/finance_report`、`repos/truealpha`）保持独立发布节奏，由 `infra2` 的拉取式发布列车（`harness/repos.yaml` + `tools/reconcile_iac_inputs.py`）和统一前门 `python -m tools.deploy_v2` 完成部署。完整契约与操作手册见：
 
 - **应用部署与交付模型**：[docs/ssot/ops.pipeline.md](docs/ssot/ops.pipeline.md)
 - **环境隔离与四轴坐标（`deploy_v2`）**：[docs/ssot/core.environments.md](docs/ssot/core.environments.md)
