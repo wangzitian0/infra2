@@ -17,8 +17,10 @@ import pytest
 
 from common.core import registry as reg
 from common.core.facets import SecretsFacet
-from common.security.vault_self_refresh_audit import (
+from common.security import vault_audit as vault_audit_module
+from common.security.vault_audit import (
     VaultService,
+    _resolve_env_suffix,
     _vault_service_from_facet,
     inventory_ids_not_in_production,
     load_inventory,
@@ -29,15 +31,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_absorbed_constants_equivalence() -> None:
-    """The two retired audit-module constants live on as facet fields with the
+    """The retired audit-module constant lives on as a facet field with the
     exact same content:
       MOUNT_EXEMPT_CONTAINERS == {platform-prefect-worker, -staging} — one
         symbolic ${ENV_SUFFIX} entry on platform/prefect resolves to exactly
-        those two names across the audit's production/staging runs;
-      OPTIONAL_INERT_FIELD_WATCHLIST == () (its one entry, finance_report/app
-        LLM_ENCRYPTION_KEYS, went with the field)."""
-    from common.security.vault_self_refresh_audit import _resolve_env_suffix
-
+        those two names across the audit's production/staging runs."""
     by_id = {service.id: service for service in load_inventory()}
     assert by_id["platform/prefect"].mount_exempt_containers == (
         "platform-prefect-worker${ENV_SUFFIX}",
@@ -54,14 +52,6 @@ def test_absorbed_constants_equivalence() -> None:
         if svc.mount_exempt_containers and sid != "platform/prefect"
     }
     assert exempt_elsewhere == {}
-
-    # finance_report deleted LLM_ENCRYPTION_KEYS (v0.2.96): no service declares an optional inert field now.
-    inert = {
-        sid: svc.optional_inert_fields
-        for sid, svc in by_id.items()
-        if svc.optional_inert_fields
-    }
-    assert inert == {}
 
 
 def test_not_in_production_derivation_matches_deploy_side_facts() -> None:
@@ -106,13 +96,11 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
         attrs["platform/postgres"] = clashing
         return attrs
 
-    from common.security import vault_self_refresh_audit as audit_module
-
     original = reg.service_attrs
     try:
         reg.service_attrs = fake_attrs  # type: ignore[assignment]
         with pytest.raises(ValueError, match="duplicate vault inventory id"):
-            audit_module.load_inventory()
+            vault_audit_module.load_inventory()
     finally:
         reg.service_attrs = original  # type: ignore[assignment]
 
@@ -228,22 +216,3 @@ def test_counterfactual_compose_path_edit_moves_audit_expectation() -> None:
     assert derived.compose_path == "platform/98.moved/compose.yaml"
     assert derived.vault_agent_config_path == "platform/98.moved/vault-agent.hcl"
     assert derived.secret_template_path == "platform/98.moved/secrets.ctmpl"
-
-
-def test_a_declared_optional_inert_field_reaches_the_inventory_row() -> None:
-    """Review of #1954: no service declares an optional inert field now, so the derivation of the inventory row
-    (`_vault_service_from_facet`) is tested with a synthetic declaration. Without it, a derivation that drops the
-    field would pass every test."""
-    import dataclasses
-
-    from common.core.registry import service_attrs
-    from common.security.vault_audit import _vault_service_from_facet
-
-    meta = next(m for m in service_attrs().values() if m.secrets)
-    facet = dataclasses.replace(
-        meta.secrets[0], optional_inert_fields=("EXAMPLE_OPTIONAL_KEY",)
-    )
-    assert _vault_service_from_facet(meta, facet).optional_inert_fields == (
-        "EXAMPLE_OPTIONAL_KEY",
-    )
-    assert _vault_service_from_facet(meta, meta.secrets[0]).optional_inert_fields == ()

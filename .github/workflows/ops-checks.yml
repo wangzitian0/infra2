@@ -962,7 +962,7 @@ jobs:
     # app containers, so it can't run on untrusted PR branches — scheduled + manual
     # only, same as the other live-Dokploy/SSH-state checks in this file. Reuses the
     # INFRA2_WATCHDOG_SSH_* credentials the watchdog jobs already
-    # provision (no new secret) — see common/vault_self_refresh_audit.py::_ssh.
+    # provision (no new secret) — see common/security/vault_self_refresh_audit.py::_ssh.
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 8 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'vault-self-refresh-audit' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1040,7 +1040,7 @@ jobs:
           fi
           # READ-ONLY: GETs each inventory service's Dokploy compose env and SSHes into
           # the VPS to `docker inspect`/`docker exec cat`/`docker logs` its vault-agent
-          # and app containers (common/vault_self_refresh_audit.py::collect_live_
+          # and app containers (common/security/vault_self_refresh_audit.py::collect_live_
           # observations). Fails the STEP (exit 1) on ANY non-pass result, including a
           # transient SSH/Dokploy lookup hiccup, so it's visible in the run log and
           # retried on tomorrow's schedule — but only a confirmed `status="fail"`

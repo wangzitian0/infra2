@@ -167,27 +167,6 @@ def validate_backup_inventory(manifest_path: Path | None = None) -> list[str]:
     return ids
 
 
-def legacy_backup_aliases() -> dict[str, tuple[str, ...]]:
-    """Derive legacy service_id aliases in backup manifests from service registry.
-
-    A service declaring legacy_compose_names (e.g. S3Deployer with legacy_compose_names=("minio",))
-    maps its canonical service_id ("platform/s3") to legacy service_ids ("platform/minio").
-    Retirement condition: Once the host backup script emits platform/s3 and older manifests rotate
-    out of the RPO window, legacy_compose_names can be retired.
-    """
-    from common.core.registry import service_attrs
-
-    attrs = service_attrs()
-    aliases: dict[str, tuple[str, ...]] = {}
-    for service_id, meta in attrs.items():
-        if meta.legacy_compose_names:
-            layer = service_id.split("/")[0]
-            aliases[service_id] = tuple(
-                f"{layer}/{name}" for name in meta.legacy_compose_names
-            )
-    return aliases
-
-
 def verify_backup_manifest(
     entries: list[BackupEntry],
     manifest: dict[str, Any],
@@ -198,16 +177,8 @@ def verify_backup_manifest(
         str(item.get("service_id")): item for item in manifest.get("artifacts", [])
     }
     checks: list[BackupCheck] = []
-    aliases_map = legacy_backup_aliases()
     for entry in entries:
         artifact = artifacts.get(entry.service_id)
-        satisfied_by: str | None = None
-        if not artifact and entry.service_id in aliases_map:
-            for legacy_id in aliases_map[entry.service_id]:
-                artifact = artifacts.get(legacy_id)
-                if artifact:
-                    satisfied_by = legacy_id
-                    break
         if not artifact:
             checks.append(
                 _check(
@@ -220,14 +191,6 @@ def verify_backup_manifest(
             )
             continue
         check = _verify_artifact(entry, artifact, now=now)
-        if satisfied_by:
-            check = BackupCheck(
-                service_id=check.service_id,
-                status=check.status,
-                severity=check.severity,
-                summary=check.summary,
-                evidence={**check.evidence, "satisfied_by_legacy_alias": satisfied_by},
-            )
         checks.append(check)
     status = "pass" if all(check.status == "pass" for check in checks) else "fail"
     return {

@@ -865,11 +865,10 @@ def test_the_audit_fails_a_compiled_release_without_its_template_label(
     monkeypatch, tmp_path: Path
 ) -> None:
     import common.security.vault_audit as va
-    import common.security.vault_self_refresh_audit as audit
 
     _repo_with(monkeypatch, tmp_path, TODO, _todo_source())
     monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(audit, "_release_template_sha256", lambda _service: "")
+    monkeypatch.setattr(va, "_release_template_sha256", lambda _service: "")
     service = _vault_service(TODO)
     result = va.classify_deployed_template(service, "a" * 64, "compiled")
     assert result.status == "fail" and result.severity == "P1", result
