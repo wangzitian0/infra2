@@ -1,4 +1,4 @@
-"""Control-plane production deploy evidence verification (absorbed from infra2-sdk v4.9.1)."""
+"""Control-plane production deploy evidence verification (absorbed from infra2-sdk)."""
 
 from __future__ import annotations
 

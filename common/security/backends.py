@@ -13,7 +13,6 @@ from typing import Any, Protocol
 from infra2_sdk.runtime.config_schema import (
     EnvironmentField,
     EnvironmentManifest,
-    _FieldSource,
 )
 from common.core.http_transport import HttpResponse, HttpTransport, urllib_transport
 
@@ -450,7 +449,7 @@ class SecretsResolver:
     def human_expected(self) -> dict[str, str]:
         return {
             f.key: v
-            for f in self.manifest.by_source(_FieldSource.HUMAN)
+            for f in self.manifest.by_source("human")
             if f.store_backed and (v := self._human_values(f).get(f.key))
         }
 
@@ -459,7 +458,7 @@ class SecretsResolver:
         missing = tuple(
             sorted(
                 f.key
-                for f in self.manifest.by_source(_FieldSource.HUMAN)
+                for f in self.manifest.by_source("human")
                 if f.store_backed and f.key not in exp and not f.empty_ok
             )
         )
@@ -467,9 +466,7 @@ class SecretsResolver:
 
     def ensure_runtime(self) -> _SyncReport:
         cur = self.store.read(self.path)
-        rt = [
-            f for f in self.manifest.by_source(_FieldSource.RUNTIME) if f.store_backed
-        ]
+        rt = [f for f in self.manifest.by_source("runtime") if f.store_backed]
         fresh = {
             f.key: self._generate(f)
             for f in rt
@@ -487,7 +484,7 @@ class SecretsResolver:
             raise SecretsError("no human backend configured")
         cur = self.store.read(self.path)
         changed, unchanged, missing = [], [], []
-        for f in self.manifest.by_source(_FieldSource.RUNTIME):
+        for f in self.manifest.by_source("runtime"):
             if not f.mirror_to_1password:
                 continue
             if not (val := cur.get(f.key)):
@@ -504,8 +501,8 @@ class SecretsResolver:
     def compose_env(self) -> dict[str, str]:
         out: dict[str, str] = {}
         missing: list[str] = []
-        for f in self.manifest.by_source(_FieldSource.RELEASE, _FieldSource.DECISION):
-            src = self.release if f.source == _FieldSource.RELEASE else self.decisions
+        for f in self.manifest.by_source("release", "decision"):
+            src = self.release if f.source == "release" else self.decisions
             if val := src.get(f.env, ""):
                 out[f.env] = val
             elif f.required or not f.empty_ok:

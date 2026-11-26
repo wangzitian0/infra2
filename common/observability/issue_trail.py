@@ -1,4 +1,4 @@
-"""Ops-checks GitHub issue trail & parser (absorbed from infra2-sdk v4.9.1)."""
+"""Ops-checks GitHub issue trail & parser (absorbed from infra2-sdk)."""
 
 from __future__ import annotations
 

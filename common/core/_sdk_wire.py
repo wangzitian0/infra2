@@ -1,4 +1,4 @@
-"""Strict primitives shared by versioned wire contracts (absorbed from infra2-sdk v4.9.1)."""
+"""Strict primitives shared by versioned wire contracts (absorbed from infra2-sdk)."""
 
 from __future__ import annotations
 

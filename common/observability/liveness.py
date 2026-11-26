@@ -1,4 +1,4 @@
-"""Scheduler liveness bounds and flapping hysteresis (absorbed from infra2-sdk v4.9.1)."""
+"""Scheduler liveness bounds and flapping hysteresis (absorbed from infra2-sdk)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Minimal injectable HTTP transport shared by open-protocol adapters (absorbed from infra2-sdk v4.9.1)."""
+"""Minimal injectable HTTP transport shared by open-protocol adapters (absorbed from infra2-sdk)."""
 
 from __future__ import annotations
 

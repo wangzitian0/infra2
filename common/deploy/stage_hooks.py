@@ -1,4 +1,4 @@
-"""Control-plane stage hook planning and manifest loaders (absorbed from infra2-sdk v4.9.1)."""
+"""Control-plane stage hook planning and manifest loaders (absorbed from infra2-sdk)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from infra2_sdk.manifests import CELL_POLICIES, CellPolicy, RuntimeHooksManifest
-from infra2_sdk.runtime.config_schema import EnvironmentManifest, _load_manifest
+from infra2_sdk.runtime.config_schema import EnvironmentManifest
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,8 @@ def stage_hook_plan(stage: str) -> StageHookPlan:
 
 
 def load(path: str | Path, *, root: Path | None = None) -> EnvironmentManifest:
-    return _load_manifest(path, root=root)
+    target = Path(path) if root is None else root / path
+    return EnvironmentManifest.from_dict(json.loads(target.read_text(encoding="utf-8")))
 
 
 def load_hooks_manifest(

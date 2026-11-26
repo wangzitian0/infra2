@@ -1,4 +1,4 @@
-"""Merge several EnvironmentManifests for one stack (#1320, absorbed from infra2-sdk v4.9.1)."""
+"""Merge several EnvironmentManifests for one stack (#1320, absorbed from infra2-sdk)."""
 
 from __future__ import annotations
 
