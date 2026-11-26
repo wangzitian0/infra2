@@ -57,6 +57,22 @@ The bridge is internal only:
 http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
 ```
 
+## Files
+
+| File | Purpose |
+|------|---------|
+| `compose.yaml` | x-infra2 source; the compiler adds the vault-agent sidecar (#1822 step B) |
+| `Dockerfile` | Bridge and probe-runner image; CI publishes it as `ghcr.io/wangzitian0/infra2-alerting:<commit>` (`common/deploy/platform_images.py`) |
+| `app.py` | Feishu alert bridge |
+| `deploy.py` | Alerting deployer: probe facets, secret supply, runtime check |
+| `env.manifest.json` | Secret keys; the vault-agent template renders from it |
+| `shared_tasks.py` | `status`, SigNoz channel and rule tasks, `test_feishu` |
+| `vault-policy.hcl` | Read-only policy for the alerting secret |
+| `dashboard.json` | SigNoz dashboard |
+
+The compiled text has no `vault-agent.hcl` or `secrets.ctmpl` file in git. Read it with
+`python -m tools.compose_compile print platform/12.alerting/compose.yaml`.
+
 ## SigNoz Channel
 
 Create the SigNoz API key first if needed:

@@ -1,64 +1,14 @@
-services:
-  vault-agent:
-    mem_limit: 128m
-    cpu_shares: 256
-    init: true  # tini as PID1 reaps healthcheck ssl_client zombies
-    image: hashicorp/vault:1.15
-    container_name: platform-alerting-vault-agent${ENV_SUFFIX}
-    restart: always
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
-    entrypoint:
-      - sh
-      - -c
-      - |
-        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
-        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
-          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
-          exit 1
-        fi
-        if [ -z "$$VAULT_ADDR" ]; then
-          echo "VAULT_ADDR is required"
-          exit 1
-        fi
-        echo "$$VAULT_ROLE_ID" > /vault/role_id
-        echo "$$VAULT_SECRET_ID" > /vault/secret_id
-        # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
-        # natively. No token_file decay, no manual renew loop.
-        exec vault agent -config=/etc/vault/vault-agent.hcl
-    environment:
-      VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
-      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      ENVIRONMENT: ${ENV}
-      ENV_SUFFIX: ${ENV_SUFFIX:-}
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          # local checks every cycle (fast): secrets rendered + no unresolved template.
-          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
-          # vault token lookup THROTTLED to ~5min (token TTL is hours) so N vault-agents
-          # do not hammer Vault every 30s (#292). The local checks above still fail fast.
-          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
-            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
-            touch /tmp/.vault_hc
-          fi
-      interval: 30s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-    volumes:
-      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
-      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
-      - secrets:/vault/secrets
-    networks:
-      - dokploy-network
+# Platform alerting on x-infra2 (#1822 step B). common/deploy/compose_compile.py compiles
+# this file with infra2-sdk `compile_compose`, and the deploy uploads the compiled text as
+# Dokploy sourceType=raw. To read the compiled text:
+#   python -m tools.compose_compile print platform/12.alerting/compose.yaml
+x-infra2:
+  # One vault-agent sidecar, container platform-alerting-vault-agent${ENV_SUFFIX}. Its
+  # template is rendered from env.manifest.json (common.security.secrets_render).
+  vault:
+    name: platform-alerting
 
+services:
   feishu-alert-bridge:
     mem_limit: 1g
     # CI builds platform/12.alerting/Dockerfile on each push to main and pushes it to GHCR
@@ -68,29 +18,10 @@ services:
     image: "ghcr.io/wangzitian0/infra2-alerting:${INFRA_IAC_REF:?}"
     container_name: platform-alerting${ENV_SUFFIX}
     restart: unless-stopped
-    depends_on:
-      - vault-agent
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -e
-        waited=0
-        max_wait="300"
-        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
-          echo "Waiting for secrets file..."
-          sleep 2
-          waited=$$((waited + 2))
-        done
-        if [ ! -s /secrets/.env ]; then
-          echo "ERROR: /secrets/.env is missing or empty"
-          exit 1
-        fi
-        set -a
-        . /secrets/.env
-        set +a
-        exec "$$@"
-      - --
+    # x-vault waits for /secrets/.env, exports it, then runs this command. The Feishu
+    # credentials come from that file; they are never compose env, so Dokploy never
+    # stores them.
+    x-vault: {}
     command:
       - sh
       - -c
@@ -115,7 +46,6 @@ services:
         esac
         exec python /app/app.py
     environment:
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       PORT: "8080"
       # The SDK reads the environment tier from ENVIRONMENT when it configures telemetry.
       # ENV stays until the SDK retires its ENV alias (infra2#1823 N1).
@@ -136,15 +66,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    volumes:
-      - secrets:/secrets:ro
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
     labels:
       - "traefik.enable=false"
 
@@ -288,27 +209,12 @@ services:
       # recreation (deploys). Kept apart from the ledger dir: different owner,
       # different lifecycle (the ledger is read over SSH by the weekly report).
       - probe-state:/var/lib/infra-probe-state
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
     labels:
       - "traefik.enable=false"
 
 volumes:
-  secrets:
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "size=10m,mode=0755"
+  # The compiler adds the tmpfs `secrets` volume of the vault-agent sidecar.
   # Default local driver = persistent across `docker compose up` recreation.
   # Do NOT give it tmpfs driver_opts like `secrets`: that would empty it on
   # recreation, which is the #960 failure this volume exists to prevent.
   probe-state:
-
-networks:
-  dokploy-network:
-    external: true
