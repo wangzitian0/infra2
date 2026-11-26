@@ -375,12 +375,26 @@ def poll_platform_deploy_status(
     )
 
 
+def resolve_iac_runner_url(env: str, explicit_url: str | None = None) -> str:
+    """Resolve the iac-runner base URL for ``env`` (staging/preview vs production)."""
+    explicit = (explicit_url or "").strip()
+    if explicit:
+        return explicit
+    normalized = (env or "").strip().lower()
+    if normalized in ("staging", "preview") or normalized.startswith("preview/"):
+        staging_url = os.getenv("IAC_RUNNER_STAGING_URL", "").strip()
+        if staging_url:
+            return staging_url
+    return os.getenv("IAC_RUNNER_URL", "").strip()
+
+
 __all__ = [
     "STATUS_NOT_FOUND_GRACE_SECONDS",
     "STATUS_POLL_BACKOFF",
     "STATUS_POLL_INITIAL_SECONDS",
     "STATUS_POLL_MAX_SECONDS",
     "poll_platform_deploy_status",
+    "resolve_iac_runner_url",
     "status_poll_attempts",
     "status_poll_delays",
     "trigger_platform_deploy",

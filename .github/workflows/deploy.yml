@@ -100,6 +100,7 @@ jobs:
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+      IAC_RUNNER_STAGING_URL: ${{ vars.IAC_RUNNER_STAGING_URL || 'https://iac-staging.zitian.party' }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       # common.deploy.schema_gate's #698 pre-deploy schema gate (finance_report/app
       # staging/prod only, TODOWRITE:20): it SSHes to the VPS to run the check inside

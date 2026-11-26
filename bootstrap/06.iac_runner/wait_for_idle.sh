@@ -17,7 +17,7 @@
 #
 # An unknown count continues; reaching the limit fails closed (return 1).
 
-_IAC_RUNNER_IDLE_CONTAINER="iac-runner"
+_IAC_RUNNER_IDLE_CONTAINER="${IAC_RUNNER_CONTAINER:-iac-runner}"
 
 # Print the runner's in-flight deploy count, or print nothing when it is unknown.
 _iac_runner_in_flight_count() {

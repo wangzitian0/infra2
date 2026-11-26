@@ -14,8 +14,8 @@
 |------|----------------|------|
 | **Service Code** | [`bootstrap/06.iac_runner/`](../../bootstrap/06.iac_runner/) | 服务实现、Dockerfile |
 | **Deployment** | [`bootstrap/06.iac_runner/deploy.py`](../../bootstrap/06.iac_runner/deploy.py) | 部署脚本 |
-| **Secrets** | `secret/data/bootstrap/production/iac_runner` (Vault) | WEBHOOK_SECRET, GIT_REPO_URL |
-| **GitHub Workflows** | [`reconcile-iac-inputs.yml`](../../.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](../../.github/workflows/deploy.yml) | release tag 推送 → **自动 staging**；`workflow_dispatch promote_prod=true` → **显式 prod**（经 `deploy_v2 → /deploy`）。`deploy.yml` 只负责 runner 自身的带外重建（手动 `workflow_dispatch`，需 owner 批准；班车内的更新只在 `promote_prod=true` 的生产运行里跑，#1486）与手动 `deploy_v2` 入口 |
+| **Secrets** | `secret/data/bootstrap/{env}/iac_runner` (Vault, AppRole scoped per env) | WEBHOOK_SECRET, GIT_REPO_URL |
+| **GitHub Workflows** | [`reconcile-iac-inputs.yml`](../../.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](../../.github/workflows/deploy.yml) | release tag 推送 → **自动 staging (`iac-runner-staging`)**；`workflow_dispatch promote_prod=true` → **显式 prod (`iac-runner`)**（Wave 0 按 `runner_input_sha256` 独立更新对应实例） |
 | **Component README** | [`bootstrap/06.iac_runner/README.md`](../../bootstrap/06.iac_runner/README.md) | 操作手册 |
 
 ---
@@ -41,7 +41,7 @@ IaC Runner 是 **L1 Bootstrap 层**组件，负责部署 **L2 Platform 层**服�
 | 项目 | 管理方式 |
 |------|---------|
 | **Bootstrap** (1Password, Vault) | Manual deployment and recovery |
-| **IaC Runner source image** | GitHub Actions external bootstrap update before `/deploy` when `bootstrap/06.iac_runner/**` changes |
+| **IaC Runner source image** | Wave 0 (`runner_input_sha256` AST + Dockerfile closure): staging train updates `iac-runner-staging`; `promote_prod=true` updates `iac-runner` |
 | **Platform** (`iac_pinned`：postgres, redis, authentik, s3, signoz, alerting, openpanel …) | release tag 推送 → **自动 staging**（soak）；`promote_prod=true` → **显式 prod**，成功后记录 `production/vX.Y.Z` marker |
 | **Apps** (finance_report, truealpha) | 各自独立的 CI/CD Pipeline（经 `deploy_v2` 前门，不经本 Runner） |
 

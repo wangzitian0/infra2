@@ -21,7 +21,7 @@ path "auth/token/lookup-self" {
 }
 
 # Bootstrap secrets - IaC Runner's own configuration
-path "secret/data/bootstrap/+/iac_runner" {
+path "secret/data/bootstrap/{{env}}/iac_runner" {
   capabilities = ["read", "list"]
 }
 
@@ -33,31 +33,31 @@ path "secret/data/bootstrap/+/iac_runner" {
 # Platform secrets for syncing all platform services.
 # Sync tasks may repair missing runtime fields before deploying; deletion stays
 # reserved for operator/root-token maintenance.
-path "secret/data/platform/+/*" {
+path "secret/data/platform/{{env}}/*" {
   capabilities = ["create", "read", "update", "patch", "list"]
 }
 
 # Finance Report secrets for syncing app services.
 # Sync tasks may repair missing runtime fields before deploying; deletion stays
 # reserved for operator/root-token maintenance.
-path "secret/data/finance_report/+/*" {
+path "secret/data/finance_report/{{env}}/*" {
   capabilities = ["create", "read", "update", "patch", "list"]
 }
 
 # TrueAlpha secrets for syncing app services (same rationale as finance_report).
-path "secret/data/truealpha/+/*" {
+path "secret/data/truealpha/{{env}}/*" {
   capabilities = ["create", "read", "update", "patch", "list"]
 }
 
 # KV v2 LIST resolves to the secret/metadata/ path, not secret/data/, so the `list`
 # capabilities above are no-ops for actual enumeration. Grant metadata read/list for the
 # service-secret paths the runner lists.
-path "secret/metadata/platform/+/*" {
+path "secret/metadata/platform/{{env}}/*" {
   capabilities = ["read", "list"]
 }
-path "secret/metadata/finance_report/+/*" {
+path "secret/metadata/finance_report/{{env}}/*" {
   capabilities = ["read", "list"]
 }
-path "secret/metadata/truealpha/+/*" {
+path "secret/metadata/truealpha/{{env}}/*" {
   capabilities = ["read", "list"]
 }

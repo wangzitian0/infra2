@@ -4387,6 +4387,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--print-runner-input-hash",
+        action="store_true",
+        help=(
+            "print the deterministic sha256 input hash for iac-runner at --after "
+            "(Wave 0 bootstrap comparison)"
+        ),
+    )
+    parser.add_argument(
         "--phase",
         choices=("all", *PHASES),
         default="all",
@@ -4698,6 +4706,11 @@ def main(argv: list[str] | None = None) -> int:
                 "::error::--record-production-marker requires --promote-prod"
             )
         return record_deferred_production_marker(args, repo_root)
+    if args.print_runner_input_hash:
+        from common.deploy.config_hash import iac_runner_input_hash
+
+        print(iac_runner_input_hash(repo_root, ref=args.after or None))
+        return 0
     if args.print_changed_files:
         base = plan_base(
             args.after,

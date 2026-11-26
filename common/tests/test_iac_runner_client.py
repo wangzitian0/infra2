@@ -21,6 +21,7 @@ from common.deploy.iac_runner_client import (
     RunnerLostDeploymentError,
     _sign,
     poll_platform_deploy_status,
+    resolve_iac_runner_url,
     status_poll_attempts,
     status_poll_delays,
     trigger_platform_deploy,
@@ -875,3 +876,20 @@ def test_poll_raises_a_typed_error_for_an_interrupted_deploy_at_once():
 
     assert type(err.value).__name__ == "RunnerInterruptedError" and len(calls) == 2
     assert classify_failure(f"deploy_v2 failed: {err.value}\n")[0] is True
+
+
+def test_resolve_iac_runner_url_routes_staging_vs_prod(monkeypatch):
+    monkeypatch.setenv("IAC_RUNNER_URL", "https://iac.example")
+    monkeypatch.setenv("IAC_RUNNER_STAGING_URL", "https://iac-staging.example")
+
+    assert resolve_iac_runner_url("staging") == "https://iac-staging.example"
+    assert resolve_iac_runner_url("preview") == "https://iac-staging.example"
+    assert resolve_iac_runner_url("preview/pr") == "https://iac-staging.example"
+    assert resolve_iac_runner_url("prod") == "https://iac.example"
+    assert resolve_iac_runner_url("production") == "https://iac.example"
+    assert (
+        resolve_iac_runner_url("staging", "https://explicit.example")
+        == "https://explicit.example"
+    )
+    monkeypatch.delenv("IAC_RUNNER_STAGING_URL")
+    assert resolve_iac_runner_url("staging") == "https://iac.example"

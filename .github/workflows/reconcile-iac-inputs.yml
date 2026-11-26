@@ -207,7 +207,8 @@ jobs:
       # reconcile shells out to tools.deploy_v2, whose on-main guard needs an authenticated
       # GitHub compare call (#635).
       GITHUB_TOKEN: ${{ github.token }}
-      IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+      IAC_RUNNER_STAGING_URL: ${{ vars.IAC_RUNNER_STAGING_URL || 'https://iac-staging.zitian.party' }}
+      IAC_RUNNER_URL: ${{ (inputs.promote_prod && (vars.IAC_RUNNER_URL || 'https://iac.zitian.party')) || (vars.IAC_RUNNER_STAGING_URL || 'https://iac-staging.zitian.party') }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
       # HOOK_RUNNER_SECRET_NAMES in common/deploy/app_contract.py names these secrets (#1534).
@@ -296,75 +297,90 @@ jobs:
               esac
             done <<< "$changed_files"
 
-            if [[ "$bootstrap_changed" == "true" ]]; then
-              if [[ "$promote_prod" == "true" ]]; then
-                if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
-                  echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required to update the IaC Runner bootstrap."
-                  exit 1
-                fi
-                if [[ -z "${INFRA2_WATCHDOG_SSH_HOST:-}" ]]; then
-                  echo "::error::INFRA2_WATCHDOG_SSH_HOST is required."
-                  exit 1
-                fi
-                if [[ -z "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
-                  echo "::error::INFRA2_WATCHDOG_SSH_USER is required."
-                  exit 1
-                fi
-              fi
-              # The shared runner serves staging and production, so a rebuild is a production
-              # change (AGENTS.md rule 5; owner decision 2026-11-11, #1486). It runs only in
-              # the production run, after the owner approves the `production` environment.
-              if [[ "$promote_prod" == "true" ]]; then
-                echo "Deploy IaC Runner bootstrap changes for '$after'..."
-                install -m 700 -d ~/.ssh
-                printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
-                chmod 600 ~/.ssh/infra2_bootstrap
-                ssh_port_args=()
-                if [[ -n "${INFRA2_WATCHDOG_SSH_PORT:-}" ]]; then
-                  ssh_port_args=(-p "$INFRA2_WATCHDOG_SSH_PORT")
-                fi
-                deploy_sha="$(git rev-parse "$after^{commit}")"
-                ssh \
-                  -i ~/.ssh/infra2_bootstrap \
-                  "${ssh_port_args[@]}" \
-                  -o StrictHostKeyChecking=no \
-                  -o UserKnownHostsFile=/dev/null \
-                  "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
-                  "INFRA2_DEPLOY_SHA='${deploy_sha}' bash -s" \
-                  < scripts/deploy_iac_runner_bootstrap.sh
+            runner_target_env="staging"
+            if [[ "$promote_prod" == "true" ]]; then
+              runner_target_env="production"
+            fi
+            target_runner_hash="$(python -m tools.reconcile_iac_inputs --print-runner-input-hash --after "$after" 2>/dev/null || true)"
+            live_runner_hash=""
+            if [[ -n "$target_runner_hash" && -n "${IAC_RUNNER_URL:-}" ]]; then
+              live_runner_hash="$(
+                curl -sf --connect-timeout 5 --max-time 10 "${IAC_RUNNER_URL%/}/health" 2>/dev/null \
+                  | python -c 'import json,sys; print(json.load(sys.stdin).get("runner_input_sha256",""))' 2>/dev/null || true
+              )"
+            fi
 
-                echo "Check IaC Runner health..."
-                health_url="${IAC_RUNNER_URL%/}/health"
-                body="$(mktemp)"
-                last_status=""
-                healthy="false"
-                for attempt in $(seq 1 12); do
-                  : > "$body"
-                  status="$(curl -sS -o "$body" -w "%{http_code}" \
-                    --connect-timeout 10 \
-                    --max-time 20 \
-                    "$health_url" || true)"
-                  last_status="$status"
-                  echo "IaC Runner public health attempt ${attempt}/12: url=$health_url status=$status"
-                  if [[ -s "$body" ]]; then
-                    sed 's/^/  /' "$body" || true
-                  else
-                    echo "  <empty body>"
-                  fi
-                  if [[ "$status" == "200" ]]; then
-                    rm -f "$body"
-                    healthy="true"
-                    break
-                  fi
-                  sleep 10
-                done
-                if [[ "$healthy" != "true" ]]; then
-                  rm -f "$body"
-                  echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
-                  exit 1
-                fi
+            runner_needs_update="$bootstrap_changed"
+            if [[ -n "$target_runner_hash" ]]; then
+              if [[ "$live_runner_hash" == "$target_runner_hash" ]]; then
+                echo "Wave 0: iac-runner ($runner_target_env) already matches runner_input_sha256=$target_runner_hash; skipping rebuild"
+                runner_needs_update="false"
               else
-                echo "::notice::The IaC Runner bootstrap changed in this release. A rebuild is a production change, so it waits for the owner-approved production run (cumulative from the production marker)."
+                echo "Wave 0: iac-runner ($runner_target_env) hash mismatch (live=${live_runner_hash:-<empty>} target=$target_runner_hash); rebuilding"
+                runner_needs_update="true"
+              fi
+            fi
+
+            if [[ "$runner_needs_update" == "true" ]]; then
+              if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+                echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required to update the IaC Runner bootstrap."
+                exit 1
+              fi
+              if [[ -z "${INFRA2_WATCHDOG_SSH_HOST:-}" ]]; then
+                echo "::error::INFRA2_WATCHDOG_SSH_HOST is required."
+                exit 1
+              fi
+              if [[ -z "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
+                echo "::error::INFRA2_WATCHDOG_SSH_USER is required."
+                exit 1
+              fi
+              echo "Deploy IaC Runner bootstrap changes ($runner_target_env) for '$after'..."
+              install -m 700 -d ~/.ssh
+              printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
+              chmod 600 ~/.ssh/infra2_bootstrap
+              ssh_port_args=()
+              if [[ -n "${INFRA2_WATCHDOG_SSH_PORT:-}" ]]; then
+                ssh_port_args=(-p "$INFRA2_WATCHDOG_SSH_PORT")
+              fi
+              deploy_sha="$(git rev-parse "$after^{commit}")"
+              ssh \
+                -i ~/.ssh/infra2_bootstrap \
+                "${ssh_port_args[@]}" \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
+                "INFRA2_DEPLOY_SHA='${deploy_sha}' IAC_RUNNER_TARGET_ENV='${runner_target_env}' RUNNER_INPUT_SHA256='${target_runner_hash}' bash -s" \
+                < scripts/deploy_iac_runner_bootstrap.sh
+
+              echo "Check IaC Runner health..."
+              health_url="${IAC_RUNNER_URL%/}/health"
+              body="$(mktemp)"
+              last_status=""
+              healthy="false"
+              for attempt in $(seq 1 12); do
+                : > "$body"
+                status="$(curl -sS -o "$body" -w "%{http_code}" \
+                  --connect-timeout 10 \
+                  --max-time 20 \
+                  "$health_url" || true)"
+                last_status="$status"
+                echo "IaC Runner public health attempt ${attempt}/12: url=$health_url status=$status"
+                if [[ -s "$body" ]]; then
+                  sed 's/^/  /' "$body" || true
+                else
+                  echo "  <empty body>"
+                fi
+                if [[ "$status" == "200" ]]; then
+                  rm -f "$body"
+                  healthy="true"
+                  break
+                fi
+                sleep 10
+              done
+              if [[ "$healthy" != "true" ]]; then
+                rm -f "$body"
+                echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
+                exit 1
               fi
             fi
           fi
@@ -471,7 +487,8 @@ jobs:
       actions: read
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+      IAC_RUNNER_STAGING_URL: ${{ vars.IAC_RUNNER_STAGING_URL || 'https://iac-staging.zitian.party' }}
+      IAC_RUNNER_URL: ${{ (inputs.promote_prod && (vars.IAC_RUNNER_URL || 'https://iac.zitian.party')) || (vars.IAC_RUNNER_STAGING_URL || 'https://iac-staging.zitian.party') }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       # HOOK_RUNNER_SECRET_NAMES in common/deploy/app_contract.py names these secrets (#1534).
       # Only the staging_gate of truealpha reads them. A production run passes none: prod_gate

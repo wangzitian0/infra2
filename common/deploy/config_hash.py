@@ -8,12 +8,15 @@ from __future__ import annotations
 from common.deploy.yaml_text import safe_load_text
 
 from collections.abc import Iterable
+import ast
 import glob as _glob
 import hashlib
 import json
 from pathlib import Path
 import re
 import shlex
+import subprocess
+import tomllib
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GLOB_CHARS_RE = re.compile(r"[*?[]")
@@ -611,4 +614,160 @@ __all__ = [
     "_resolve_build_relative",
     "_resolve_compose_relative",
     "config_hash_from_items",
+    "iac_runner_input_hash",
 ]
+
+_RUNNER_SEED_MODULES = (
+    "bootstrap/06.iac_runner/webhook_server.py",
+    "bootstrap/06.iac_runner/sync_runner.py",
+)
+_RUNNER_EXTRA_PATHS = (
+    "scripts/deploy_iac_runner_bootstrap.sh",
+    "tools/sdk_requirement.py",
+)
+
+
+def _read_repo_bytes(repo_root: Path, rel_path: str, ref: str | None) -> bytes | None:
+    if ref is None:
+        candidate = repo_root / rel_path
+        return candidate.read_bytes() if candidate.is_file() else None
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "show", f"{ref}:{rel_path}"],
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _list_repo_tree(repo_root: Path, rel_dir: str, ref: str | None) -> list[str]:
+    if ref is None:
+        base = repo_root / rel_dir
+        if not base.is_dir():
+            return []
+        return sorted(
+            path.relative_to(repo_root).as_posix()
+            for path in base.rglob("*")
+            if path.is_file()
+        )
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "ls-tree",
+            "-r",
+            "--name-only",
+            ref,
+            "--",
+            rel_dir,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        return []
+    return sorted(line.strip() for line in proc.stdout.splitlines() if line.strip())
+
+
+def _is_ignored_runner_file(rel_path: str) -> bool:
+    pure = Path(rel_path)
+    return (
+        "__pycache__" in pure.parts
+        or pure.name.endswith((".pyc", ".pyo"))
+        or pure.suffix.lower() == ".md"
+    )
+
+
+def _resolve_repo_module(
+    repo_root: Path, module_name: str, ref: str | None, existing: set[str]
+) -> str | None:
+    if not module_name:
+        return None
+    top = module_name.split(".", 1)[0]
+    if top not in ("bootstrap", "common", "tools"):
+        return None
+    rel_base = module_name.replace(".", "/")
+    for candidate in (f"{rel_base}.py", f"{rel_base}/__init__.py"):
+        if (
+            candidate in existing
+            or _read_repo_bytes(repo_root, candidate, ref) is not None
+        ):
+            return candidate
+    return None
+
+
+def _runner_ast_closure(repo_root: Path, ref: str | None) -> set[str]:
+    closure: set[str] = set()
+    frontier = list(_RUNNER_SEED_MODULES)
+    while frontier:
+        rel_path = frontier.pop(0)
+        if rel_path in closure:
+            continue
+        raw = _read_repo_bytes(repo_root, rel_path, ref)
+        if raw is None:
+            continue
+        closure.add(rel_path)
+        try:
+            tree = ast.parse(raw.decode("utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            candidates: list[str] = []
+            if isinstance(node, ast.Import):
+                candidates.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                candidates.append(node.module)
+                for alias in node.names:
+                    candidates.append(f"{node.module}.{alias.name}")
+            for mod in candidates:
+                resolved = _resolve_repo_module(repo_root, mod, ref, closure)
+                if resolved and resolved not in closure:
+                    frontier.append(resolved)
+    return closure
+
+
+def _sdk_requirement_from_lock(raw_lock: bytes | None) -> str:
+    if raw_lock is None:
+        return ""
+    data = tomllib.loads(raw_lock.decode("utf-8"))
+    packages = [p for p in data.get("package", []) if p.get("name") == "infra2-sdk"]
+    if len(packages) != 1:
+        raise ValueError(
+            f"expected one infra2-sdk package in uv.lock, found {len(packages)}"
+        )
+    pkg = packages[0]
+    url = (pkg.get("source") or {}).get("url") or ""
+    wheels = pkg.get("wheels") or []
+    wheel_hash = str(wheels[0].get("hash") or "") if len(wheels) == 1 else ""
+    if not url or not wheel_hash.startswith("sha256:"):
+        raise ValueError("infra2-sdk wheel entry in uv.lock is malformed")
+    return f"infra2-sdk @ {url}#{wheel_hash.replace(':', '=', 1)}"
+
+
+def iac_runner_input_hash(
+    repo_root: Path = _REPO_ROOT, *, ref: str | None = None
+) -> str:
+    """Deterministic SHA-256 of Wave 0 runner runtime/build inputs at ``repo_root`` or ``ref``."""
+    root = Path(repo_root).resolve()
+    paths = {
+        path
+        for path in _list_repo_tree(root, "bootstrap/06.iac_runner", ref)
+        if not _is_ignored_runner_file(path)
+    }
+    paths.update(_RUNNER_EXTRA_PATHS)
+    paths.update(_runner_ast_closure(root, ref))
+
+    hasher = hashlib.sha256()
+    for rel_path in sorted(paths):
+        content = _read_repo_bytes(root, rel_path, ref)
+        if content is None:
+            continue
+        hasher.update(f"file\0{rel_path}\0{len(content)}\0".encode("utf-8"))
+        hasher.update(content)
+        hasher.update(b"\n")
+    sdk_req = _sdk_requirement_from_lock(_read_repo_bytes(root, "uv.lock", ref))
+    hasher.update(f"sdk_requirement\0{sdk_req}\n".encode("utf-8"))
+    return hasher.hexdigest()
