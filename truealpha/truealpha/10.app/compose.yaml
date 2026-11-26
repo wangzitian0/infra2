@@ -11,6 +11,7 @@
 # The deploy compiles this file with infra2-sdk `compile_compose` (#1822 Slice 3) and
 # uploads the compiled text as Dokploy sourceType=raw. To read the compiled text:
 #   python -m tools.compose_compile print truealpha/truealpha/10.app/compose.yaml
+# Staging soak trigger: deploy pinned app release after schema gate fix.
 x-infra2:
   # One vault-agent sidecar, container truealpha-app-vault-agent${ENV_SUFFIX}. Its
   # template is rendered from env.manifest.json (common.security.secrets_render). The

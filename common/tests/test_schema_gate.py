@@ -566,21 +566,114 @@ def test_launcher_keeps_the_return_code_of_main(tmp_path, code):
 
 
 def test_launcher_prefers_storage_check_schema_on_v410_sdk(tmp_path):
-    """When infra2_sdk.storage is present (v4.10+), _LAUNCHER invokes `check-schema`."""
+    """When infra2_sdk.storage is present (v4.10+), _LAUNCHER imports --import modules first and invokes `check-schema` without --import flags."""
+    (tmp_path / "x_mod.py").write_text("import sys\nsys._order = ['x']\n")
+    (tmp_path / "y_mod.py").write_text("import sys\nsys._order.append('y')\n")
     stub = _stub_sdk(
         tmp_path,
         "def main(argv):\n    raise AssertionError('legacy runtime should not run')\n",
         storage_source=(
-            "import json\ndef main(argv):\n    print(json.dumps(argv))\n    return 0\n"
+            "import json, sys\n"
+            "def main(argv):\n"
+            "    print(json.dumps({'argv': argv, 'order': sys._order}))\n"
+            "    return 0\n"
         ),
     )
-    spec_argv = sg.schema_check_argv(
-        "finance_report/app", sg._SCHEMA_CHECK_SPECS["finance_report/app"]
-    )
+    spec_argv = [
+        "--metadata",
+        "src.database:Base.metadata",
+        "--import",
+        "x_mod",
+        "--import",
+        "y_mod",
+        "--label",
+        "finance_report/app",
+    ]
     url = "postgresql+asyncpg://u:p@h:5432/db"
     result = _run_launcher(tmp_path, spec_argv, f"{url}\n", stub)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == ["check-schema", *spec_argv, "--db-url", url]
+    payload = json.loads(result.stdout)
+    assert payload["order"] == ["x", "y"]
+    assert payload["argv"] == [
+        "check-schema",
+        "--metadata",
+        "src.database:Base.metadata",
+        "--label",
+        "finance_report/app",
+        "--db-url",
+        url,
+    ]
+
+
+def test_launcher_imports_modules_against_real_storage_cli(tmp_path):
+    """Real installed infra2_sdk.storage CLI accepts remaining args after _LAUNCHER imports --import modules."""
+    (tmp_path / "mod_a.py").write_text("VALUE = 1\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            sg._LAUNCHER,
+            "--metadata",
+            "m:x",
+            "--import",
+            "mod_a",
+            "--label",
+            "finance_report/app",
+        ],
+        input="\n",
+        text=True,
+        capture_output=True,
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path)},
+        timeout=60,
+    )
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "DATABASE_URL is required" in result.stderr
+
+
+def test_launcher_fails_closed_when_storage_import_module_fails(tmp_path):
+    """Failing to import an --import module exits EXIT_NOT_EVALUATED with a clear message."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            sg._LAUNCHER,
+            "--metadata",
+            "m:x",
+            "--import",
+            "nonexistent_schema_mod",
+            "--label",
+            "finance_report/app",
+        ],
+        input="postgresql://h/db\n",
+        text=True,
+        capture_output=True,
+        cwd=tmp_path,
+        timeout=60,
+    )
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "failed to import nonexistent_schema_mod" in result.stderr
+
+
+def test_run_schema_gate_parses_labeled_storage_cli_rollback_class():
+    """Prefixed `[label] ROLLBACK_CLASS: <cls> pending=...` output parses cleanly on pass and block."""
+    pass_runner = FakeRunner(
+        [
+            _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
+            _ok(stdout="[finance_report/app] ROLLBACK_CLASS: A pending=0\n"),
+        ]
+    )
+    assert sg.run_schema_gate(**_gate_kwargs(runner=pass_runner, timeout=5)) == "A"
+
+    block_runner = FakeRunner(
+        [
+            _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
+            _fail(1, stdout="[finance_report/app] ROLLBACK_CLASS: C pending=1\n"),
+        ]
+    )
+    with pytest.raises(sg.SchemaGateError) as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=block_runner, timeout=5))
+    assert "(ROLLBACK_CLASS: C)" in str(exc_info.value)
 
 
 def test_launcher_maps_storage_main_exception_to_not_evaluated(tmp_path):

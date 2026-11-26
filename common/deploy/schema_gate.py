@@ -103,6 +103,7 @@ _SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
 # that escapes ``main``, also exit EXIT_NOT_EVALUATED: no comparison ran, so the result
 # is not BLOCKED. The return code of ``main`` (0, 1 or 3) and SystemExit pass unchanged.
 _LAUNCHER = f"""\
+import importlib
 import sys
 _use_storage = False
 try:
@@ -139,9 +140,37 @@ if not _use_storage:
 db_url = sys.stdin.readline().strip()
 try:
     if _use_storage:
-        code = storage.main(["check-schema", *sys.argv[1:], "--db-url", db_url])
+        rest = []
+        imports = []
+        argv = sys.argv[1:]
+        idx = 0
+        while idx < len(argv):
+            arg = argv[idx]
+            if arg == "--import":
+                if idx + 1 >= len(argv):
+                    raise ValueError("--import requires a module name")
+                imports.append(argv[idx + 1])
+                idx += 2
+            elif arg.startswith("--import="):
+                imports.append(arg.split("=", 1)[1])
+                idx += 1
+            else:
+                rest.append(arg)
+                idx += 1
+        for mod in imports:
+            try:
+                importlib.import_module(mod)
+            except Exception as exc:
+                print(
+                    f"NOT EVALUATED - deploy blocked: failed to import {{mod}}: " + repr(exc),
+                    file=sys.stderr,
+                )
+                sys.exit({EXIT_NOT_EVALUATED})
+        code = storage.main(["check-schema", *rest, "--db-url", db_url])
     else:
         code = schema_check.main([*sys.argv[1:], "--db-url", db_url])
+except SystemExit:
+    raise
 except Exception as exc:
     entry = "storage.main" if _use_storage else "schema_check.main"
     print(
@@ -296,6 +325,7 @@ def _read_database_url(
 
 
 _DB_PASSWORD_RE = re.compile(r"://([^:@\s]+):([^@\s]+)@")
+_ROLLBACK_CLASS_RE = re.compile(r"^(?:\[[^\]]+\]\s+)?ROLLBACK_CLASS:\s*(\S+)")
 
 
 def _sanitize_db_url(text: str) -> str:
@@ -392,8 +422,9 @@ def run_schema_gate(
     rollback_class = ""
     for line in (result.stdout or "").splitlines():
         line = line.strip()
-        if line.startswith("ROLLBACK_CLASS: "):
-            rollback_class = line.split(":", 1)[1].strip()
+        match = _ROLLBACK_CLASS_RE.match(line)
+        if match:
+            rollback_class = match.group(1).strip()
     if result.returncode != EXIT_OK:
         verdict = verdict_for_exit(result.returncode)
         suffix = f" (ROLLBACK_CLASS: {rollback_class})" if rollback_class else ""
