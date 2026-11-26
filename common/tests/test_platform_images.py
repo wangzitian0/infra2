@@ -183,6 +183,50 @@ def test_no_stack_compose_builds_a_published_dockerfile() -> None:
     assert found == []
 
 
+# --- the config hash reads the image input files ---------------------------------------
+
+
+def test_the_config_hash_reads_the_inputs_of_a_pinned_platform_image(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The service has no `build:`; the hash reads the Dockerfile and its copied files."""
+    from common.deploy import config_hash
+
+    image = _pinned(tmp_path, monkeypatch, "")
+    compose = tmp_path / "svc" / "compose.yaml"
+    text = "services:\n  app:\n" + _good_pin(image, tmp_path)
+    compose.write_text(text, encoding="utf-8")
+    assert config_hash._compose_artifact_files(str(compose), text) == [
+        tmp_path.resolve() / "lib" / "m.py",
+        tmp_path.resolve() / "svc" / "Dockerfile",
+    ]
+
+
+def test_the_config_hash_reads_no_platform_inputs_for_another_image(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from common.deploy import config_hash
+
+    _pinned(tmp_path, monkeypatch, "")
+    compose = tmp_path / "svc" / "compose.yaml"
+    text = "services:\n  app:\n    image: ghcr.io/x/other:1@" + DIGEST + "\n"
+    compose.write_text(text, encoding="utf-8")
+    assert config_hash._compose_artifact_files(str(compose), text) == []
+
+
+def test_the_real_s3_hash_reads_the_dockerfile_without_the_vault_mounts() -> None:
+    """Measured on this tree: the s3 service alone gives the Dockerfile as its one input."""
+    from common.deploy import config_hash
+
+    image = pi.PLATFORM_IMAGES["s3"]
+    compose = ROOT / image.compose
+    services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
+    text = yaml.safe_dump({"services": {"s3": services["s3"]}})
+    assert config_hash._compose_artifact_files(str(compose), text) == [
+        (ROOT / image.dockerfile).resolve()
+    ]
+
+
 # --- the CI matrix and workflow ---------------------------------------------------------
 
 
