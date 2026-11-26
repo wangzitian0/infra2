@@ -1,0 +1,44 @@
+name: SSH key setup
+description: Write INFRA2_WATCHDOG_SSH_PRIVATE_KEY to ~/.ssh and export INFRA2_WATCHDOG_SSH_KEY_PATH.
+
+inputs:
+  private-key:
+    description: "SSH private key value (passed from a job or step secret expression)."
+    required: false
+    default: ""
+  key-name:
+    description: "Key filename created under ~/.ssh."
+    required: true
+  required:
+    description: "Set to 'true' to fail when private-key is empty."
+    required: false
+    default: "false"
+  purpose:
+    description: "Short purpose phrase for error messages when required is 'true'."
+    required: false
+    default: "SSH access"
+
+runs:
+  using: composite
+  steps:
+    - name: Write SSH private key
+      shell: bash
+      env:
+        SSH_KEY_VALUE: ${{ inputs.private-key }}
+        SSH_KEY_NAME: ${{ inputs.key-name }}
+        SSH_KEY_REQUIRED: ${{ inputs.required }}
+        SSH_KEY_PURPOSE: ${{ inputs.purpose }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${SSH_KEY_VALUE:-}" ]]; then
+          if [[ "${SSH_KEY_REQUIRED}" == "true" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required for ${SSH_KEY_PURPOSE}."
+            exit 1
+          fi
+          exit 0
+        fi
+        install -m 700 -d ~/.ssh
+        key_path="$HOME/.ssh/${SSH_KEY_NAME}"
+        printf '%s\n' "${SSH_KEY_VALUE}" > "${key_path}"
+        chmod 600 "${key_path}"
+        echo "INFRA2_WATCHDOG_SSH_KEY_PATH=${key_path}" >> "$GITHUB_ENV"
