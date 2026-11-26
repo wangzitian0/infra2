@@ -323,6 +323,28 @@ def test_script_runs_only_in_this_environments_directory(st, tmp_path, suffix, c
     assert not Path(envfile.read_text().strip()).exists()
 
 
+@pytest.mark.parametrize(
+    "suffix,chosen",
+    [("-staging", "platform-authentik-stg"), ("", "platform-authentik-prd")],
+)
+def test_script_runs_in_the_raw_compose_directory(st, tmp_path, suffix, chosen):
+    # A raw stack (#1822 step B) runs from `<app>/code`: Dokploy wrote
+    # code/docker-compose.yml there and there is no checkout below it. Measured on
+    # staging 2026-11-26: platform-s3-staging has working_dir
+    # /etc/dokploy/compose/platform-minio-6kne1n/code.
+    wd = f"ROOT/{chosen}/code"
+    res, log, envfile, envcopy = _run_script(
+        st, tmp_path, suffix, wd, ["platform-authentik-stg", "platform-authentik-prd"]
+    )
+    assert res.returncode == 0, res.stderr
+    lines = log.read_text().splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith(f"{tmp_path}/compose/{chosen}/code ENV=")
+    assert f" ENV_SUFFIX={suffix} VAULT_ADDR=" in lines[0]
+    # #2049 removed `-e ENV_SUFFIX`: Compose reads the shell ENV_SUFFIX above.
+    assert lines[0].endswith(" -p proj-x run --rm --no-deps token-init")
+
+
 def test_script_gives_compose_no_stdin(st, tmp_path):
     """Compose must not read the rest of the script from the shared stdin."""
     wd = "ROOT/platform-authentik-stg/code/platform/10.authentik"

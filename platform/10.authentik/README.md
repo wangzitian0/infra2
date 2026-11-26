@@ -14,12 +14,14 @@ Identity Provider for Single Sign-On across platform services using vault-init p
 
 | File | Purpose |
 |------|---------|
-| `compose.yaml` | Docker Compose (vault-agent + server + worker + token-init with its inline script) |
+| `compose.yaml` | x-infra2 source (server + worker + token-init with its inline script); the compiler adds the vault-agent sidecar (#1822 step B) |
 | `deploy.py` | AuthentikDeployer with custom pre-compose |
-| `shared_tasks.py` | Health check status() |
-| `vault-agent.hcl` | Vault agent configuration |
+| `env.manifest.json` | Secret keys; the vault-agent template renders from it |
+| `shared_tasks.py` | Health check status() and `create-root-token` |
 | `vault-policy.hcl` | Read-only policy for all required secrets |
-| `secrets.ctmpl` | Template rendering all secrets |
+
+The compiled text has no `vault-agent.hcl` or `secrets.ctmpl` file in git. Read it with
+`python -m tools.compose_compile print platform/10.authentik/compose.yaml`.
 
 ## Architecture
 

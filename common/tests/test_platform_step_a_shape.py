@@ -18,11 +18,10 @@ from common.deploy.compose_compile import compile_stack, vault_template_for
 from common.deploy.compose_equivalence import equivalence_problems
 
 ROOT = Path(__file__).resolve().parents[2]
-# platform/02.redis, platform/01.postgres, platform/23.prefect and platform/03.s3 left this
-# list in #1822 step B: each file is an x-infra2 source now, and `tools.compose_compile
-# check` proves it against the step-A file.
+# platform/02.redis, platform/01.postgres, platform/23.prefect, platform/03.s3 and
+# platform/10.authentik left this list in #1822 step B: each file is an x-infra2 source
+# now, and `tools.compose_compile check` proves it against the step-A file.
 STACKS = (
-    "platform/10.authentik",
     "platform/12.alerting",
     "platform/24.openpanel",
 )
@@ -80,15 +79,15 @@ def test_a_step_b_dry_run_has_no_problem(stack: str) -> None:
 
 
 def test_the_dry_run_finds_a_hand_sidecar_value() -> None:
-    # The sample is a step-A stack. platform/01.postgres and platform/03.s3 moved to
-    # x-infra2 (#1822 step B) and have no hand sidecar now, so the sample is
-    # platform/10.authentik.
-    hand = (ROOT / "platform/10.authentik/compose.yaml").read_text(encoding="utf-8")
+    # The sample is a step-A stack. platform/01.postgres, platform/03.s3 and
+    # platform/10.authentik moved to x-infra2 (#1822 step B) and have no hand sidecar
+    # now, so the sample is platform/24.openpanel.
+    hand = (ROOT / "platform/24.openpanel/compose.yaml").read_text(encoding="utf-8")
     assert hand.count("      retries: 12\n") == 1
     changed = hand.replace("      retries: 12\n", "      retries: 3\n")
     source, _ = draft_step_b(changed)
-    path = "platform/10.authentik/compose.yaml"
+    path = "platform/24.openpanel/compose.yaml"
     compiled = compile_stack(source, vault_template=vault_template_for(path, source))
     assert equivalence_problems(
-        source, compiled, changed, _base_files("platform/10.authentik")
+        source, compiled, changed, _base_files("platform/24.openpanel")
     ) == ["services.vault-agent.healthcheck.retries: compiled 12 != base 3"]

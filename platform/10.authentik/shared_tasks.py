@@ -45,8 +45,9 @@ def build_remote_script(
 ) -> str:
     """Build the remote script that runs token-init for ONE environment.
 
-    The compose checkout glob matches the production and the staging directory.
-    The script picks the directory that is the working directory of this
+    The compose directory glob matches the production and the staging directory.
+    It matches the raw compose directory `<app>/code` (#1822 step B) and the old
+    checkout directory `<app>/code/platform/10.authentik`. The script picks the directory that is the working directory of this
     environment's running `platform-authentik-server${ENV_SUFFIX}` container.
     It runs compose in the project of that container, because the `secrets`
     volume that token-init mounts belongs to that project, and it starts no
@@ -75,7 +76,7 @@ fi
 WDR=$(cd "$WD" 2>/dev/null && pwd -P || true)
 MATCHES=0
 CHOSEN=""
-for d in {compose_root}/platform-authentik-*/code/platform/10.authentik; do
+for d in {compose_root}/platform-authentik-*/code {compose_root}/platform-authentik-*/code/platform/10.authentik; do
   [ -d "$d" ] || continue
   DR=$(cd "$d" && pwd -P)
   if [ -n "$WDR" ] && [ "$DR" = "$WDR" ]; then

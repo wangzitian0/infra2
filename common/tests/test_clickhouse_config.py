@@ -80,9 +80,11 @@ def test_openpanel_clickhouse_bounds() -> None:
 
 
 def test_authentik_resource_and_healthcheck_limits() -> None:
-    path = ROOT / "platform/10.authentik/compose.yaml"
-    assert path.exists()
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    from common.deploy.compose_compile import load_stack
+
+    # The compose is an x-infra2 source (#1822 step B): the compiler adds the
+    # vault-agent sidecar, so the limits are read from the compiled text.
+    data = yaml.safe_load(load_stack("platform/10.authentik/compose.yaml").compiled)
     services = data.get("services", {})
 
     server = services.get("server", {})
