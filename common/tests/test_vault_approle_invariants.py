@@ -46,9 +46,10 @@ X_INFRA2_VAULT_COMPOSES = [
 def test_discovery_is_non_empty() -> None:
     """Sanity: if discovery returned nothing the parametrized guards below would vacuously
     pass, hiding a regression. Pin a sane floor."""
-    # 10 hand-written vault-agent.hcl files (measured): truealpha 20.data_engine compiles
-    # its agent config from x-infra2 and keeps no copy (common/security/secrets_render.py).
-    assert len(VAULT_AGENT_HCLS) >= 10, VAULT_AGENT_HCLS
+    # 9 hand-written vault-agent.hcl files (measured 2026-11-26): truealpha 20.data_engine
+    # and platform/02.redis (#1822 step B) compile their agent config from x-infra2 and
+    # keep no copy (common/security/secrets_render.py).
+    assert len(VAULT_AGENT_HCLS) >= 9, VAULT_AGENT_HCLS
     assert len(VAULT_AGENT_COMPOSES) >= 12, VAULT_AGENT_COMPOSES
 
 
