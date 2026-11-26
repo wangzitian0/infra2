@@ -115,7 +115,7 @@ class S3Deployer(Deployer):
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
-        """Ensure every field consumed by secrets.ctmpl exists in Vault."""
+        """Ensure every field that the vault-agent template reads exists in Vault."""
         vault_secrets = cls.secrets_backend()
         root_user = vault_secrets.get("root_user") or "admin"
         root_password = vault_secrets.get("root_password")
