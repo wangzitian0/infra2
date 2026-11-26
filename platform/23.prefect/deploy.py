@@ -49,25 +49,17 @@ class PrefectDeployer(Deployer):
         ),
     )
 
-    # Vault self-refresh facts (#542): the audit inventory derives from this
-    # (AppRole auth per #257/#259). mount_exempt_containers (#531): the worker
-    # only needs PREFECT_API_URL (a plain, non-secret env var pointing at
-    # prefect-server) — confirmed by reading platform/23.prefect/compose.yaml,
-    # it has no `secrets:/secrets:ro` mount and no entrypoint sourcing one, by
-    # design (#163 independently confirms). Checking it for a mount it was
-    # never supposed to have would be the "check assumes something not true of
-    # reality" disease #531 is about — this explicit, service-owned exemption
-    # keeps the mount check honest for every other app_container.
+    # Vault self-refresh facts (#542): AppRole auth per #257/#259.
+    # platform-prefect-server and platform-prefect-services both mount /secrets.
     secrets = (
         SecretsFacet(
             vault_agent_container="platform-prefect-vault-agent${ENV_SUFFIX}",
             app_containers=(
                 "platform-prefect-server${ENV_SUFFIX}",
                 "platform-prefect-services${ENV_SUFFIX}",
-                "platform-prefect-worker${ENV_SUFFIX}",
             ),
             auth_method="approle",
-            mount_exempt_containers=("platform-prefect-worker${ENV_SUFFIX}",),
+            mount_exempt_containers=(),
         ),
     )
 

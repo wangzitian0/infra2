@@ -9,7 +9,6 @@ Prefect is a modern workflow orchestration platform. This deployment includes:
 
 - **prefect-server**: API server and web UI (SSO-protected at https://prefect.zitian.party)
 - **prefect-services**: Background services (scheduler, flow runner)
-- **prefect-worker**: Worker for executing flows in the default pool
 - **postgres**: Stores flow runs, deployments, and task state (shared platform DB)
 - **redis**: Message broker for event streaming (shared platform Redis, DB 1)
 
@@ -185,16 +184,6 @@ invoke postgres.status
 
 # Check database exists
 ssh root@{VPS_HOST} docker exec platform-postgres psql -U postgres -c '\l' | grep prefect
-```
-
-### Worker Not Picking Up Flows
-
-```bash
-# Check worker status
-ssh root@{VPS_HOST} docker logs platform-prefect-worker
-
-# Check API connectivity from worker
-ssh root@{VPS_HOST} docker exec platform-prefect-worker curl http://platform-prefect-server:4200/api/health
 ```
 
 ### Cannot Access UI (404 or Auth Loop)

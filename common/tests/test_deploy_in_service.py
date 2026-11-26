@@ -57,7 +57,7 @@ def test_every_registry_compose_expects_its_long_running_services_and_not_its_on
     prefect = expected_running_services(
         (ROOT / "platform/23.prefect/compose.yaml").read_text()
     )
-    assert "prefect-worker" in prefect  # restart: on-failure, but a long-running worker
+    assert "prefect-services" in prefect and "prefect-worker" not in prefect
     signoz = expected_running_services(
         (ROOT / "platform/11.signoz/compose.yaml").read_text()
     )
