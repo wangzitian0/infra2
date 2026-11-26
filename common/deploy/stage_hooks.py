@@ -26,9 +26,9 @@ from infra2_sdk.delivery import (
 
 from common.core._sdk_wire import (
     CheckVerdict,
+    parse_env_manifest_dict,
     record_verdicts,
     redact_text,
-    strip_legacy_manifest_fields,
 )
 
 BOOTSTRAP_CAP_SECONDS = int(load_stages()["bootstrap_cap_seconds"])
@@ -110,8 +110,7 @@ def stage_hook_plan(stage: str) -> StageHookPlan:
 
 def load(path: str | Path, *, root: Path | None = None) -> EnvironmentManifest:
     target = Path(path) if root is None else root / path
-    raw = strip_legacy_manifest_fields(json.loads(target.read_text(encoding="utf-8")))
-    return EnvironmentManifest.from_dict(raw)
+    return parse_env_manifest_dict(json.loads(target.read_text(encoding="utf-8")))
 
 
 def parse_hooks_manifest(raw: Any) -> RuntimeHooksManifest:

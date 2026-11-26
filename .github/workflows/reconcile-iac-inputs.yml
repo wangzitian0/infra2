@@ -198,12 +198,10 @@ jobs:
 
       - name: Configure SSH key for the pre-deploy schema gate
         if: ${{ github.event_name != 'schedule' && !inputs.sync_app_releases && env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != '' }}
-        run: |
-          set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_schema_gate
-          chmod 600 ~/.ssh/infra2_schema_gate
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_schema_gate" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_schema_gate
+          private-key: ${{ env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
 
       - name: Operation phase
         env:

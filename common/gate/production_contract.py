@@ -65,27 +65,77 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
     ): "failure alert and stage card of a release run: reads only the Feishu delivery secrets (#1646)",
 }
 
-# An ungated job that appears here may read only the secrets named for it. A job without an
-# entry may read any secret (the older entries above). The three jobs of the release train
-# (#1646): `pre` reads no secret and needs no entry; `operation` is gated; `post` and `alert`
-# are ungated and bounded, so an edit that adds a deploy secret to either of them fails.
+# An ungated job that appears here may read only the secrets named for it. Every job in
+# UNGATED_JOBS declares its exact minimal secret boundary so adding an unrelated deploy
+# or runtime secret to any scheduled/ungated job fails closed.
+_TA_HOOK_SECRETS: frozenset[str] = frozenset(
+    {"TA_EMAIL", "TA_MEMBER_EMAIL", "TA_PASSWORD", "TA_MCP_TOKEN"}
+)
+_OOB_ALERT_SECRETS: frozenset[str] = frozenset(
+    {
+        "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
+        "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+        "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+        "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
+        "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
+        "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
+    }
+)
+_REPORTS_FEISHU_SECRETS: frozenset[str] = frozenset(
+    {
+        "INFRA2_REPORTS_FEISHU_APP_ID",
+        "INFRA2_REPORTS_FEISHU_APP_SECRET",
+        "INFRA2_REPORTS_FEISHU_CHAT_ID",
+    }
+)
+_ALERT_SECRETS: frozenset[str] = _OOB_ALERT_SECRETS | _REPORTS_FEISHU_SECRETS
+_WATCHDOG_SSH_SECRETS: frozenset[str] = frozenset(
+    {
+        "INFRA2_WATCHDOG_SSH_HOST",
+        "INFRA2_WATCHDOG_SSH_USER",
+        "INFRA2_WATCHDOG_SSH_PRIVATE_KEY",
+    }
+)
+
 UNGATED_SECRET_LIMITS: dict[tuple[str, str], frozenset[str]] = {
-    ("reconcile-iac-inputs.yml", "post"): frozenset(
-        {"TA_EMAIL", "TA_MEMBER_EMAIL", "TA_PASSWORD", "TA_MCP_TOKEN"}
+    ("reconcile-iac-inputs.yml", "post"): _TA_HOOK_SECRETS,
+    ("reconcile-iac-inputs.yml", "alert"): _ALERT_SECRETS,
+    ("ops-checks.yml", "audit"): (
+        frozenset({"DOKPLOY_API_KEY", "INFRA2_HOOKS_READ_TOKEN"})
+        | _ALERT_SECRETS
+        | _WATCHDOG_SSH_SECRETS
+        | _TA_HOOK_SECRETS
     ),
-    ("reconcile-iac-inputs.yml", "alert"): frozenset(
-        {
-            "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
-            "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
-            "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
-            "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
-            "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
-            "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
-            "INFRA2_REPORTS_FEISHU_APP_ID",
-            "INFRA2_REPORTS_FEISHU_APP_SECRET",
-            "INFRA2_REPORTS_FEISHU_CHAT_ID",
-        }
+    ("ops-checks.yml", "watchdog"): (
+        frozenset(
+            {
+                "DOKPLOY_API_KEY",
+                "INFRA2_WATCHDOG_HEARTBEAT_TOKEN",
+                "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN",
+            }
+        )
+        | _ALERT_SECRETS
+        | _WATCHDOG_SSH_SECRETS
     ),
+    ("ops-checks.yml", "digest"): (
+        frozenset({"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN"})
+        | _ALERT_SECRETS
+        | _WATCHDOG_SSH_SECRETS
+    ),
+    ("ops-checks.yml", "preview-leak-check"): (
+        frozenset({"DOKPLOY_API_KEY", "PREVIEW_LEAK_GH_TOKEN"}) | _OOB_ALERT_SECRETS
+    ),
+    ("ops-checks.yml", "host-hygiene-schedule"): (
+        frozenset({"DOKPLOY_API_KEY"}) | _ALERT_SECRETS
+    ),
+    ("ops-checks.yml", "facet-reconcile"): (
+        frozenset({"DOKPLOY_API_KEY", "CF_API_TOKEN", "CF_ZONE_ID"}) | _ALERT_SECRETS
+    ),
+    ("ops-checks.yml", "vault-self-refresh-audit"): (
+        frozenset({"DOKPLOY_API_KEY"}) | _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS
+    ),
+    ("ops-checks.yml", "secrets-reconcile"): _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS,
+    ("ops-checks.yml", "staging-db-hygiene"): _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS,
 }
 
 # Retired workflow files removed in #1500. Kept as an empty set so callers importing

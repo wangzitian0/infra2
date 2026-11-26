@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from common.core._sdk_wire import field_store_key, strip_legacy_manifest_fields
+from common.core._sdk_wire import field_store_key, parse_env_manifest_dict
 from common.core.constants import REPO_ROOT
 
 # The SERVICES table is plain data and is read by contexts without the SDK (the ops-checks
@@ -215,16 +215,13 @@ def manifest_file(path: str, *, root: Path = ROOT) -> Path:
 
 def load_manifest(path: str, *, root: Path = ROOT) -> EnvironmentManifest:
     """Read one manifest from its stack directory under ``root``."""
-    from infra2_sdk.config import EnvironmentManifest
-
-    raw = strip_legacy_manifest_fields(
+    return parse_env_manifest_dict(
         json.loads(manifest_file(path, root=root).read_text(encoding="utf-8"))
     )
-    return EnvironmentManifest.from_dict(raw)
 
 
 def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManifest:
-    """Union of a service's manifests (``infra2_sdk.runtime.merge_manifests``).
+    """Union of a service's manifests (``common.security.manifest_merge``).
 
     Two apps in one stack may declare the same variable (both truealpha apps read
     DATABASE_URL); they must agree on how it is produced and rendered, and the first

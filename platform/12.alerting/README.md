@@ -44,7 +44,9 @@ that tag and stops when it does not come. If the push run of a commit failed, ru
 
 Rollback limit: a release before #2061 has no commit tag, so a deploy of alerting at that
 release (alone or in a batch) waits and fails until that manual run publishes its tag.
-Seeded on 2026-11-26: `production/v3.2.12` and `v3.2.34`. Rules: `docs/ssot/ops.pipeline.md` §5.4.
+Seeded on 2026-11-26: `production/v3.2.12` and `v3.2.34`. At these releases the compose
+still builds its image on the VPS (`build:`), so the seeded tag only clears the deploy
+wait; the stack does not run it. Rules: `docs/ssot/ops.pipeline.md` §5.4.
 
 1Password root vars are the long-lived source of truth. During
 `alerting.pre-compose`, the deployer mirrors those fields into

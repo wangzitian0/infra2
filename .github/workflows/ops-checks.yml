@@ -200,12 +200,10 @@ jobs:
 
       - name: Configure SSH key for Canary reality verification
         if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' && env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != '' }}
-        run: |
-          set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_watchdog
-          chmod 600 ~/.ssh/infra2_watchdog
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_watchdog" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_watchdog
+          private-key: ${{ env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
 
       - name: Verify Canary Todo reality (staging)
         if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
@@ -363,12 +361,10 @@ jobs:
 
       - name: Configure SSH key
         if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
-        run: |
-          set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_watchdog
-          chmod 600 ~/.ssh/infra2_watchdog
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_watchdog" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_watchdog
+          private-key: ${{ env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
 
       - name: Run watchdog
         id: watchdog
@@ -534,14 +530,10 @@ jobs:
 
       - name: Configure SSH key
         if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
-        env:
-          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_stability_report
-          chmod 600 ~/.ssh/infra2_stability_report
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_stability_report" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_stability_report
+          private-key: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
 
       - name: Build and send digest
         if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
@@ -1013,18 +1005,12 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure SSH key
-        env:
-          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
-            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY secret is required for the Vault self-refresh audit."
-            exit 1
-          fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_vault_audit
-          chmod 600 ~/.ssh/infra2_vault_audit
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_vault_audit" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_vault_audit
+          private-key: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+          required: "true"
+          purpose: "the Vault self-refresh audit"
 
       - name: Run Vault self-refresh audit
         run: |
@@ -1180,18 +1166,12 @@ jobs:
           uv sync --locked --no-dev
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Configure SSH key
-        env:
-          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
-            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY secret is required for the secrets reconcile."
-            exit 1
-          fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_secrets_reconcile
-          chmod 600 ~/.ssh/infra2_secrets_reconcile
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_secrets_reconcile" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_secrets_reconcile
+          private-key: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+          required: "true"
+          purpose: "the secrets reconcile"
       - name: Run the secrets reconcile inside the iac-runner
         run: |
           set -euo pipefail
@@ -1399,18 +1379,12 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Configure SSH key
-        env:
-          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
-            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY secret is required for staging DB hygiene."
-            exit 1
-          fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_staging_db_hygiene
-          chmod 600 ~/.ssh/infra2_staging_db_hygiene
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_staging_db_hygiene" >> "$GITHUB_ENV"
+        uses: ./.github/actions/ssh-setup
+        with:
+          key-name: infra2_staging_db_hygiene
+          private-key: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+          required: "true"
+          purpose: "staging DB hygiene"
 
       - name: Purge aged staging test tenants and trace_records
         run: |
