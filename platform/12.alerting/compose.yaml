@@ -61,11 +61,11 @@ services:
 
   feishu-alert-bridge:
     mem_limit: 1g
-    build:
-      context: ../..
-      dockerfile: platform/12.alerting/Dockerfile
-    pull_policy: build
-    image: platform-alerting-feishu-bridge:${CONFIGURATION_SHA256:-}
+    # CI builds platform/12.alerting/Dockerfile on each push to main and pushes it to GHCR
+    # with the full commit SHA as the tag (#1822). The deploy issues that commit as
+    # INFRA_IAC_REF and waits for the tag (common/deploy/platform_images.py). No PR edits
+    # this line. infra-probe-runner runs the same image.
+    image: "ghcr.io/wangzitian0/infra2-alerting:${INFRA_IAC_REF:?}"
     container_name: platform-alerting${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
@@ -153,7 +153,7 @@ services:
   # services below, deleted in the #543 merge) in one low-footprint process.
   # See tools/infra_probe_runner.py + common/observability/watchers/resident.py.
   infra-probe-runner:
-    image: platform-alerting-feishu-bridge:${CONFIGURATION_SHA256:-}
+    image: "ghcr.io/wangzitian0/infra2-alerting:${INFRA_IAC_REF:?}"
     container_name: platform-alerting-probes${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:

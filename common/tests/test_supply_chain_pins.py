@@ -48,12 +48,29 @@ def is_digest_pinned(image_ref: str) -> bool:
     return bool(SHA256_DIGEST_RE.search(ref))
 
 
+def _commit_tagged_refs() -> dict[tuple[str, str], str]:
+    """``{(compose, service): image}`` of each commit-tagged platform image (#1822).
+
+    The tag is the full infra2 commit SHA that the deploy issues. CI builds it from that
+    commit and never pushes a tag again (`.github/workflows/platform-images.yml`).
+    """
+    from common.deploy.platform_images import PLATFORM_IMAGES
+
+    return {
+        (image.compose, service): image.commit_ref
+        for image in PLATFORM_IMAGES.values()
+        if image.tag_kind == "commit"
+        for service in image.services
+    }
+
+
 def scan_supply_chain_unpinned(
     compose_files: list[Path], dockerfiles: list[Path], root: Path = REPO_ROOT
 ) -> dict[str, list[str]]:
     """Return unpinned compose service images and Dockerfile FROM references."""
     unpinned_compose: list[str] = []
     unpinned_dockerfiles: list[str] = []
+    commit_refs = _commit_tagged_refs()
 
     for path in sorted(compose_files):
         rel = path.relative_to(root).as_posix()
@@ -67,6 +84,8 @@ def scan_supply_chain_unpinned(
                 continue
             image = svc.get("image")
             if image is None or "build" in svc:
+                continue
+            if commit_refs.get((rel, svc_name)) == str(image):
                 continue
             if not is_digest_pinned(str(image)):
                 unpinned_compose.append(f"{rel}::{svc_name}")
@@ -237,3 +256,35 @@ def test_supply_chain_ratchet_detects_mutations(tmp_path: Path) -> None:
     )
     assert reg == actual
     assert stale == {}
+
+
+def test_the_commit_tag_counts_as_pinned_only_for_its_registered_service(
+    tmp_path: Path,
+) -> None:
+    """The alerting commit tag passes; the same text on another service does not."""
+    ref = "ghcr.io/wangzitian0/infra2-alerting:${INFRA_IAC_REF:?}"
+    assert _commit_tagged_refs() == {
+        ("platform/12.alerting/compose.yaml", "feishu-alert-bridge"): ref,
+        ("platform/12.alerting/compose.yaml", "infra-probe-runner"): ref,
+    }
+    comp = tmp_path / "platform/12.alerting/compose.yaml"
+    comp.parent.mkdir(parents=True)
+    comp.write_text(
+        yaml.safe_dump(
+            {
+                "services": {
+                    "feishu-alert-bridge": {"image": ref},
+                    "other": {"image": ref},
+                    "infra-probe-runner": {
+                        "image": "ghcr.io/wangzitian0/infra2-alerting:latest"
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    actual = scan_supply_chain_unpinned([comp], [], root=tmp_path)
+    assert actual["unpinned_compose_images"] == [
+        "platform/12.alerting/compose.yaml::infra-probe-runner",
+        "platform/12.alerting/compose.yaml::other",
+    ]

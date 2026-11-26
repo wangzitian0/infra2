@@ -36,6 +36,16 @@ uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-r
 uv run invoke alerting.status
 ```
 
+The image: CI builds `Dockerfile` on each push to `main` and pushes
+`ghcr.io/wangzitian0/infra2-alerting:<full commit SHA>`. The bridge and the probe runner run
+`infra2-alerting:${INFRA_IAC_REF:?}`, the commit that the deploy issues. `deploy_v2` waits for
+that tag and stops when it does not come. If the push run of a commit failed, run
+`gh workflow run platform-images.yml --ref main -f ref=<tag, branch or SHA>`.
+
+Rollback limit: a release before #2061 has no commit tag, so a deploy of alerting at that
+release (alone or in a batch) waits and fails until that manual run publishes its tag.
+Seeded on 2026-11-26: `production/v3.2.12` and `v3.2.34`. Rules: `docs/ssot/ops.pipeline.md` §5.4.
+
 1Password root vars are the long-lived source of truth. During
 `alerting.pre-compose`, the deployer mirrors those fields into
 `secret/platform/{env}/alerting` so the vault-agent can render runtime secrets.

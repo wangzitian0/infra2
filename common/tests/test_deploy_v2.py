@@ -1517,6 +1517,12 @@ def test_deploy_phases_report_their_duration_on_stderr(calls, monkeypatch, capsy
 
 def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
     sent = {}
+    waits = []
+    monkeypatch.setattr(
+        dv2,
+        "_wait_for_image_dependencies",
+        lambda spec, ref, **kw: waits.append((spec.key, ref, kw)),
+    )
     monkeypatch.setattr(
         dv2,
         "trigger_platform_deploy",
@@ -1544,11 +1550,17 @@ def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
             "zitian.party",
             "--timeout",
             "120",
+            "--image-wait-seconds",
+            "7",
+            "--image-poll-seconds",
+            "2",
         ]
     )
 
     assert rc == 0
     assert sent["services"] == ["platform/redis", "platform/alerting"]
+    # The CLI passes its image wait flags to the batch.
+    assert waits == [("platform/alerting", SHA_IAC, {"timeout": 7, "poll_seconds": 2})]
     output = json.loads(capsys.readouterr().out)
     assert output["service"] == ["platform/redis", "platform/alerting"]
     assert output["backend"] == "iac-runner"
@@ -1632,6 +1644,115 @@ def test_platform_skips_app_image_readiness(monkeypatch):
     sent, res = _platform(monkeypatch)
     assert sent["services"] == ["platform/redis"]
     assert res.backend == "iac-runner"
+
+
+ALERTING_IMAGE = "ghcr.io/wangzitian0/infra2-alerting"
+
+
+def test_platform_alerting_waits_for_its_commit_image_before_the_runner(monkeypatch):
+    """The alerting compose runs `infra2-alerting:${INFRA_IAC_REF:?}` (#1822)."""
+    order = []
+
+    def fake_wait(spec, image_ref, **kw):
+        order.append(("wait", spec.key, spec.image_repositories, image_ref))
+
+    monkeypatch.setattr(dv2, "_wait_for_image_dependencies", fake_wait)
+    monkeypatch.setattr(
+        dv2,
+        "poll_platform_deploy_status",
+        lambda **kw: {"status": "completed", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
+    monkeypatch.setattr(
+        dv2,
+        "trigger_platform_deploy",
+        lambda **kw: order.append(("trigger", kw["ref"])) or {"status": "accepted"},
+    )
+    deploy_v2(
+        service="platform/alerting",
+        deploy_type="staging",
+        version_ref="v0.0.0",
+        deps=DeployDeps(client=object(), domain="zitian.party"),
+    )
+    assert order == [
+        ("wait", "platform/alerting", (ALERTING_IMAGE,), SHA_IAC),
+        ("trigger", SHA_IAC),
+    ]
+
+
+def test_platform_alerting_fails_closed_without_its_commit_image(monkeypatch):
+    """A missing commit tag stops the deploy before the runner gets a request."""
+    trigger = []
+    seen = []
+
+    def missing(image, image_ref):
+        seen.append((image, image_ref))
+        return False
+
+    monkeypatch.setattr(_preflight, "_image_manifest_exists", missing)
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
+    monkeypatch.setattr(
+        dv2, "trigger_platform_deploy", lambda **kw: trigger.append(kw) or {}
+    )
+    with pytest.raises(RuntimeError, match=f"missing {ALERTING_IMAGE}:{SHA_IAC}"):
+        deploy_v2(
+            service="platform/alerting",
+            deploy_type="staging",
+            version_ref="v0.0.0",
+            options=DeployOptions(image_wait_seconds=0, image_poll_seconds=0),
+            deps=DeployDeps(client=object(), domain="zitian.party"),
+        )
+    assert seen == [(ALERTING_IMAGE, SHA_IAC)]
+    assert trigger == []
+
+
+def test_platform_batch_waits_for_alerting_before_any_service(monkeypatch):
+    trigger = []
+    waits = []
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "assert_iac_ref_on_main", lambda *a, **k: None)
+    monkeypatch.setattr(
+        dv2,
+        "_wait_for_image_dependencies",
+        lambda spec, ref, **kw: waits.append((spec.key, ref, kw)),
+    )
+    monkeypatch.setattr(
+        dv2, "trigger_platform_deploy", lambda **kw: trigger.append(kw) or {}
+    )
+    dv2._deploy_platform_batch(
+        services=["platform/redis", "platform/alerting"],
+        deploy_type="staging",
+        version_ref="v0.0.0",
+        options=DeployOptions(wait=False, image_wait_seconds=7, image_poll_seconds=2),
+    )
+    assert waits == [
+        (
+            "platform/alerting",
+            SHA_IAC,
+            {"timeout": 7, "poll_seconds": 2},
+        )
+    ]
+    assert [t["services"] for t in trigger] == [["platform/redis", "platform/alerting"]]
+
+
+def test_platform_batch_fails_closed_without_the_alerting_image(monkeypatch):
+    trigger = []
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "assert_iac_ref_on_main", lambda *a, **k: None)
+    monkeypatch.setattr(_preflight, "_image_manifest_exists", lambda *a: False)
+    monkeypatch.setattr(
+        dv2, "trigger_platform_deploy", lambda **kw: trigger.append(kw) or {}
+    )
+    with pytest.raises(RuntimeError, match="infra2-alerting"):
+        dv2._deploy_platform_batch(
+            services=["platform/redis", "platform/alerting"],
+            deploy_type="staging",
+            version_ref="v0.0.0",
+            options=DeployOptions(image_wait_seconds=0, image_poll_seconds=0),
+        )
+    assert trigger == []
 
 
 def test_platform_wait_polls_and_records_final(monkeypatch):

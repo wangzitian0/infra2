@@ -2,23 +2,32 @@ name: Platform Images
 
 # CI builds each image of common/deploy/platform_images.py and pushes it to GHCR (#1822).
 # A raw Dokploy compose has no checkout, so a stack cannot build its image at deploy time.
-# The tag is the hash of the image input files. A tag that is on GHCR is not pushed again,
-# so a tag holds one image. The compose pins <tag>@sha256:<digest>; this job fails when
-# the pinned digest is not the GHCR digest of the tag, and prints the correct pin.
+# An `inputs` image: the tag is the hash of the image input files; the compose pins
+# <tag>@sha256:<digest>; this job fails when the pinned digest is not the GHCR digest of
+# the tag, and prints the correct pin.
+# A `commit` image: the tag is the full commit SHA. A push to main publishes the tag of
+# its commit. A pull request that changes an input builds the image and pushes nothing.
+# A manual run with `ref` publishes the commit tag of that ref: the matrix comes from the
+# workflow ref (this table), and only the build source is the checkout of `ref`.
+# A tag that is on GHCR is not pushed again, so a tag holds one image.
 # This workflow writes images only. It deploys nothing and changes no environment.
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit, branch or tag whose commit image to publish (default: the workflow ref)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
-concurrency:
-  # Do not cancel a running push: a cancelled run can leave a tag without its check.
-  group: platform-images-${{ github.ref }}
-  cancel-in-progress: false
+# No workflow-level concurrency: each publish job has a group per image tag (below).
+# GitHub replaces a pending run of a group with a newer one, so a group per ref or per
+# input text could drop the commit tag of a main commit.
 
 jobs:
   matrix:
@@ -27,8 +36,15 @@ jobs:
     timeout-minutes: 5
     outputs:
       images: ${{ steps.matrix.outputs.images }}
+      sha: ${{ steps.matrix.outputs.sha }}
     steps:
+      # The workflow ref: the image table and its code.
       - uses: actions/checkout@v7
+      # The build source. It is the same commit unless a manual run names `ref`.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          path: src
       - name: Install uv
         uses: astral-sh/setup-uv@v8.3.2
         with:
@@ -36,10 +52,27 @@ jobs:
           cache-dependency-glob: "uv.lock"
       - name: Compute the image tags from the input files
         id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_INPUT: ${{ inputs.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          images="$(uv run --locked python -m common.deploy.platform_images matrix)"
+          sha="$(git -C src rev-parse HEAD)"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # A pull request merge ref is not a deploy commit: it publishes no commit tag.
+            # A changed input file builds the commit image without a push.
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            git diff --name-only "$BASE_SHA" HEAD > "$RUNNER_TEMP/changed.txt"
+            args=(--check "$sha" --changed "$RUNNER_TEMP/changed.txt")
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$REF_INPUT" ]; then
+            args=(--commit "$sha" --commit-only)
+          else
+            args=(--commit "$sha")
+          fi
+          images="$(uv run --locked python -m common.deploy.platform_images matrix "${args[@]}")"
           echo "$images"
           echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
   publish:
     name: Publish ${{ matrix.key }}
@@ -55,39 +88,68 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.matrix.outputs.images) }}
+    # One group per image tag. A commit tag holds the full resolved SHA, so no two
+    # commits share a group. A pending duplicate of the same tag can be replaced.
+    concurrency:
+      group: platform-image-${{ matrix.image }}
+      cancel-in-progress: false
     env:
       IMAGE: ${{ matrix.image }}
       DOCKERFILE: ${{ matrix.dockerfile }}
       CONTEXT: ${{ matrix.context }}
       COMPOSE: ${{ matrix.compose }}
       PINNED_DIGEST: ${{ matrix.pinned_digest }}
+      KIND: ${{ matrix.kind }}
+      SHA: ${{ needs.matrix.outputs.sha }}
     steps:
+      # The workflow ref: scripts/ghcr_tag_state.sh.
       - uses: actions/checkout@v7
-      - name: Build and push the tag when it is not on GHCR
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # The build source: the commit that the matrix resolved.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.matrix.outputs.sha }}
+          path: src
+      - name: Build the changed commit image without a push
+        if: matrix.kind == 'check'
         run: |
-          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+          docker build --platform linux/amd64 \
+            -f "src/$DOCKERFILE" -t "$IMAGE" "src/$CONTEXT"
+          echo "built $IMAGE from $SHA; no push" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Build and push the tag when it is not on GHCR
+        if: matrix.kind != 'check'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          # present / absent; any other registry answer fails the job (no build over a tag).
+          state="$(bash scripts/ghcr_tag_state.sh "$IMAGE")"
+          if [ "$state" = "present" ]; then
             echo "$IMAGE is on GHCR; no build and no push" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           docker build --platform linux/amd64 \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            -f "$DOCKERFILE" -t "$IMAGE" "$CONTEXT"
+            --label "org.opencontainers.image.revision=${SHA}" \
+            -f "src/$DOCKERFILE" -t "$IMAGE" "src/$CONTEXT"
           docker push "$IMAGE"
       - name: The compose pins the GHCR digest of the tag
+        if: matrix.kind != 'check'
         run: |
           digest="$(docker buildx imagetools inspect "$IMAGE" | awk '/^Digest:/ {print $2; exit}')"
+          if [ "$KIND" = "commit" ]; then
+            echo "published: $IMAGE@$digest (the compose names the commit tag; no pin)" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           echo "pin: $IMAGE@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$digest" != "$PINNED_DIGEST" ]; then
             echo "::error file=$COMPOSE::$COMPOSE pins '${PINNED_DIGEST:-none}'. Set the image to $IMAGE@$digest"
             exit 1
           fi
       - name: The VPS can pull the tag without credentials
+        if: matrix.kind != 'check'
         run: |
-          docker logout ghcr.io
+          docker logout ghcr.io || true
           if ! docker manifest inspect "$IMAGE" > /dev/null; then
             echo "::error::$IMAGE does not pull without credentials. Set the GHCR package to public once."
             exit 1

@@ -206,7 +206,11 @@ def _iac_pinned_specs() -> dict[str, ServiceSpec]:
     the deploy.py the iac_runner already syncs, so deploy_v2 can never drift from the deploy
     fan-out (no per-service hand-registration — all platform + app-backing services at once).
     App companions (e.g. ``truealpha/data_engine``) inherit ``artifact_source="app"``.
+    ``image_repositories`` lists the commit-tagged platform images that the stack runs
+    (``common.deploy.platform_images``): the deploy waits for their tag at ``iac_ref``.
     """
+    from common.deploy.platform_images import commit_image_repositories
+
     out: dict[str, ServiceSpec] = {}
     for sid, meta in service_registry.service_attrs().items():
         if sid in SERVICES:  # the app's bespoke spec wins
@@ -218,6 +222,7 @@ def _iac_pinned_specs() -> dict[str, ServiceSpec]:
             prod_only=meta.prod_only,
             not_yet_in_production=meta.not_yet_in_production,
             iac_pinned=True,
+            image_repositories=commit_image_repositories(sid),
             artifact_source="app" if sid in _APP_COMPANION_KEYS else "infra2",
         )
     return out

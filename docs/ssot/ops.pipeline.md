@@ -599,12 +599,27 @@ promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Act
 
 A raw Dokploy compose (`sourceType="raw"`) has no checkout, so a platform stack cannot `build:` its image at deploy time.
 
-- `common/deploy/platform_images.py` `PLATFORM_IMAGES` is the one list of these images: key, GHCR repository, Dockerfile, build context, compose file and services.
+- `common/deploy/platform_images.py` `PLATFORM_IMAGES` is the one list of these images: key, GHCR repository, Dockerfile, build context, compose file, services and tag kind.
+- `.github/workflows/platform-images.yml` builds and pushes each tag that GHCR does not have, and it never pushes a tag again. `scripts/ghcr_tag_state.sh` reads the tag: HTTP 200 is present (no build), 404 is absent (build and push), and any other answer fails the job. Each `publish` job has one concurrency group per image tag; a commit tag holds the full resolved SHA, so a newer run never replaces the pending job of another commit. The `publish` job fails when the tag does not pull without credentials. Set a new GHCR package to public once.
+- `python -m common.deploy.platform_images check` and `common/tests/test_platform_images.py` fail on a compose image that does not match its tag kind, or on a service with `build:`.
+- The config hash reads the Dockerfile and each file that it copies (`config_hash._platform_image_inputs`), so an edit of a copied file recreates the stack.
+
+Tag kind `inputs` (`platform/03.s3`): for an image whose inputs seldom change.
+
 - The tag is the first 32 hex characters of the input hash: sha256 over `<repo-relative path>:<sha256>` of the Dockerfile and each file that it copies.
-- The compose pins `<repository>:<tag>@sha256:<digest>`. `python -m common.deploy.platform_images check` and `common/tests/test_platform_images.py` fail when the pinned tag is not the tag of the input files.
-- `.github/workflows/platform-images.yml` runs on each pull request and each push to `main`. It builds and pushes each tag that GHCR does not have, and it never pushes a tag again.
-- The `publish` job prints the pin and fails when the compose digest is not the GHCR digest of the tag, or when the tag does not pull without credentials. Set a new GHCR package to public once.
+- The compose pins `<repository>:<tag>@sha256:<digest>`. The check fails when the pinned tag is not the tag of the input files.
+- Each pull request and each push to `main` publishes the tag. The `publish` job prints the pin and fails when the compose digest is not the GHCR digest of the tag.
 - Flow for a Dockerfile edit: change the file and the tag, push the branch, then copy the printed `pin:` line into the compose.
+
+Tag kind `commit` (`platform/12.alerting`): for an image that copies `common/` or `tools/`. An input tag changes on most PRs (36 of 60 `main` commits, #2055), so each merge would need a new pin.
+
+- The tag is the full infra2 commit SHA. The compose names `<repository>:${INFRA_IAC_REF:?}`. The deploy issues `INFRA_IAC_REF`: the commit that the iac-runner checks out (`sync_pipeline.py`). `:?` stops `docker compose` without it. No PR edits the image line.
+- Each push to `main` publishes the tag of its commit. A pull request publishes no commit tag; when it changes an input file of the image, CI builds the image (tag `check-<sha>`) and pushes nothing, so a broken Dockerfile fails before the merge.
+- A manual run with input `ref` publishes the commit tag of that ref: `gh workflow run platform-images.yml --ref main -f ref=<tag, branch or SHA>`. The matrix comes from the workflow ref (`matrix --commit <sha> --commit-only`); the old tree is only the build source, resolved to its full SHA. Use it when a push run failed, and before a deploy of a release that has no commit tag.
+- `deploy_v2` waits for `<repository>:<iac commit>` before it sends the runner request (`ServiceSpec.image_repositories`, `preflight._wait_for_image_dependencies`, `DEPLOY_V2_IMAGE_WAIT_SECONDS`, default 300 s). A tag that does not come stops the deploy; there is no `latest` and no fallback build.
+- Measured on 2026-11-26 (UTC): the push run is done 25 s to 52 s after the merge; the train reached the deploy 38 s after the tag push (v3.2.31). The wait covers this race.
+- Rollback limit: a commit before this change has no commit tag. `deploy_v2` waits for the tag at every deploy of `platform/alerting`, also at an older release, so such a deploy waits `DEPLOY_V2_IMAGE_WAIT_SECONDS` and fails, and a batch with alerting fails for all its services. Before such a deploy, run the manual run for that release. Seeded on 2026-11-26: `production/v3.2.12` (866ae594) and `v3.2.34` (41232870). A commit after this change gets its tag from its push run. `common/deploy/ghcr_retention.py` lists App packages only, so it deletes no platform tag (`test_the_ghcr_retention_never_deletes_a_platform_image`).
+- `test_supply_chain_pins.py` accepts the commit tag for the registered services only. The tag is immutable because CI never pushes a tag again; it is not a digest.
 
 ## 6. 设计约束 (Dos & Don'ts)
 
