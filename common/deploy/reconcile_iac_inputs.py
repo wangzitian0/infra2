@@ -102,14 +102,14 @@ from common.deploy.release_markers import (
     version_key,
 )
 from common.deploy.promotion_guard import require_upstream_post, required_staging_gates
-from infra2_sdk.deploy import DeployRequest
-from infra2_sdk.observability import CheckVerdict
+from common.deploy.evidence import DeployRequest
+from common.observability.issue_trail import CheckVerdict
 from common.deploy.stage_hooks import (  # noqa: F401
     STAGE_HOOK_PLANS,
+    HookRunResult,
     StageHookPlan,
     stage_hook_plan,
 )
-from infra2_sdk.manifests import HookRunResult
 from common.deploy.stage_record import StageRecord
 from common.deploy.git_refs import (
     assert_after_on_main,

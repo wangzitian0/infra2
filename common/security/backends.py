@@ -6,14 +6,15 @@ import json
 import re
 import secrets as _secrets
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from infra2_sdk.runtime.config_schema import (
+from infra2_sdk.config import (
     EnvironmentField,
     EnvironmentManifest,
 )
+from common.core._sdk_wire import field_rendered, field_store_key
 from common.core.http_transport import HttpResponse, HttpTransport, urllib_transport
 
 _VAULT_USER_AGENT = "infra2-sdk/secrets (+https://github.com/wangzitian0/infra2-sdk)"
@@ -367,6 +368,13 @@ class _ReconcileReport:
         }
 
 
+def _by_source(
+    manifest: EnvironmentManifest, *sources: str
+) -> tuple[EnvironmentField, ...]:
+    wanted = set(sources)
+    return tuple(f for f in manifest.fields if f.source in wanted)
+
+
 def _reconcile(
     manifest: EnvironmentManifest,
     values: Mapping[str, str],
@@ -375,14 +383,18 @@ def _reconcile(
     ignore_prefixes: tuple[str, ...] = ("_",),
 ) -> _ReconcileReport:
     missing = [
-        f.key for f in manifest.store_backed if f.key not in values and not f.empty_ok
+        field_store_key(f)
+        for f in manifest.store_backed()
+        if field_store_key(f) not in values and not f.empty_ok
     ]
     empty = [
-        f.key
-        for f in manifest.store_backed
-        if f.key in values and not values[f.key].strip() and not f.empty_ok
+        field_store_key(f)
+        for f in manifest.store_backed()
+        if field_store_key(f) in values
+        and not values[field_store_key(f)].strip()
+        and not f.empty_ok
     ]
-    declared = {f.key for f in manifest.fields}
+    declared = {field_store_key(f) for f in manifest.fields}
     unclassified = [
         k for k in values if k not in declared and not k.startswith(ignore_prefixes)
     ]
@@ -426,6 +438,7 @@ class SecretsResolver:
         release: Mapping[str, str] | None = None,
         decisions: Mapping[str, str] | None = None,
         generator: Callable[[EnvironmentField], str] = _generate_secret,
+        mirror_keys: Collection[str] = (),
     ) -> None:
         self.manifest, self.project, self.service, self.env = (
             manifest,
@@ -435,6 +448,7 @@ class SecretsResolver:
         )
         self.store, self.human, self._generate = store, human, generator
         self.release, self.decisions = dict(release or {}), dict(decisions or {})
+        self.mirror_keys = frozenset(mirror_keys)
         self.path = vault_path(project, env, service)
         self._items: dict[str, Mapping[str, str]] = {}
 
@@ -448,31 +462,33 @@ class SecretsResolver:
 
     def human_expected(self) -> dict[str, str]:
         return {
-            f.key: v
-            for f in self.manifest.by_source("human")
-            if f.store_backed and (v := self._human_values(f).get(f.key))
+            field_store_key(f): v
+            for f in _by_source(self.manifest, "human")
+            if f.store_backed and (v := self._human_values(f).get(field_store_key(f)))
         }
 
     def sync_human(self) -> _SyncReport:
         exp = self.human_expected()
         missing = tuple(
             sorted(
-                f.key
-                for f in self.manifest.by_source("human")
-                if f.store_backed and f.key not in exp and not f.empty_ok
+                field_store_key(f)
+                for f in _by_source(self.manifest, "human")
+                if f.store_backed and field_store_key(f) not in exp and not f.empty_ok
             )
         )
         return self._apply(exp, missing=missing)
 
     def ensure_runtime(self) -> _SyncReport:
         cur = self.store.read(self.path)
-        rt = [f for f in self.manifest.by_source("runtime") if f.store_backed]
+        rt = [f for f in _by_source(self.manifest, "runtime") if f.store_backed]
         fresh = {
-            f.key: self._generate(f)
+            field_store_key(f): self._generate(f)
             for f in rt
-            if not f.empty_ok and not cur.get(f.key)
+            if not f.empty_ok and not cur.get(field_store_key(f))
         }
-        present = tuple(sorted(f.key for f in rt if f.key not in fresh))
+        present = tuple(
+            sorted(field_store_key(f) for f in rt if field_store_key(f) not in fresh)
+        )
         return (
             _SyncReport(self.store.write(self.path, fresh).changed, present)
             if fresh
@@ -484,16 +500,17 @@ class SecretsResolver:
             raise SecretsError("no human backend configured")
         cur = self.store.read(self.path)
         changed, unchanged, missing = [], [], []
-        for f in self.manifest.by_source("runtime"):
-            if not f.mirror_to_1password:
+        for f in _by_source(self.manifest, "runtime"):
+            key = field_store_key(f)
+            if key not in self.mirror_keys:
                 continue
-            if not (val := cur.get(f.key)):
-                missing.append(f.key)
+            if not (val := cur.get(key)):
+                missing.append(key)
             else:
                 item = op_item(self.project, self.env, self.service, scope=f.scope)
                 (
-                    changed if self.human.write(item, {f.key: val}).wrote else unchanged
-                ).append(f.key)
+                    changed if self.human.write(item, {key: val}).wrote else unchanged
+                ).append(key)
         return _SyncReport(
             tuple(sorted(changed)), tuple(sorted(unchanged)), tuple(sorted(missing))
         )
@@ -501,7 +518,7 @@ class SecretsResolver:
     def compose_env(self) -> dict[str, str]:
         out: dict[str, str] = {}
         missing: list[str] = []
-        for f in self.manifest.by_source("release", "decision"):
+        for f in _by_source(self.manifest, "release", "decision"):
             src = self.release if f.source == "release" else self.decisions
             if val := src.get(f.env, ""):
                 out[f.env] = val
@@ -551,7 +568,7 @@ def render_agent_template(
             continue
         if f.provided_by:
             providers.setdefault(f.provided_by.split(":", 1)[0], []).append(f)
-        elif f.rendered:
+        elif field_rendered(f):
             own.append(f)
     for prov, flds in providers.items():
         pp, ps = prov.split("/", 1)
@@ -564,7 +581,7 @@ def render_agent_template(
         lines.append(
             f'{{{{- with secret (printf "secret/data/{project}/%s/{service}" {env_expr}) }}}}'
         )
-        lines.extend(_render_line(f, key=f.key) for f in own)
+        lines.extend(_render_line(f, key=field_store_key(f)) for f in own)
         lines.append("{{- end }}")
     return "\n".join(lines) + "\n"
 

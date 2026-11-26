@@ -53,8 +53,7 @@ from common.deploy.dokploy_adapter import (
     started_before_trigger,
 )
 from common.deploy.rollout import RolloutError, wait_for_deployment
-from common.deploy.evidence import VERSION_KEYS
-from infra2_sdk.deploy import default_http_get, poll_until_healthy
+from common.deploy.evidence import VERSION_KEYS, default_http_get, poll_until_healthy
 
 
 @dataclass(frozen=True)

@@ -74,10 +74,10 @@
 
 ### Rule 6: 镜像必须钉版本 (Pin Images)
 platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可复现。事故先例：#253/#255 的 prefect 卡死源于浮动的 `:3-latest` tag 漂移。规范要求钉到不随上游移动的引用：至少钉具体版本，推荐钉 digest（`image: repo:tag@sha256:...`）。
-- **机械守卫**（范围小于规范本身）：`tools/lint_compose_resource_limits.py` 与 SDK `infra2_sdk.rules.compose`（infra-ci 阻断）拦截字面量裸 `:latest` 并校验内存上限；其它浮动 tag（如 `:3-latest`、`:stable`）靠 review 把关。proof `common/tests/test_image_pins.py`。
+- **机械守卫**（范围小于规范本身）：`tools/lint_compose_resource_limits.py` 与 `common.deploy.compose_rules`（infra-ci 阻断）拦截字面量裸 `:latest` 并校验内存上限；其它浮动 tag（如 `:3-latest`、`:stable`）靠 review 把关。proof `common/tests/test_image_pins.py`。
 
 ### Rule 7: 发布前 Schema 与枚举双向校验 (Pre-Deploy Schema Gate, #698)
-在任何涉及持久化存储的应用部署销毁或重启容器前，必须执行 Pre-Deploy Schema Gate（`python -m infra2_sdk.runtime.schema_check`, infra2-sdk#239, #1824）：
+在任何涉及持久化存储的应用部署销毁或重启容器前，必须执行 Pre-Deploy Schema Gate（`python -m infra2_sdk.storage check-schema`, infra2-sdk#239, #1824）：
 - **双向严格比对**：代码缺失 DB 已有枚举（`missing_in_code`）或 DB 缺失代码枚举（`missing_in_db`）均视为不兼容阻断项。例外（#1658）：整个枚举类型在数据库中不存在（`missing_in_db` 为其全部标签），使用该类型的每一张表都不在数据库中，且镜像里有数据库尚未执行的迁移（`migrations_pending`：用镜像自带的 alembic 脚本目录把 `alembic_version` 的版本解析为 revision，与镜像唯一 head 比较，不同即为待执行），则不阻断，并输出 `NEW_TABLE_COVERS: <枚举> (<表>)`。依据：镜像入口在门禁之后执行 `alembic upgrade head`，新表只能由待执行迁移创建，新表的列只能引用迁移时已存在的类型，所以同一迁移会创建该类型；门禁不检查迁移的 `upgrade()` 内容（镜像自带的 alembic 脚本目录会加载迁移文件，门禁只用它解析版本）。这个推理要求待执行迁移确实创建该表，且迁移里的列类型等于 ORM 的类型；类型存在与标签相等由 finance_report CI 的 `scripts/check_migrated_enums.py`（`schema-migrations` 任务，合并前、对新建库执行）证明，只对由该任务通过的 main 提交构建的镜像成立（tag 推送不重跑该任务，门禁不读取其结果）。仍然阻断：已有类型缺少标签、`missing_in_code`、大小写漂移、类型的某张表已在数据库中、没有待执行迁移（数据库已在镜像 head；版本表无记录时门禁也阻断，理由是门禁不把它判为待执行，而 `upgrade` 实际会从头执行全部迁移）、版本行多于一行或无法解析、镜像有多个 head、alembic.ini 无 `script_location`、读不到表清单或版本（此时在 stderr 输出 `NOTE: new-table coverage not applied (<异常类型>)`）。已知限制，门禁放行而表仍缺失或启动即失败：(1) 待执行迁移只要存在即可，门禁不检查它是否创建该表：数据库停在旧版本、丢了表和类型、而新迁移不建该表时放行，表保持缺失；(2) 回滚到比数据库 head 更旧的镜像时，若枚举无差异，门禁不读取版本而放行，入口的 `alembic upgrade` 会因找不到版本而失败；(3) 新标签加到已有类型上（`ALTER TYPE ... ADD VALUE`）不在此例外内，需要拆成两次发布；(4) 表清单只含连接角色可见的表，且不区分 schema。
 - **Fail-Closed 原则**：数据库查询失败、连接超时或解析异常一律视为不满足，强制中断发布流程。
 - **未评估即阻断（#718 review）**：没有数据库 URL、服务未登记代码侧枚举来源（`common.deploy.schema_gate._SCHEMA_CHECK_SPECS`）、镜像内的 SDK 没有 `runtime.schema_check`（finance_report < v0.2.92）或该来源导入失败/没有任何原生枚举，均输出 `NOT EVALUATED` 并以退出码 3 阻断——“什么都没比”绝不等于“0 处不一致”。退出码：0 通过 · 1 不一致或 DB 失败 · 3 未评估。
@@ -97,7 +97,7 @@ platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可�
 - **Vault 是运行时真理**：服务部署必须从 Vault 读写或显式填写。
 - **滚动重启生效（Rolling Restart）**：密钥轮转不具备进程内存级零停机热加载能力，密码/凭据更新必须通过触发容器重建（`reconcile-iac-inputs.yml` 或 `deploy_v2` 重建）生效。
 - **契约对齐**：调整环境变量时，更新 `.env.example` 与对应服务 README。
-- **环境变量静态清点与三道机械守卫（`tools/env_inventory.py`，proof `common/tests/test_env_inventory.py`，#1236）**：SDK 词表（`runtime_env_contract()`）为空或读取失败时，分析直接报错，不输出空的绿色结果（#1857）。infra2-sdk 没有等价的工作区扫描器：`infra2_sdk.manifests.check` 只校验 manifest 本身，不读 compose、Vault 模板或代码（#1824）。
+- **环境变量静态清点与三道机械守卫（`tools/env_inventory.py`，proof `common/tests/test_env_inventory.py`，#1236）**：SDK 词表（`shared_env_contract()`）为空或读取失败时，分析直接报错，不输出空的绿色结果（#1857）。infra2-sdk 没有等价的工作区扫描器：`infra2_sdk.config` (`EnvironmentManifest.validate_offline`) 只校验 manifest 本身，不读 compose、Vault 模板或代码（#1824）。
   - **G1（Manifest ↔ Compose ↔ Template 对齐）**：注册服务（`common.security.registry.SERVICES`）在 `compose.yaml` 与 `secrets.ctmpl` 中消费的每一个第一方变量必须在对应 `env.manifest.json` 中声明；禁止出现 `ctmpl_not_in_manifest`、`compose_first_party_not_in_manifest` 或 `store_key_not_rendered`。
   - **G2（禁止环境层级 Fail-Open 默认值）**：在任何已部署配置或代码路径中，环境层级变量（`ENV`、`ENVIRONMENT`、`APP_ENV`、`INFRA_ENVIRONMENT` 等）禁止默认回退至 `production` 或 `prod`；已废弃的 `INFRA_PROBE_HEARTBEAT_ENV` 禁止在生产范围重现。
   - **G3（禁止死写、冲突/复制默认值、字面量密钥与幽灵文档变量）**：全仓强制拦截只写不读（`write_no_reader`）、同仓默认值冲突（`default_conflict`）、多文件重复硬编码默认值（`default_copied`）、Manifest 死条目（`dead_manifest_entry`）、过期示例声明（`stale_env_example`）、非占位符密钥字面量或默认值（`secret_literal`、`secret_default`）以及仅出现在 `docs/ssot/` 中的幽灵变量名。

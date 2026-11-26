@@ -17,35 +17,36 @@ ROOT = Path(__file__).resolve().parents[2]
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 
+ALLOWED_SDK_MODULES = frozenset(
+    {"config", "telemetry", "service", "storage", "llm", "delivery"}
+)
+
 DEPRECATED_SDK_MODULES = {
     "images": "infra2_sdk.images",
-    "deploy_health": "infra2_sdk.deploy_health (use infra2_sdk.deploy)",
-    "dispatch": "infra2_sdk.dispatch (use infra2_sdk.deploy)",
-    "release": "infra2_sdk.release (use infra2_sdk.refs)",
+    "deploy_health": "infra2_sdk.deploy_health (use common.deploy.evidence)",
+    "dispatch": "infra2_sdk.dispatch (use common.deploy.evidence)",
+    "release": "infra2_sdk.release (use common.deploy.git_refs)",
+    "fastapi": "infra2_sdk.fastapi (use infra2_sdk.service)",
+    "runtime": "infra2_sdk.runtime (use infra2_sdk.{config,telemetry,service,storage,llm})",
+    "observability": "infra2_sdk.observability (use infra2_sdk.delivery or common.observability)",
+    "deploy": "infra2_sdk.deploy (use infra2_sdk.delivery or common.deploy.evidence)",
+    "manifests": "infra2_sdk.manifests (use infra2_sdk.delivery or common.deploy.stage_hooks)",
+    "capacity": "infra2_sdk.capacity (use common.observability.capacity)",
+    "ci": "infra2_sdk.ci (use common.core.ci_contract)",
+    "refs": "infra2_sdk.refs (use common.deploy.git_refs)",
+    "routing": "infra2_sdk.routing (use common.deploy.routing)",
+    "rules": "infra2_sdk.rules (use common.core.import_rules / common.deploy.compose_rules)",
+    "secrets": "infra2_sdk.secrets (use common.security.backends)",
+    "stage_record": "infra2_sdk.stage_record (use common.deploy.stage_record)",
 }
 
 DEPRECATED_RUNTIME_MODULES = {
-    "environ": "infra2_sdk.runtime.environ (use infra2_sdk.runtime.environment)",
-    "dependencies": "infra2_sdk.runtime.dependencies (use infra2_sdk.runtime.health)",
-    "probes": "infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)",
+    "environ": "infra2_sdk.runtime.environ (use infra2_sdk.config)",
+    "dependencies": "infra2_sdk.runtime.dependencies (use infra2_sdk.service)",
+    "probes": "infra2_sdk.runtime.probes (use infra2_sdk.service)",
 }
 
-DEPRECATED_SDK_ATTRS: dict[tuple[str, str], str] = {
-    ("infra2_sdk.ci", "crons_in"): "yaml.safe_load",
-    ("infra2_sdk.ci", "inspect_compose"): "infra2_sdk.rules.compose.inspect_compose",
-    ("infra2_sdk.deploy", "dispatch_and_wait"): "infra2_sdk.deploy.poll_until_healthy",
-    ("infra2_sdk.deploy", "identifier_kind"): "infra2_sdk.refs.identifier_kind",
-    (
-        "infra2_sdk.manifests",
-        "assert_environment",
-    ): "infra2_sdk.runtime.config_schema.assert_environment",
-    ("infra2_sdk.observability", "ScheduleError"): "infra2_sdk.ci.ScheduleError",
-    ("infra2_sdk.observability", "crons_in"): "yaml.safe_load",
-    ("infra2_sdk.observability", "largest_gap"): "infra2_sdk.ci.largest_gap",
-    ("infra2_sdk.refs", "SHORT_SHA_LENGTH"): "infra2_sdk.refs.classify_ref",
-    ("infra2_sdk.refs", "redact_repo"): "infra2_sdk.refs.resolve_to_sha",
-    ("infra2_sdk.refs", "resolve_branch_to_sha"): "infra2_sdk.refs.resolve_to_sha",
-}
+DEPRECATED_SDK_ATTRS: dict[tuple[str, str], str] = {}
 
 
 def _module_violations(
@@ -73,6 +74,21 @@ def _module_violations(
         for shim_name, shim_desc in DEPRECATED_RUNTIME_MODULES.items():
             if parts[2:3] == [shim_name] or (len(parts) == 2 and shim_name in names):
                 violations.append(f"deprecated module {shim_desc}")
+    if (
+        len(parts) >= 2
+        and not parts[1].startswith("_")
+        and parts[1] not in ALLOWED_SDK_MODULES
+        and parts[1] not in DEPRECATED_SDK_MODULES
+    ):
+        violations.append(f"unsupported module infra2_sdk.{parts[1]}")
+    elif len(parts) == 1:
+        for imported_name in names:
+            if (
+                imported_name not in ALLOWED_SDK_MODULES
+                and imported_name not in DEPRECATED_SDK_MODULES
+                and not imported_name.startswith("_")
+            ):
+                violations.append(f"unsupported module infra2_sdk.{imported_name}")
     for (attr_mod, attr_name), canonical in DEPRECATED_SDK_ATTRS.items():
         if module == attr_mod and attr_name in names:
             violations.append(
@@ -292,13 +308,13 @@ def test_infra_imports_only_the_published_sdk_contract() -> None:
 
 def test_the_sdk_contract_scan_flags_private_and_deprecated_use() -> None:
     assert _sdk_contract_violations(
-        "from infra2_sdk.refs import _ls_remote_rows, classify_ref\n"
-    ) == ["private name infra2_sdk.refs._ls_remote_rows"]
-    assert _sdk_contract_violations("import infra2_sdk._transport\n") == [
-        "private module infra2_sdk._transport"
+        "from infra2_sdk.config import _FIELD_SCOPES, EnvironmentManifest\n"
+    ) == ["private name infra2_sdk.config._FIELD_SCOPES"]
+    assert _sdk_contract_violations("import infra2_sdk._core\n") == [
+        "private module infra2_sdk._core"
     ]
-    assert _sdk_contract_violations("from infra2_sdk._transport import send\n") == [
-        "private module infra2_sdk._transport"
+    assert _sdk_contract_violations("from infra2_sdk._core import ContractModel\n") == [
+        "private module infra2_sdk._core"
     ]
     assert _sdk_contract_violations("from infra2_sdk import images\n") == [
         "deprecated module infra2_sdk.images"
@@ -311,67 +327,67 @@ def test_the_sdk_contract_scan_flags_private_and_deprecated_use() -> None:
     ]
     assert _sdk_contract_violations(
         "from infra2_sdk.deploy_health import poll_until_healthy\n"
-    ) == ["deprecated module infra2_sdk.deploy_health (use infra2_sdk.deploy)"]
+    ) == ["deprecated module infra2_sdk.deploy_health (use common.deploy.evidence)"]
     assert _sdk_contract_violations(
         "from infra2_sdk.release import ReleaseError\n"
-    ) == ["deprecated module infra2_sdk.release (use infra2_sdk.refs)"]
-    assert _sdk_contract_violations(
-        "from infra2_sdk.runtime.probes import DependencyStatus\n"
-    ) == ["deprecated module infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)"]
-    for (mod, attr), canonical in DEPRECATED_SDK_ATTRS.items():
-        expected = f"deprecated attribute {mod}.{attr} (use {canonical})"
-        assert _sdk_contract_violations(f"from {mod} import {attr}\n") == [expected]
-        assert _sdk_contract_violations(f"import {mod}\n{mod}.{attr}\n") == [expected]
+    ) == ["deprecated module infra2_sdk.release (use common.deploy.git_refs)"]
+    assert (
+        "deprecated module infra2_sdk.runtime (use infra2_sdk.{config,telemetry,service,storage,llm})"
+        in _sdk_contract_violations(
+            "from infra2_sdk.runtime.probes import DependencyStatus\n"
+        )
+    )
     assert (
         _sdk_contract_violations(
-            "from infra2_sdk.refs import classify_ref, resolve_to_sha\n"
+            "from infra2_sdk.config import EnvironmentManifest, validate_env\n"
             "from other_pkg._private import _x\n"
         )
         == []
     )
 
 
-_RELEASE = "deprecated module infra2_sdk.release (use infra2_sdk.refs)"
-_DISPATCH = "deprecated module infra2_sdk.dispatch (use infra2_sdk.deploy)"
-_DEPLOY_HEALTH = "deprecated module infra2_sdk.deploy_health (use infra2_sdk.deploy)"
-_IMAGES = "deprecated module infra2_sdk.images"
-_TRANSPORT = "private module infra2_sdk._transport"
-_RUNTIME_PROBES = (
-    "deprecated module infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)"
+_RELEASE = "deprecated module infra2_sdk.release (use common.deploy.git_refs)"
+_DISPATCH = "deprecated module infra2_sdk.dispatch (use common.deploy.evidence)"
+_DEPLOY_HEALTH = (
+    "deprecated module infra2_sdk.deploy_health (use common.deploy.evidence)"
 )
+_IMAGES = "deprecated module infra2_sdk.images"
+_TRANSPORT = "private module infra2_sdk._core"
+_RUNTIME = "deprecated module infra2_sdk.runtime (use infra2_sdk.{config,telemetry,service,storage,llm})"
+_RUNTIME_PROBES = "deprecated module infra2_sdk.runtime.probes (use infra2_sdk.service)"
 _RUNTIME_ENVIRON = (
-    "deprecated module infra2_sdk.runtime.environ (use infra2_sdk.runtime.environment)"
+    "deprecated module infra2_sdk.runtime.environ (use infra2_sdk.config)"
 )
 
 
 def test_the_sdk_contract_scan_flags_attribute_chains() -> None:
     """Code reaches a removed module through the package as well as through an import."""
     reached_through_the_package = {
-        "infra2_sdk.release.run()": _RELEASE,
-        "infra2_sdk.dispatch.send()": _DISPATCH,
-        "value = infra2_sdk.deploy_health.poll": _DEPLOY_HEALTH,
-        "infra2_sdk.images": _IMAGES,
-        "infra2_sdk._transport.send()": _TRANSPORT,
-        "infra2_sdk.runtime.probes.check()": _RUNTIME_PROBES,
+        "infra2_sdk.release.run()": [_RELEASE],
+        "infra2_sdk.dispatch.send()": [_DISPATCH],
+        "value = infra2_sdk.deploy_health.poll": [_DEPLOY_HEALTH],
+        "infra2_sdk.images": [_IMAGES],
+        "infra2_sdk._core.ContractModel": [_TRANSPORT],
+        "infra2_sdk.runtime.probes.check()": [_RUNTIME, _RUNTIME_PROBES],
     }
     for statement, expected in reached_through_the_package.items():
         source = f"import infra2_sdk\n{statement}\n"
-        assert _sdk_contract_violations(source) == [expected], statement
+        assert _sdk_contract_violations(source) == expected, statement
     # An alias of the package, or of a sub-package, leads to the same module.
     assert _sdk_contract_violations(
         "import infra2_sdk as sdk\nsdk.release.run()\n"
     ) == [_RELEASE]
     assert _sdk_contract_violations(
         "from infra2_sdk import runtime as rt\nrt.probes.check()\n"
-    ) == [_RUNTIME_PROBES]
+    ) == [_RUNTIME, _RUNTIME_PROBES]
     assert _sdk_contract_violations(
         "from infra2_sdk import runtime\nruntime.environ.get()\n"
-    ) == [_RUNTIME_ENVIRON]
+    ) == [_RUNTIME, _RUNTIME_ENVIRON]
     # Published names, dunder names and chains of other packages stay clean.
     assert (
         _sdk_contract_violations(
             "import infra2_sdk\n"
-            "print(infra2_sdk.__version__, infra2_sdk.refs.classify_ref)\n"
+            "print(infra2_sdk.__version__, infra2_sdk.config.EnvironmentManifest)\n"
             "import other\n"
             "other.release.run()\n"
             "other.images\n"
@@ -385,7 +401,7 @@ def test_the_sdk_contract_scan_flags_modules_loaded_by_name() -> None:
         'import importlib\nimportlib.import_module("infra2_sdk.release")\n': _RELEASE,
         'from importlib import import_module\nimport_module("infra2_sdk.dispatch")\n': _DISPATCH,
         '__import__("infra2_sdk.images")\n': _IMAGES,
-        'import importlib\nimportlib.import_module("infra2_sdk._transport")\n': _TRANSPORT,
+        'import importlib\nimportlib.import_module("infra2_sdk._core")\n': _TRANSPORT,
         'import importlib\nimportlib.import_module(name="infra2_sdk.deploy_health")\n': _DEPLOY_HEALTH,
     }
     for source, expected in loaded_by_name.items():
@@ -393,7 +409,7 @@ def test_the_sdk_contract_scan_flags_modules_loaded_by_name() -> None:
     assert (
         _sdk_contract_violations(
             "import importlib\n"
-            'importlib.import_module("infra2_sdk.refs")\n'
+            'importlib.import_module("infra2_sdk.config")\n'
             'importlib.import_module("other.release")\n'
         )
         == []
@@ -407,7 +423,7 @@ from infra2_sdk.release import not_python
 EOF
 docker exec -i "$CONTAINER" python - <<'PY'
 import infra2_sdk
-infra2_sdk._transport.send()
+infra2_sdk._core.ContractModel
 PY
 """
 #: The shape of the deleted tools/sync_anonymized_staging.sh: a double-quoted `-c`.
@@ -423,7 +439,7 @@ _DASH_C_SINGLE = "python -c 'import infra2_sdk.dispatch; print(1)'"
 
 def test_embedded_python_is_cut_out_of_shell_text() -> None:
     assert _embedded_python(_HEREDOC) == [
-        "import infra2_sdk\ninfra2_sdk._transport.send()\n"
+        "import infra2_sdk\ninfra2_sdk._core.ContractModel\n"
     ]
     (double,) = _embedded_python(_DASH_C_DOUBLE)
     assert double.strip().splitlines() == [

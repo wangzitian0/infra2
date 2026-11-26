@@ -442,12 +442,12 @@ def test_verdict_for_exit_maps_each_code(returncode, verdict):
 
 
 def test_exit_codes_equal_the_sdk_schema_check_codes():
-    from infra2_sdk.runtime import schema_check
+    from infra2_sdk import storage
 
     assert (sg.EXIT_OK, sg.EXIT_BLOCKED, sg.EXIT_NOT_EVALUATED) == (0, 1, 3)
-    assert sg.EXIT_OK == schema_check.EXIT_OK
-    assert sg.EXIT_BLOCKED == schema_check.EXIT_BLOCKED
-    assert sg.EXIT_NOT_EVALUATED == schema_check.EXIT_NOT_EVALUATED
+    assert sg.EXIT_OK == storage.EXIT_OK
+    assert sg.EXIT_BLOCKED == storage.EXIT_BLOCKED
+    assert sg.EXIT_NOT_EVALUATED == storage.EXIT_NOT_EVALUATED
 
 
 # --- _LAUNCHER: runs in the target image ------------------------------------------------
@@ -605,8 +605,7 @@ def test_launcher_with_the_installed_sdk_and_no_url_is_not_evaluated(tmp_path):
         timeout=60,
     )
     assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
-    assert "no database URL (--db-url)" in result.stderr
-    assert "cannot load enums from absent_module:metadata" in result.stderr
+    assert "DATABASE_URL is required" in result.stderr
 
 
 # --- the service declaration ---------------------------------------------------------

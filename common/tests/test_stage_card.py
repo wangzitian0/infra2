@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from infra2_sdk.observability import CheckVerdict
+from common.observability.issue_trail import CheckVerdict
 from common.deploy.stage_record import StageRecord
 
 import common.alerting

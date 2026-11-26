@@ -1641,7 +1641,7 @@ def test_sdk_read_otel_is_derived_from_sdk_vocabulary():
 
 def test_an_empty_sdk_vocabulary_stops_the_analysis(tmp_path, monkeypatch):
     """infra2#1857: an empty SDK contract raises; it does not give a green empty report."""
-    import infra2_sdk.runtime.environment as sdk_env
+    import infra2_sdk.config as sdk_config
 
     w(tmp_path, "app/settings.py", "import os\nos.environ['SOME_KEY']\n")
     inv_ = envinv.run({"fx": tmp_path})
@@ -1651,7 +1651,9 @@ def test_an_empty_sdk_vocabulary_stops_the_analysis(tmp_path, monkeypatch):
         envinv.analyze(inv_, vocab={})
     with pytest.raises(ValueError, match="the SDK vocabulary is empty"):
         envinv.doc_only(inv_, {"fx": tmp_path}, vocab={})
-    monkeypatch.setattr(sdk_env, "runtime_env_contract", lambda: {"variables": []})
+    monkeypatch.setattr(
+        sdk_config, "shared_env_contract", lambda: {"groups": {"runtime": []}}
+    )
     for call in (
         envinv.sdk_vocabulary,
         envinv._sdk_read_otel,

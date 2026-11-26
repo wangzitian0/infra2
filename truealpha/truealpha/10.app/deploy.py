@@ -428,7 +428,8 @@ class AppDeployer(Deployer):
         if existing_access_key and existing_secret_key:
             info("S3 credentials already exist in Vault, skipping bucket creation")
             try:
-                from infra2_sdk.runtime.s3 import S3Settings, ensure_bucket
+                from infra2_sdk.service import DependencyStatus
+                from infra2_sdk.storage import S3Settings, probe_s3
 
                 env_suffix = get_env().get("ENV_SUFFIX", "")
                 endpoint = (
@@ -442,7 +443,9 @@ class AppDeployer(Deployer):
                     access_key_id=existing_access_key,
                     secret_access_key=existing_secret_key,
                 )
-                ensure_bucket(s3_settings, allow_create=False)
+                res = probe_s3(s3_settings)
+                if res.status != DependencyStatus.PRESENT:
+                    raise RuntimeError(res.detail)
                 info(f"S3 bucket '{bucket_name}' verified reachable via S3 API")
             except Exception as exc:
                 error(

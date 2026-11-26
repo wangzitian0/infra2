@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 
-from infra2_sdk.deploy import default_http_get, poll_until_healthy
+from common.deploy.evidence import default_http_get, poll_until_healthy
 
 GATE_VERDICT_WAIT_SECONDS = 90
 GATE_MAX_VERDICT_AGE_SECONDS = 180

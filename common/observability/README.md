@@ -60,7 +60,7 @@ print(f"Container breakdown cause: {verdict.cause} ({verdict.detail})")
 ### Reconciling Watchdog Issues
 ```python
 from pathlib import Path
-from infra2_sdk.observability import (
+from common.observability.issue_trail import (
     CheckVerdict,
     GitHubIssues,
     load_trail,

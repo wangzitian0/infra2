@@ -27,7 +27,7 @@ from typing import Any, Dict, List
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from infra2_sdk.fastapi import init_service
+from infra2_sdk.service import CallableCheck, init_service
 from common.deploy.git_refs import classify_ref
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
@@ -834,7 +834,7 @@ def _runner_readiness_checker() -> tuple[bool, str]:
 init_service(
     app,
     name="iac-runner",
-    db_checker=_runner_readiness_checker,
+    checks=(CallableCheck("runner", _runner_readiness_checker),),
     enable_otel=False,
 )
 # Replace SDK generic /health with runner's flat boolean checks + in_flight_deploys contract.

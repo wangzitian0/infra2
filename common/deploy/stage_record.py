@@ -21,8 +21,11 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from infra2_sdk.observability import CheckVerdict
-from common.core._sdk_wire import parse_iso_utc, reject_unknown
+from common.core._sdk_wire import (
+    CheckVerdict,
+    parse_iso_utc,
+    reject_unknown,
+)
 from common.core.ci_contract import load_delivery_stages
 
 

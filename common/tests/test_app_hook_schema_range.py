@@ -55,6 +55,10 @@ def _writing_only() -> RuntimeHooksManifest:
 def test_the_runner_accepts_schema_3_only() -> None:
     assert ACCEPTED_HOOK_SCHEMA_VERSIONS == (3,)
     with pytest.raises(ValueError, match="schema_version"):
+        app_contract.parse_hooks_manifest(
+            {"service": "finance_report/app", "checks": [_row("smoke")]}
+        )
+    with pytest.raises(ValueError, match="schema_version"):
         RuntimeHooksManifest.from_dict(
             {"schema_version": 2, "service": "finance_report/app", "slots": {}}
         )
@@ -94,7 +98,25 @@ def test_a_schema_3_slot_runs_its_cell_without_leaking_secrets(
     assert calls, "the runner ran no check"
     for _argv, env in calls:
         assert env.get("APP_URL") == "https://app.example"
+        assert env.get("HOOK_CELL") == cell
+        assert env.get("HOOK_POLICY_VERSION")
         assert "INFRA2_PAT" not in env
+
+    scaled_calls: list[dict[str, str]] = []
+    scaled_res = execute_app_hook_slot(
+        _v3(*[_row(n, accepts_scale=(n == slot)) for n in ALL_SLOTS]),
+        slot,
+        app_url="https://app.example",
+        environment=environment,
+        version_ref="v0.2.92",
+        ambient_env={"PATH": "/usr/bin"},
+        runner=lambda argv, **kw: (
+            scaled_calls.append(dict(kw.get("env") or {})),
+            subprocess.CompletedProcess(argv, 0, stdout="ok", stderr=""),
+        )[1],
+    )
+    assert scaled_res.status == "pass"
+    assert all(env.get("HOOK_SCALE") for env in scaled_calls)
 
 
 def test_schema3_empty_cells_names_a_cell_with_no_check() -> None:

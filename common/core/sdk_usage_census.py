@@ -383,10 +383,11 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
             else (subpkg_init if subpkg_init.is_file() else None)
         )
         if mod_path is not None:
+            submod_name = f"{pkg_mod}.{sym}"
             defs.append(
                 {
                     "package": pkg_mod,
-                    "module": f"{pkg_mod}.{sym}",
+                    "module": submod_name,
                     "name": sym,
                     "kind": "module",
                     "line": 1,
@@ -394,6 +395,34 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
                     "path": str(mod_path),
                 }
             )
+            _, sub_tree = _parse_py_file(mod_path)
+            sub_all = (
+                _extract_dunder_all_entries(sub_tree) if sub_tree is not None else []
+            )
+            for sub_sym, sub_line in sub_all:
+                if (
+                    not sub_sym
+                    or sub_sym.startswith("_")
+                    or sub_sym in SKIP_SYMBOL_NAMES
+                ):
+                    continue
+                candidates = by_name.get(sub_sym, [])
+                scoped = [c for c in candidates if c["module"] == submod_name]
+                chosen = (scoped or [None])[0]
+                if chosen is not None:
+                    defs.append({**chosen, "package": pkg_mod})
+                else:
+                    defs.append(
+                        {
+                            "package": pkg_mod,
+                            "module": submod_name,
+                            "name": sub_sym,
+                            "kind": "reexport",
+                            "line": sub_line,
+                            "end": sub_line,
+                            "path": str(mod_path),
+                        }
+                    )
             continue
         candidates = by_name.get(sym, [])
         scoped = [c for c in candidates if c["module"].startswith(f"{pkg_mod}.")]
@@ -1083,10 +1112,32 @@ def compute_m1(
 def sdk_env_vocabulary(
     pkg_root: Path,
 ) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
-    """Return (contract_vocab, full_vocab) parsed from runtime/environment.py."""
+    """Return (contract_vocab, full_vocab) parsed from data/shared_env.yaml or legacy environment.py."""
     contract_vocab: dict[str, dict[str, str]] = {}
+    shared_yaml = pkg_root / "data" / "shared_env.yaml"
+    if shared_yaml.is_file():
+        import yaml as _pyyaml
+
+        data = _pyyaml.safe_load(shared_yaml.read_text("utf-8", "replace")) or {}
+        if isinstance(data, dict):
+            runtime_entries = (
+                (data.get("groups") or {}).get("runtime")
+                if isinstance(data.get("groups"), dict)
+                else None
+            ) or ()
+            for item in runtime_entries:
+                if not isinstance(item, dict):
+                    continue
+                canon = item.get("name")
+                if not canon or not isinstance(canon, str):
+                    continue
+                contract_vocab[canon] = {"kind": "canonical", "canonical": canon}
+                for alias in item.get("aliases") or ():
+                    if isinstance(alias, str) and alias:
+                        contract_vocab[alias] = {"kind": "alias", "canonical": canon}
+
     env_py = pkg_root / "runtime" / "environment.py"
-    if env_py.is_file():
+    if not contract_vocab and env_py.is_file():
         tree = ast.parse(env_py.read_text("utf-8", "replace"))
         members: dict[str, str] = {}
         specs: list[tuple[str, list[str]]] = []
@@ -1133,7 +1184,7 @@ def sdk_env_vocabulary(
 
     if not contract_vocab:
         raise ValueError(
-            f"no RuntimeEnvKey contract found in {pkg_root / 'runtime/environment.py'}"
+            f"no RuntimeEnvKey contract found in {shared_yaml if shared_yaml.is_file() else pkg_root}"
         )
 
     full_vocab = dict(contract_vocab)

@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from infra2_sdk.fastapi import init_service
+from infra2_sdk.service import CallableCheck, init_service
 from pydantic import BaseModel, ConfigDict, Field
 
 from common.alerting import (
@@ -121,7 +121,7 @@ fastapi_app = FastAPI(title="platform-alerting")
 init_service(
     fastapi_app,
     name="platform-alerting",
-    db_checker=_alerting_readiness_checker,
+    checks=(CallableCheck("delivery", _alerting_readiness_checker),),
     enable_otel=True,
     strict_otel=False,
     check_timeout_seconds=READINESS_TIMEOUT_SECONDS,

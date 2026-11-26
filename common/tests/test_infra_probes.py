@@ -7,8 +7,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from infra2_sdk.runtime.health import DependencyStatus
-from infra2_sdk.runtime.health import ProbeResult as SdkProbeResult
+from infra2_sdk.service import DependencyStatus
+from infra2_sdk.service import ProbeResult as SdkProbeResult
 
 import common.observability.probes as probes
 from common.observability.probes import (
@@ -185,9 +185,12 @@ def test_postgres_probe_runs_a_real_select_1_not_just_a_tcp_handshake(
     seen_settings = {}
 
     def fake_prober(settings):
-        seen_settings["dsn"] = settings.dsn
+        seen_settings["dsn"] = settings.url
         return SdkProbeResult(
-            "database", DependencyStatus.PRESENT, "SELECT 1 succeeded", 4.0
+            name="database",
+            status=DependencyStatus.PRESENT,
+            detail="SELECT 1 succeeded",
+            duration_ms=4.0,
         )
 
     result = run_probe(spec, postgres_prober=fake_prober)
@@ -226,10 +229,10 @@ def test_postgres_probe_reports_the_sdk_detail_on_absence(monkeypatch) -> None:
     result = run_probe(
         spec,
         postgres_prober=lambda _settings: SdkProbeResult(
-            "database",
-            DependencyStatus.ABSENT,
-            "OperationalError: connection refused",
-            4.0,
+            name="database",
+            status=DependencyStatus.ABSENT,
+            detail="OperationalError: connection refused",
+            duration_ms=4.0,
         ),
     )
 
@@ -250,7 +253,10 @@ def test_s3_probe_runs_a_real_head_bucket_not_just_an_http_200(monkeypatch) -> N
         seen_settings["bucket"] = settings.bucket
         seen_settings["endpoint_url"] = settings.endpoint_url
         return SdkProbeResult(
-            "object_storage", DependencyStatus.PRESENT, "bucket accessible", 6.0
+            name="object_storage",
+            status=DependencyStatus.PRESENT,
+            detail="bucket accessible",
+            duration_ms=6.0,
         )
 
     result = run_probe(spec, s3_prober=fake_prober)

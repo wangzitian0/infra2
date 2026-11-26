@@ -152,16 +152,19 @@ def test_the_scan_follows_a_string_module_path(tmp_path: Path) -> None:
 
 
 def test_import_scanner_reports_the_name_that_broke_the_runner() -> None:
-    source = "from infra2_sdk.runtime.http import request_with_retry\nimport infra2_sdk.secrets\n"
+    source = (
+        "from infra2_sdk.service import request_with_retry\nimport infra2_sdk.config\n"
+    )
     assert sdk_names_imported_by(source) == {
-        ("infra2_sdk.runtime.http", "request_with_retry"),
-        ("infra2_sdk.secrets", ""),
+        ("infra2_sdk.service", "request_with_retry"),
+        ("infra2_sdk.config", ""),
     }
     assert names_missing_from_installed_sdk(
-        {("infra2_sdk.runtime.http", "request_with_retry_gone")}
-    ) == [("infra2_sdk.runtime.http", "request_with_retry_gone")]
+        {("infra2_sdk.service", "request_with_retry_gone")}
+    ) == [("infra2_sdk.service", "request_with_retry_gone")]
     assert (
-        names_missing_from_installed_sdk({("infra2_sdk.secrets", "SecretsError")}) == []
+        names_missing_from_installed_sdk({("infra2_sdk.config", "EnvironmentManifest")})
+        == []
     )
 
 

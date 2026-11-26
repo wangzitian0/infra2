@@ -100,7 +100,7 @@ def _red(detail: str) -> Outcome:
 
 def record(path: str, outcome: Outcome) -> None:
     """Append the outcome to the verdict file of the issue trail."""
-    from infra2_sdk.observability import CheckVerdict, record_verdicts
+    from common.observability.issue_trail import CheckVerdict, record_verdicts
 
     red = not outcome.ok and not outcome.skipped
     verdict = CheckVerdict(

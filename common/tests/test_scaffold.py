@@ -209,17 +209,14 @@ def test_scaffold_app_py_wires_db_healthcheck(tmp_path: Path):
     out_pg = tmp_path / "pg_app"
     scaffold_service("pg-service", out_pg, db="postgres")
     app_pg = (out_pg / "app.py").read_text(encoding="utf-8")
-    assert (
-        "from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres"
-        in app_pg
-    )
-    assert "db_checker=check_db" in app_pg
+    assert "from infra2_sdk.storage import PostgresSettings, probe_postgres" in app_pg
+    assert 'checks=(CallableCheck("db", check_db),)' in app_pg
 
     out_none = tmp_path / "none_app"
     scaffold_service("none-service", out_none, db="none")
     app_none = (out_none / "app.py").read_text(encoding="utf-8")
     assert "probe_postgres" not in app_none
-    assert "db_checker" not in app_none
+    assert "CallableCheck" not in app_none
 
 
 @pytest.mark.parametrize("profile", ["infra2", "standalone"])
@@ -256,7 +253,7 @@ def test_scaffolded_postgres_app_builds_its_settings_from_an_explicit_dsn(
     assert len(assignments) == 1, "app.py must assign db_settings once"
     call = assignments[0]
     assert isinstance(call, ast.Call) and ast.unparse(call.func) == "PostgresSettings"
-    assert [keyword.arg for keyword in call.keywords] == ["dsn"]
+    assert [keyword.arg for keyword in call.keywords] == ["url"]
     assert ast.unparse(call.keywords[0].value) == "database_url"
     assert "database_url = os.environ.get('DATABASE_URL', '').strip()" in [
         ast.unparse(node) for node in tree.body
@@ -272,7 +269,7 @@ def test_scaffolded_postgres_app_builds_its_settings_from_an_explicit_dsn(
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "init_service"
     ]
     assert len(init_calls) == 1, "app.py must still call init_service once"
-    assert "db_checker" in [keyword.arg for keyword in init_calls[0].keywords]
+    assert "checks" in [keyword.arg for keyword in init_calls[0].keywords]
 
 
 def test_scaffold_requirements_txt_includes_extras(tmp_path: Path):
@@ -282,23 +279,26 @@ def test_scaffold_requirements_txt_includes_extras(tmp_path: Path):
     out_pg = tmp_path / "pg_reqs"
     scaffold_service("pg-reqs", out_pg, db="postgres")
     reqs_pg = (out_pg / "requirements.txt").read_text(encoding="utf-8")
-    assert f"infra2-sdk[fastapi,otel,postgres]>={release}\n" in reqs_pg
+    assert f"infra2-sdk[fastapi,telemetry,postgres]>={release}\n" in reqs_pg
     # The SDK extra owns the FastAPI version bound: a second line would drift from it.
     assert not [line for line in reqs_pg.splitlines() if line.startswith("fastapi")]
 
     out_none = tmp_path / "none_reqs"
     scaffold_service("none-reqs", out_none, db="none")
     reqs_none = (out_none / "requirements.txt").read_text(encoding="utf-8")
-    assert f"infra2-sdk[fastapi,otel]>={release}\n" in reqs_none
+    assert f"infra2-sdk[fastapi,telemetry]>={release}\n" in reqs_none
 
 
 def test_scaffold_requirement_follows_the_sdk_version(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(infra2_sdk, "__version__", "9.8.7")
 
-    assert "infra2-sdk[fastapi,otel,postgres]>=9.8.7\n" in _generate_requirements_txt(
-        db="postgres"
+    assert (
+        "infra2-sdk[fastapi,telemetry,postgres]>=9.8.7\n"
+        in _generate_requirements_txt(db="postgres")
     )
-    assert "infra2-sdk[fastapi,otel]>=9.8.7\n" in _generate_requirements_txt(db="none")
+    assert "infra2-sdk[fastapi,telemetry]>=9.8.7\n" in _generate_requirements_txt(
+        db="none"
+    )
 
 
 @pytest.mark.parametrize(
@@ -318,7 +318,7 @@ def test_scaffold_requirement_keeps_only_the_release_part(
     monkeypatch.setattr(infra2_sdk, "__version__", sdk_version)
 
     assert _generate_requirements_txt(db="none").endswith(
-        f"infra2-sdk[fastapi,otel]>={bound}\n"
+        f"infra2-sdk[fastapi,telemetry]>={bound}\n"
     )
 
 
@@ -507,9 +507,7 @@ def test_infra2_app_stops_at_import_without_a_tier(tmp_path: Path):
     result = _run_generated_app(tmp_path, "infra2", "import app")
 
     assert result.returncode != 0
-    assert "ValueError: ENVIRONMENT is required; set ENVIRONMENT to a known tier" in (
-        result.stderr
-    )
+    assert "ValueError: ENVIRONMENT is required" in result.stderr
 
 
 def test_infra2_app_starts_with_a_known_tier(tmp_path: Path):
@@ -627,7 +625,7 @@ def test_generated_postgres_app_uses_a_set_database_url(tmp_path: Path, profile:
         tmp_path / "app",
         profile,
         variables,
-        "import app\nprint(app.db_settings.psycopg_dsn)",
+        "import app\nprint(app.db_settings.url)",
     )
 
     assert result.returncode == 0, result.stderr

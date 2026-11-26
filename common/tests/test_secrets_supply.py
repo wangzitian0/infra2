@@ -449,7 +449,7 @@ def test_apply_secret_supply_does_not_swallow_a_kwarg_it_cannot_honour() -> None
 
 def test_apply_prunes_orphan_keys_on_non_preview_service() -> None:
     """Remove retired store keys via replace while keeping active and placeholder keys."""
-    from infra2_sdk.runtime.config_schema import EnvironmentManifest
+    from infra2_sdk.config import EnvironmentManifest
     from common.security.backends import SecretsResolver, WriteResult, vault_path
     from common.security.registry import Service
 

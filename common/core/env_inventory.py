@@ -2344,7 +2344,6 @@ def scan_manifest(
                 "aliases",
                 "scope",
                 "ci",
-                "mirror_to_1password",
             )
             if k in fld
         }
@@ -2895,14 +2894,8 @@ FAILOPEN_ID = {
 #: Env names the SDK reads outside the runtime contract: name -> (kind, SDK file that
 #: reads it). sdk_usage_census reads the same table.
 SDK_EXTRA_KEYS: dict[str, tuple[str, str]] = {
-    "GITHUB_ACTIONS": ("helper", "runtime/environment.py"),
-    "VAULT_ADDR": ("helper", "secrets.py"),
-    "VAULT_TOKEN": ("helper", "secrets.py"),
-    "VAULT_ROLE_ID": ("helper", "secrets.py"),
-    "VAULT_SECRET_ID": ("helper", "secrets.py"),
-    "GITHUB_TOKEN": ("tool-token", "deploy.py"),
-    "INFRA2_PAT": ("tool-token", "manifests.py"),
-    "ENV_SUFFIX": ("template", "rules/compose.py"),
+    "GITHUB_ACTIONS": ("helper", "config.py"),
+    "GITHUB_TOKEN": ("tool-token", "delivery.py"),
 }
 SDK_IDENTITY_ONLY = {
     "CONFIGURATION_SHA256",
@@ -2914,15 +2907,15 @@ SDK_READ_VAULT = {"VAULT_ADDR", "VAULT_TOKEN", "VAULT_ROLE_ID", "VAULT_SECRET_ID
 
 
 def sdk_vocabulary() -> dict[str, dict]:
-    """Read the SDK vocabulary via ``infra2_sdk.runtime.environment.runtime_env_contract()``.
+    """Read the SDK vocabulary via ``infra2_sdk.config.shared_env_contract()``.
 
     Raise ``ValueError`` when the contract names no variable: an analysis on an empty
     vocabulary reports no SDK finding and looks green (infra2#1857).
     """
-    from infra2_sdk.runtime.environment import runtime_env_contract
+    from infra2_sdk.config import shared_env_contract
 
-    data = runtime_env_contract()
-    entries = data.get("variables") or ()
+    data = shared_env_contract()
+    entries = (data.get("groups") or {}).get("runtime") or ()
     vocab: dict[str, dict] = {}
     for item in entries:
         canon = item.get("name")
@@ -2932,7 +2925,7 @@ def sdk_vocabulary() -> dict[str, dict]:
         for alias in item.get("aliases") or ():
             vocab[alias] = {"kind": "alias", "canonical": canon}
     if not vocab:
-        raise ValueError("runtime_env_contract() names no variable")
+        raise ValueError("shared_env_contract() names no variable")
     for name, (kind, _file) in SDK_EXTRA_KEYS.items():
         vocab.setdefault(name, {"kind": kind, "canonical": name})
     return vocab

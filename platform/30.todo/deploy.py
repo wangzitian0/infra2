@@ -230,7 +230,7 @@ class TodoDeployer(Deployer):
 def sso_setup(c):
     """Register Canary Todo in Authentik SSO (One-time or idempotent)"""
     from common.deploy.routing import derive_preview_coordinates
-    from infra2_sdk.runtime.environment import resolve_environment_tier
+    from infra2_sdk.config import resolve_tier
 
     env = TodoDeployer.env()
     internal_domain = env.get("INTERNAL_DOMAIN")
@@ -239,9 +239,7 @@ def sso_setup(c):
         error("Missing INTERNAL_DOMAIN")
         raise Exit(code=1)
 
-    tier = resolve_environment_tier(
-        env.get("ENVIRONMENT") or env.get("ENV") or "production"
-    )
+    tier = resolve_tier(env.get("ENVIRONMENT") or env.get("ENV") or "production")
     coords = derive_preview_coordinates("todo", tier, base_domain=internal_domain)
     suffix = coords.env_suffix
     domain_suffix = coords.env_domain_suffix

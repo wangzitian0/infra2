@@ -982,8 +982,10 @@ def test_an_sdk_without_a_runtime_contract_fails(tmp_path: Path) -> None:
     """An empty RuntimeEnvKey contract stops the census; it never reports an empty
     vocabulary as green (infra2#1824)."""
     pkg = tmp_path / "pkg"
-    (pkg / "runtime").mkdir(parents=True)
-    (pkg / "runtime/environment.py").write_text("X = 1\n", encoding="utf-8")
+    (pkg / "data").mkdir(parents=True)
+    (pkg / "data/shared_env.yaml").write_text(
+        "schema_version: 2\ngroups: {}\n", encoding="utf-8"
+    )
     with pytest.raises(ValueError, match="no RuntimeEnvKey contract"):
         census.sdk_env_vocabulary(pkg)
 

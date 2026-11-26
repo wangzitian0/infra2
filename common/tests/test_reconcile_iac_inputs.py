@@ -1389,7 +1389,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     """#1416 (M2): post-deploy hooks resolve each deployed App's release_tag SHA
     and environment URL, fetches runtime-hooks.manifest.json, executes the smoke slot,
     and records hook_results in the reconcile JSON payload."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -1492,7 +1492,7 @@ def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
 ) -> None:
     """#1416 (M2): when a post-deploy smoke hook fails during promote_prod, the production
     marker must NOT advance and main() must return exit code 1."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -2508,7 +2508,7 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
 ) -> None:
     """#1493: run_post_deploy_app_hooks with slot='smoke,staging_gate' executes both smoke and
     staging_gate in order for each deployed App and records issue trails per slot."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     monkeypatch.setattr(
@@ -2566,7 +2566,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit(
     """#1493: run_scheduled_app_audits discovers Apps declaring scheduled_audit, forwards
     TA_EMAIL from the env, records the issue trail, and main(--run-scheduled-audit)
     returns 1 when any audit fails."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -2765,7 +2765,7 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
     """#1521: LOCAL_SERVICE_HOOK_MANIFESTS is dynamically derived from service_attrs() and
     both run_post_deploy_app_hooks and run_scheduled_app_audits execute platform/todo's
     runtime-hooks.manifest.json slots."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
 
     assert reconcile.LOCAL_SERVICE_HOOK_MANIFESTS == {
         "platform/todo": "platform/30.todo/runtime-hooks.manifest.json",
@@ -2892,7 +2892,7 @@ def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
     """#1521: main(['--run-hook-slot', 'staging_gate', '--hook-service', 'platform/todo', ...])
     resolves platform/30.todo/runtime-hooks.manifest.json and https://todo-staging.zitian.party
     without raising ValueError: unknown app service 'platform/todo'."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
 
     captured: list[tuple[str, str, str, str, str, Path]] = []
 
@@ -3349,12 +3349,12 @@ _SCHEDULED_AUDIT_FLAG = "--run-scheduled-audit"
 def _slot_checks(manifest: reconcile.RuntimeHooksManifest):
     """Yield ``(slot, check)`` for each active check in a cell of a train slot."""
     from common.deploy import app_contract
-    from infra2_sdk.manifests import resolve_check_cells
+    from infra2_sdk.delivery import resolve_check_cells
 
     for slot in HOOK_SLOTS:
         cells = set(app_contract._SLOT_CELLS[slot])
         for check in manifest.checks:
-            if check.off is None and cells & set(resolve_check_cells(check)):
+            if cells & set(resolve_check_cells(check)):
                 yield slot, check
 
 
@@ -3666,9 +3666,7 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
                 ambient_env={"PATH": "/usr/bin:/bin"},
                 runner=_runner,
             )
-    with pytest.raises(
-        ValueError, match="cannot be in both required_env and optional_env"
-    ):
+    with pytest.raises(ValueError, match="declared in both required and optional"):
         app_contract.execute_app_hook_slot(
             _manifest(["INFRA2_TOUCHED_FILES"]),
             "smoke",
@@ -3776,7 +3774,7 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
     """#1554: when cut_missing_app_tag=True and an App's main is ahead of its latest tag,
     sync_app_releases deploys preview/branch (main), runs preview_gate, cuts and pushes
     refs/tags/vX.Y.Z only on pass, and always runs deploy_v2 --down in finally."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -4040,7 +4038,7 @@ def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
     """#1590: resolve_workflow_failure_alert fails closed on missing/corrupt/null JSON,
     skips sync-app-releases failures before deploy, and --run-scheduled-audit writes
     structured scheduled_audit_results for page_dedup."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     result_file = tmp_path / "reconcile-result.json"
@@ -4332,7 +4330,7 @@ def test_an_off_lineage_check_does_not_ask_for_the_tag_checkout() -> None:
 def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
     """Stub the hook environment of a reconcile run; return the (service, release_ref)
     of every hook checkout that the run asks for."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -4566,7 +4564,7 @@ def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot
     a failing service's own smoke->staging_gate chain without dropping sibling verdicts."""
     import threading
     import time as _time
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -4741,7 +4739,7 @@ def test_required_staging_gates_name_every_app_release_since_the_marker(
 def test_summary_is_rendered_from_records(monkeypatch, tmp_path) -> None:
     """The run summary holds the records of the run and nothing that the plan builds (#1645)."""
     from common.deploy.stage_record import write_stage_record
-    from infra2_sdk.observability import CheckVerdict
+    from common.observability.issue_trail import CheckVerdict
 
     def record(phase, checks, **kw):
         return write_stage_record(
@@ -4819,7 +4817,7 @@ def test_hook_verdict_key_and_scheduled_dedup_cache(
 ) -> None:
     """#1602 (S3.2, S4.1, S4.2): hook verdict keys dedup identical scheduled audits
     and force replay on workflow_dispatch while emitting stderr heartbeats."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
 
     manifest = _hooks_v3("platform/alerting")
     key_first = reconcile.hook_verdict_key(
@@ -4919,7 +4917,7 @@ def test_hook_heartbeat_emits_to_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """#1602 (S3.2): long-running hooks emit periodic heartbeat lines to stderr."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
 
     manifest = _hooks_v3("platform/alerting")
 
@@ -5362,7 +5360,7 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """#1708: WAIT_FOR_STAGING_READY=1 polls /health before launching staging scheduled_audit."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
 
     events: list[tuple[str, object]] = []
     attempts = {"count": 0}
@@ -6100,7 +6098,7 @@ def test_run_scheduled_app_audits_isolates_setup_failure_and_persists_hook_artif
     monkeypatch, tmp_path
 ) -> None:
     """A setup exception on one service does not abort sibling services, and hook artifacts survive cleanup."""
-    from infra2_sdk.manifests import HookRunResult
+    from common.deploy.stage_hooks import HookRunResult
     from common.deploy.git_refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"

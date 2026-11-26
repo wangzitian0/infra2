@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 
-from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+from infra2_sdk.config import EnvironmentField, EnvironmentManifest
 
 _RENDER_KEYS = (
     "source",

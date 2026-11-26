@@ -52,7 +52,7 @@ from common.observability.page_dedup import (  # noqa: E402
     resolve_page_state,
     trusted_authors,
 )
-from infra2_sdk.observability import CheckVerdict, record_verdicts  # noqa: E402
+from common.observability.issue_trail import CheckVerdict, record_verdicts  # noqa: E402
 
 from common.observability import scheduled_job_start  # noqa: E402
 from common.observability.estate_scheduler_liveness import (  # noqa: E402

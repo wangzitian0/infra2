@@ -28,7 +28,7 @@
 This service separates high-frequency internal infrastructure probes from low-frequency metered external capabilities:
 
 1. **60-second internal probes (`GET /api/canary/status`)**: runs six internal checks in parallel (`postgres`, `redis`, `s3` gating; `signoz`, `openpanel`, `authentik` informational). Never place live metered LLM calls inside this 60-second loop (`1,440` ticks/day).
-2. **Metered external capability (`POST /api/todos/summary`)**: summarizes recent `todos` items through **one** unified `pydantic-ai` `Agent` (`run` and `run_stream`) built by `create_llm_agent(..., call_site="todo.summary")` from `infra2_sdk.runtime.llm`. Missing `LLM_API_KEY` returns HTTP 200 with `status: "unconfigured"`. `tools/canary_verify.py` verifies live staging and audit calls at low frequency over the internal Docker network.
+2. **Metered external capability (`POST /api/todos/summary`)**: summarizes recent `todos` items through **one** unified `pydantic-ai` `Agent` (`run` and `run_stream`) built by `create_llm_agent(..., call_site="todo.summary")` from `infra2_sdk.llm`. Missing `LLM_API_KEY` returns HTTP 200 with `status: "unconfigured"`. `tools/canary_verify.py` verifies live staging and audit calls at low frequency over the internal Docker network.
 
 `GET /api/canary/status` runs six checks in parallel. Each check has an 8 s deadline. A check that does not finish in time reports `fail`.
 
@@ -106,7 +106,7 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 | `DATABASE_URL` | `runtime`, `store_key`, `composed_from` | Vault key `TODO_POSTGRES_PASSWORD` (its `store_key`) holds a password generated once; `TodoDeployer` sets it on role `todo_app` at each supply. The rendered Vault Agent template composes the URL from it, role `todo_app` and host `platform-postgres<suffix>`; only the URL enters the process. The Canary reads only this name for Postgres | None |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` (Vault keys `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY`) | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
 | `LLM_API_KEY` | `human`, `empty_ok` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | `uv run invoke env.set LLM_API_KEY=<KEY> --project=platform --env=<env> --service=todo --credential-type=root_vars` |
-| `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_SMALL_MODEL` | `code`, `empty_ok` | `LlmSettings` defaults in `infra2_sdk.runtime.llm` | Optional compose override |
+| `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_SMALL_MODEL` | `code`, `empty_ok` | `LlmSettings` defaults in `infra2_sdk.llm` | Optional compose override |
 
 The policy lets the canary read only `platform/<env>/todo` and `platform/<env>/redis`. It cannot read the Postgres or S3 root credentials.
 

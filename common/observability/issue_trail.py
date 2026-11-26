@@ -11,9 +11,7 @@ from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-from infra2_sdk.observability import CheckVerdict
-
-from common.core._sdk_wire import redact_text
+from common.core._sdk_wire import CheckVerdict, record_verdicts, redact_text
 from common.core.http_transport import _github_api_url, _github_headers, _urlopen_json
 from common.deploy.stage_record import StageRecord
 
@@ -422,6 +420,7 @@ def reconcile_issue_trail(
 
 
 __all__ = [
+    "CheckVerdict",
     "GitHubIssues",
     "IssueApi",
     "ListingFailed",
@@ -431,6 +430,7 @@ __all__ = [
     "issue_trail_mode",
     "load_trail",
     "reconcile_issue_trail",
+    "record_verdicts",
     "scrub",
     "title_for",
 ]
