@@ -11,6 +11,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.deploy.deploy_guard_audit import (  # noqa: E402
+    RUNTIME_GUARD_KEYS,
+    STATIC_GUARD_KEYS,
     cli,
     confirmed_finding_pairs,
     main,
@@ -19,6 +21,8 @@ from common.deploy.deploy_guard_audit import (  # noqa: E402
 )
 
 __all__ = [
+    "RUNTIME_GUARD_KEYS",
+    "STATIC_GUARD_KEYS",
     "cli",
     "confirmed_finding_pairs",
     "main",

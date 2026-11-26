@@ -116,19 +116,18 @@ def test_ops_checks_hook_duration_report_wires_page_dedup_alert_and_resolve() ->
     assert "resolve_page_state(" in resolve["run"]
 
 
-def test_ops_checks_audit_job_runs_on_ubuntu_24_04_for_playwright() -> None:
-    """#1543: the audit job runs the scheduled_audit hook slot, whose bootstrap installs
+def test_ops_checks_scheduled_app_audit_runs_on_ubuntu_24_04_for_playwright() -> None:
+    """#1543: scheduled-app-audit runs the scheduled_audit hook slot, whose bootstrap installs
     Playwright chromium. ubuntu-latest is 26.04, where Playwright 1.57.0 has no build."""
     jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
-    runs_on = jobs["audit"]["runs-on"]
-    assert runs_on == "ubuntu-24.04"
+    assert jobs["audit"]["runs-on"] == "ubuntu-latest"
+    assert jobs["scheduled-app-audit"]["runs-on"] == "ubuntu-24.04"
 
 
-def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
+def test_ops_checks_scheduled_app_audit_installs_uv_before_the_hook_audit() -> None:
     """#1561: the scheduled_audit bootstrap of finance_report runs `uv pip install`.
-    The audit job must install uv, with the reconcile job's version, after Python
-    and before that step. The cache is off: the hook step is skipped in a dry run,
-    and setup-uv then fails its post step with "Cache path does not exist"."""
+    The scheduled-app-audit job must install uv, with the reconcile job's version, after Python
+    and before that step."""
     # the release train installs uv in its composite action (#1646)
     train_setup = ROOT / ".github" / "actions" / "train-setup" / "action.yml"
     reconcile_steps = yaml.safe_load(train_setup.read_text(encoding="utf-8"))["runs"][
@@ -144,13 +143,13 @@ def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
     )
     expected_uses = reconcile_uv_uses[0]
 
-    audit_steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"][
-        "steps"
-    ]
+    audit_steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "scheduled-app-audit"
+    ]["steps"]
     audit_names = [step.get("name") for step in audit_steps]
     hook_name = "Run scheduled App runtime audits (#1493)"
     assert hook_name in audit_names, (
-        f"job audit of ops-checks.yml has no step named {hook_name!r}"
+        f"job scheduled-app-audit of ops-checks.yml has no step named {hook_name!r}"
     )
     python_indexes = [
         index
@@ -158,7 +157,7 @@ def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
         if str(step.get("uses", "")).startswith("actions/setup-python@")
     ]
     assert python_indexes, (
-        "job audit of ops-checks.yml has no actions/setup-python step"
+        "job scheduled-app-audit of ops-checks.yml has no actions/setup-python step"
     )
     uv_indexes = [
         index
@@ -166,68 +165,77 @@ def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
         if step.get("uses") == expected_uses
     ]
     assert len(uv_indexes) == 1, (
-        f"job audit of ops-checks.yml must hold exactly one step that uses "
+        f"job scheduled-app-audit of ops-checks.yml must hold exactly one step that uses "
         f"{expected_uses}; found {len(uv_indexes)}"
     )
     uv_index = uv_indexes[0]
     uv_step = audit_steps[uv_index]
     for key in ("if", "continue-on-error", "env"):
         assert key not in uv_step, (
-            f"the uv step of job audit in ops-checks.yml must not set `{key}`"
+            f"the uv step of job scheduled-app-audit in ops-checks.yml must not set `{key}`"
         )
     assert uv_step.get("with") == {
         "enable-cache": True,
         "cache-dependency-glob": "uv.lock",
     }, (
-        "the uv step of job audit in ops-checks.yml must enable uv.lock caching; "
+        "the uv step of job scheduled-app-audit in ops-checks.yml must enable uv.lock caching; "
         f"found {uv_step.get('with')!r}"
     )
     assert max(python_indexes) < uv_index, (
-        "the uv step of job audit in ops-checks.yml must come after the "
+        "the uv step of job scheduled-app-audit in ops-checks.yml must come after the "
         "actions/setup-python step"
     )
     assert uv_index < audit_names.index(hook_name), (
-        f"the uv step of job audit in ops-checks.yml must come before {hook_name!r}"
+        f"the uv step of job scheduled-app-audit in ops-checks.yml must come before {hook_name!r}"
     )
 
 
-def test_ops_checks_audit_job_runs_all_deploy_guards_before_scheduled_app_hooks() -> (
+def test_ops_checks_audit_and_scheduled_app_audit_route_findings_through_page_dedup() -> (
     None
 ):
-    """#1583/#1590: all deploy-guard steps run unconditionally before scheduled App hooks,
-    scheduled App hooks emit `scheduled-audit-result.json`, and `Alert on confirmed failure`
-    routes paging through `common.observability.page_dedup.dedup_page`."""
-    audit_steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"][
-        "steps"
-    ]
-    names = [step.get("name") for step in audit_steps]
-    hook_name = "Run scheduled App runtime audits (#1493)"
-    hook_idx = names.index(hook_name)
+    """#1583/#1590: static deploy-guard steps run in `audit`, scheduled App hooks and
+    canary verify run in `scheduled-app-audit`, and each routes paging through `dedup_page`."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+
+    audit_steps = jobs["audit"]["steps"]
+    audit_names = [step.get("name") for step in audit_steps]
     for guard_name in (
         "Audit deploy fan-out coverage (sufficiency)",
         "Audit App runtime hooks manifests (#1416)",
         "Audit single deploy trigger (necessity)",
     ):
-        assert names.index(guard_name) < hook_idx, (
-            f"{guard_name!r} must run before {hook_name!r} in ops-checks.yml jobs.audit"
-        )
-    hook_step = audit_steps[hook_idx]
+        assert guard_name in audit_names
+    assert "Run scheduled App runtime audits (#1493)" not in audit_names
+    audit_alert = audit_steps[audit_names.index("Alert on confirmed failure")]
+    assert "dedup_page(" in audit_alert["run"]
+    assert "STATIC_GUARD_KEYS" in audit_alert["run"]
+    assert audit_names.index("Alert on confirmed failure") < audit_names.index(
+        "Resolve the paged failures"
+    )
+
+    app_steps = jobs["scheduled-app-audit"]["steps"]
+    names = [step.get("name") for step in app_steps]
+    hook_name = "Run scheduled App runtime audits (#1493)"
+    hook_idx = names.index(hook_name)
+    hook_step = app_steps[hook_idx]
     assert "--run-scheduled-audit" in hook_step["run"]
     assert "--output-json scheduled-audit-result.json" in hook_step["run"]
 
     alert_idx = names.index("Alert on confirmed failure")
     resolve_idx = names.index("Resolve the paged failures")
     assert hook_idx < alert_idx < resolve_idx
-    alert_step = audit_steps[alert_idx]
+    alert_step = app_steps[alert_idx]
     assert "dedup_page(" in alert_step["run"]
-    assert "confirmed_finding_pairs(" in alert_step["run"]
+    assert "RUNTIME_GUARD_KEYS" in alert_step["run"]
 
 
-def test_ops_checks_audit_job_timeout_and_artifact_uploads() -> None:
-    """audit job has 90m timeout, passes --artifacts-dir, and uploads artifacts + stage record."""
-    audit_job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"]
-    assert audit_job["timeout-minutes"] == 90
-    steps = _steps(audit_job)
+def test_ops_checks_audit_job_timeouts_and_artifact_uploads() -> None:
+    """audit runs in 10m; scheduled-app-audit has 90m timeout, artifacts, and stage record."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["audit"]["timeout-minutes"] == 10
+    app_audit_job = jobs["scheduled-app-audit"]
+    assert app_audit_job["timeout-minutes"] == 90
+    steps = _steps(app_audit_job)
     hook_step = steps["Run scheduled App runtime audits (#1493)"]
     assert "--artifacts-dir scheduled-audit-artifacts" in hook_step["run"]
 

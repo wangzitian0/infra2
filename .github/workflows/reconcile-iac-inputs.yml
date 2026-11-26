@@ -144,22 +144,57 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
+  sync-inputs:
+    name: sync-inputs (app release PR and SDK pin PR)
+    if: ${{ github.event_name == 'schedule' || inputs.sync_app_releases }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}
+
+      - name: Set up the train
+        uses: ./.github/actions/train-setup
+
+      - name: Sync App releases and SDK pins
+        env:
+          SYNC_PR_TOKEN: ${{ secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          sync_args=(--sync-app-releases --apply-repos-yaml --sync-gitlinks --output-json sync-app-releases.json)
+          if [[ "$INPUT_DRY_RUN" == "true" ]]; then
+            sync_args+=(--dry-run)
+          else
+            sync_args+=(--create-pr)
+          fi
+          GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" python -m tools.reconcile_iac_inputs "${sync_args[@]}"
+          # The Canary image pin follows the newest infra2-sdk release (#1823 Step 0).
+          pin_args=(--sync-sdk-pins --output-json sync-sdk-pins.json)
+          [[ "$INPUT_DRY_RUN" == "true" ]] || pin_args+=(--create-pr)
+          GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" python -m tools.reconcile_iac_inputs "${pin_args[@]}"
+
   operation:
     # alert-delivery-exempt: event-driven tag/prod deploy failure alert (not a scheduled check); review=2027-05-01
     name: operation (deploy, smoke, marker)
     needs: pre
-    # `pre` passed. A run that is not a deploy run (sync, hook slot, schedule) skips `pre` and
-    # runs here. A failed or cancelled `pre` never reaches the environment gate.
-    if: ${{ !cancelled() && inputs.phase != 'pre' && inputs.phase != 'post' && (needs.pre.result == 'success' || (needs.pre.result == 'skipped' && (github.event_name == 'schedule' || inputs.sync_app_releases || inputs.run_hook_slot))) }}
+    # `pre` passed, or a manual `run_hook_slot` skipped `pre`. Sync runs execute in `sync-inputs`
+    # without holding deploy/SSH/Dokploy/SigNoz secrets.
+    if: ${{ !cancelled() && github.event_name != 'schedule' && !inputs.sync_app_releases && inputs.phase != 'pre' && inputs.phase != 'post' && (needs.pre.result == 'success' || (needs.pre.result == 'skipped' && inputs.run_hook_slot)) }}
     # A production promotion waits for the owner. A tag push reconciles staging only (#1125).
     # This is the only job with an environment: one production promotion needs one approval.
     environment: ${{ inputs.promote_prod && 'production' || 'staging' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
-      # the production/<tag> marker; the pull-based App release sync pushes a branch (#1416)
+      # the production/<tag> marker
       contents: write
-      pull-requests: write
       id-token: write
     env:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
@@ -185,19 +220,17 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ (github.event_name == 'schedule' || inputs.sync_app_releases) && secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}
 
       - name: Set up the train
         uses: ./.github/actions/train-setup
 
       - name: Set up Bun
-        if: ${{ github.event_name != 'schedule' && !inputs.sync_app_releases }}
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.4"
 
       - name: Configure SSH key for the pre-deploy schema gate
-        if: ${{ github.event_name != 'schedule' && !inputs.sync_app_releases && env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != '' }}
+        if: ${{ env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != '' }}
         uses: ./.github/actions/ssh-setup
         with:
           key-name: infra2_schema_gate
@@ -205,7 +238,6 @@ jobs:
 
       - name: Operation phase
         env:
-          SYNC_PR_TOKEN: ${{ (github.event_name == 'schedule' || inputs.sync_app_releases) && secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_BEFORE: ${{ inputs.before || '' }}
@@ -360,23 +392,6 @@ jobs:
             exit 0
           fi
 
-          if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then
-            sync_args=(--sync-app-releases --apply-repos-yaml --sync-gitlinks --output-json sync-app-releases.json)
-            if [[ "$dry_run" == "true" ]]; then
-              sync_args+=(--dry-run)
-            else
-              sync_args+=(--create-pr)
-            fi
-            GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" python -m tools.reconcile_iac_inputs "${sync_args[@]}"
-            # The Canary image pin follows the newest infra2-sdk release (#1823 Step 0).
-            pin_args=(--sync-sdk-pins --output-json sync-sdk-pins.json)
-            [[ "$dry_run" == "true" ]] || pin_args+=(--create-pr)
-            GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" python -m tools.reconcile_iac_inputs "${pin_args[@]}"
-            # A sync only opens or updates the sync PR. The staging train is the tag push
-            # that follows its merge; a sync on main never deploys main (#1628).
-            exit 0
-          fi
-
           python -m tools.reconcile_iac_inputs "${args[@]}"
 
           echo "RECONCILE_AFTER=$after" >> "$GITHUB_ENV"
@@ -521,11 +536,11 @@ jobs:
   alert:
     # alert-delivery-exempt: event-driven tag/prod deploy failure alert (not a scheduled check); review=2027-05-01
     name: alert and stage card
-    needs: [pre, operation, post]
-    # Reads the results and records of the three jobs. It holds only the delivery secrets of
+    needs: [pre, operation, post, sync-inputs]
+    # Reads the results and records of the train jobs. It holds only the delivery secrets of
     # the alert, so a refusal in `pre` (which holds no secret) still reaches the owner.
     # Successful schedule/sync-only runs skip alert; failed sync runs still report here.
-    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && ((github.event_name != 'schedule' && !inputs.sync_app_releases) || needs.operation.result == 'failure') }}
+    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && ((github.event_name != 'schedule' && !inputs.sync_app_releases) || needs.sync-inputs.result == 'failure' || needs.operation.result == 'failure') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -536,7 +551,7 @@ jobs:
     env:
       # What the failed job was, and whether the run reached the deploy phase. A sync-only run,
       # a manual hook slot run and a refused run neither page nor resolve a deploy failure.
-      FAILED_JOB: ${{ needs.pre.result == 'failure' && 'pre' || needs.operation.result == 'failure' && 'operation' || needs.post.result == 'failure' && 'post' || '' }}
+      FAILED_JOB: ${{ needs.pre.result == 'failure' && 'pre' || needs.sync-inputs.result == 'failure' && 'sync-inputs' || needs.operation.result == 'failure' && 'operation' || needs.post.result == 'failure' && 'post' || '' }}
       RECONCILE_PHASE: ${{ (github.event_name == 'schedule' || inputs.sync_app_releases) && 'sync-app-releases' || (needs.operation.result == 'success' || needs.post.result == 'success') && !inputs.run_hook_slot && 'reconcile-deploy' || '' }}
       # A failed reconcile pages out of band (#658): the runner's per-service error_kind is
       # the earliest machine-readable point of every deploy-chain incident of 2026-09-04..08.

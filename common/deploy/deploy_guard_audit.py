@@ -313,14 +313,15 @@ def main(root: Path = ROOT) -> int:
 REPORT_ENV = "DEPLOY_GUARD_AUDIT_REPORT"
 DEFAULT_REPORT_PATH = "deploy-guard-audit-report.json"
 DEFAULT_HOOK_RESULT_PATH = "scheduled-audit-result.json"
-ALL_GUARD_KEYS = (
+STATIC_GUARD_KEYS = (
     "guard:fanout-sufficiency",
     "guard:webhook-delivery",
     "guard:production-marker-lag",
     "guard:app-hooks-manifest",
     "guard:dokploy-autodeploy",
-    "guard:canary-verify-staging",
 )
+RUNTIME_GUARD_KEYS = ("guard:canary-verify-staging",)
+ALL_GUARD_KEYS = (*STATIC_GUARD_KEYS, *RUNTIME_GUARD_KEYS)
 SCHEDULED_AUDIT_STEP_KEY = "guard:scheduled-app-audit"
 
 
@@ -489,16 +490,20 @@ def confirmed_finding_pairs(
     env: Mapping[str, str] | None = None,
     *,
     hook_result_path: Path | None = None,
+    keys: Sequence[str] = ALL_GUARD_KEYS,
+    include_hooks: bool = True,
 ) -> list[tuple[str, str]]:
     """Return ``(identity_key, detail_line)`` pairs for confirmed deploy-guard and App hook failures."""
     report = load_report(env)
     checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
     pairs: list[tuple[str, str]] = []
-    for key in ALL_GUARD_KEYS:
+    for key in keys:
         entry = checks.get(key)
         if isinstance(entry, Mapping) and entry.get("status") == "fail":
             summary = str(entry.get("summary") or key).splitlines()[0][:200]
             pairs.append((key, f"- {key}: {summary}"))
+    if not include_hooks:
+        return pairs
     hook_items = _load_hook_results(env, hook_result_path=hook_result_path) or []
     hook_pairs: list[tuple[str, str]] = []
     for item in sorted(hook_items, key=lambda r: str(r.get("service") or "")):
@@ -523,20 +528,27 @@ def unevaluated_prefixes(
     env: Mapping[str, str] | None = None,
     *,
     hook_result_path: Path | None = None,
+    keys: Sequence[str] = ALL_GUARD_KEYS,
+    include_hooks: bool = True,
 ) -> list[str]:
     """Return finding key prefixes that this audit run did not evaluate."""
     report = load_report(env)
     checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
-    hook_items = _load_hook_results(env, hook_result_path=hook_result_path)
-    if not checks and hook_items is None:
+    hook_items = (
+        _load_hook_results(env, hook_result_path=hook_result_path)
+        if include_hooks
+        else None
+    )
+    relevant = any(isinstance(checks.get(key), Mapping) for key in keys)
+    if not relevant and hook_items is None:
         return [""]
     prefixes = [
         key
-        for key in ALL_GUARD_KEYS
+        for key in keys
         if not isinstance(checks.get(key), Mapping)
         or checks[key].get("status") not in ("pass", "fail")
     ]
-    if hook_items is None:
+    if include_hooks and hook_items is None:
         prefixes.append(APP_HOOK_KEY_PREFIX)
     return prefixes
 
@@ -545,14 +557,26 @@ def observed_all_clean(
     env: Mapping[str, str] | None = None,
     *,
     hook_result_path: Path | None = None,
+    keys: Sequence[str] = ALL_GUARD_KEYS,
+    include_hooks: bool = True,
 ) -> bool:
     """True when every evaluated check passed and at least one check ran."""
     report = load_report(env)
     checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
-    hook_items = _load_hook_results(env, hook_result_path=hook_result_path)
-    if not checks and hook_items is None:
+    hook_items = (
+        _load_hook_results(env, hook_result_path=hook_result_path)
+        if include_hooks
+        else None
+    )
+    relevant = any(isinstance(checks.get(key), Mapping) for key in keys)
+    if not relevant and hook_items is None:
         return False
-    return not confirmed_finding_pairs(env, hook_result_path=hook_result_path)
+    return not confirmed_finding_pairs(
+        env,
+        hook_result_path=hook_result_path,
+        keys=keys,
+        include_hooks=include_hooks,
+    )
 
 
 def cli(argv: list[str] | None = None) -> int:
