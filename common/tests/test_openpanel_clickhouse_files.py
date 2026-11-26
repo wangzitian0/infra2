@@ -8,6 +8,7 @@ paths moved into a temporary directory, and read the files that it writes.
 
 from __future__ import annotations
 
+import hashlib
 import stat
 import subprocess
 import xml.etree.ElementTree as ET
@@ -26,6 +27,16 @@ USERS = "etc/clickhouse-server/users.d/op-user-config.xml"
 INIT = "docker-entrypoint-initdb.d/init-db.sh"
 #: The data mount. A change moves or resets the ClickHouse data.
 DATA_MOUNT = "${DATA_PATH}/op-ch:/var/lib/clickhouse"
+
+#: sha256 of each old checkout file, the files that op-ch mounted before #1822. The
+#: values come from `git show e88287bd:platform/24.openpanel/clickhouse/<file> |
+#: shasum -a 256` (main on 2026-11-26, the last commit with the files). The wrapper
+#: must write the same bytes; a changed file needs a deliberate new value here.
+OLD_FILE_SHA256 = {
+    CONFIG: "5bbc59b6c3cf79f3a6af19a6563bf1f7229c608c3c6aae9a001b5fe3f513c5fc",  # clickhouse-config.xml
+    USERS: "87d34f9b5e58b1ec4067f6339797b0626c0c66d9bdcdc4a07c6b078ad0bc94d3",  # clickhouse-user-config.xml
+    INIT: "ce8861a900a663a9f497a5dceaba4990932f1c77b258dcce64b5580a2fa775a3",  # init-db.sh
+}
 
 
 def _spec() -> dict:
@@ -129,3 +140,11 @@ def test_a_restart_writes_the_same_file(tmp_path: Path, name: str) -> None:
     # `restart: unless-stopped` runs the wrapper again on the files of the first start.
     first = (_run(tmp_path) / name).read_bytes()
     assert (_run(tmp_path) / name).read_bytes() == first
+
+
+@pytest.mark.parametrize("name", [CONFIG, USERS, INIT])
+def test_the_wrapper_writes_the_bytes_of_the_old_file(
+    tmp_path: Path, name: str
+) -> None:
+    written = (_run(tmp_path) / name).read_bytes()
+    assert hashlib.sha256(written).hexdigest() == OLD_FILE_SHA256[name]
