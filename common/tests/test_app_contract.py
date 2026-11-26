@@ -685,8 +685,9 @@ def test_render_release_template_renders_canonical_release_field() -> None:
 def test_parse_manifest_rejects_retired_mirror_to_1password_and_registry_owns_mirror_keys() -> (
     None
 ):
-    """Wave 3: retired mirror_to_1password fails closed on v4.11 manifests while
-    infra2 Service.mirror_to_1password_keys owns which runtime keys mirror to 1Password."""
+    """Wave 3: strict manifest parsing rejects retired mirror_to_1password while
+    app_contract keeps a strict=False fallback only for live pre-4.11 Prod releases."""
+    from common.core._sdk_wire import parse_env_manifest_dict
     from common.security.backends import SecretsResolver, WriteResult
     from common.security.registry import SERVICES
 
@@ -706,7 +707,13 @@ def test_parse_manifest_rejects_retired_mirror_to_1password_and_registry_owns_mi
         }
     )
     with pytest.raises(ValueError, match="mirror_to_1password"):
-        app_contract.parse_manifest(retired_body, label="retired-upstream")
+        app_contract.parse_manifest(retired_body, label="retired-pinned", strict=True)
+    with pytest.raises(ValueError, match="mirror_to_1password"):
+        parse_env_manifest_dict(json.loads(retired_body))
+    legacy_prod_manifest = app_contract.parse_manifest(
+        retired_body, label="live-prod-rollback"
+    )
+    assert [f.env for f in legacy_prod_manifest.fields] == ["MCP_BEARER_TOKEN"]
 
     clean_body = json.dumps(
         {

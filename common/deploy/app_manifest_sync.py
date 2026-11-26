@@ -98,7 +98,10 @@ def project(
                 f"failed to fetch manifest {path} from {url}: {exc}"
             ) from None
         parsed.append(
-            (f"{path} at {url}", parse_manifest(body, label=f"{path} at {url}"))
+            (
+                f"{path} at {url}",
+                parse_manifest(body, label=f"{path} at {url}", strict=True),
+            )
         )
     return merge_manifests(parsed, source=f"infra2/{service.id}")
 

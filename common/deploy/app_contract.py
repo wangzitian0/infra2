@@ -177,13 +177,52 @@ class Gap:
         return f"{self.env}: {self.detail}"
 
 
-def parse_manifest(body: str | bytes, *, label: str) -> EnvironmentManifest:
+_LEGACY_PROD_TRUEALPHA_SOURCES = frozenset(
+    {
+        "apps/llm-service",
+        "apps/data-engine",
+        "infra2/truealpha/app",
+        "infra2/truealpha/data_engine",
+    }
+)
+
+
+def _strip_legacy_prod_manifest_fields(raw: Any) -> Any:
+    """Production rollback bridge until Stage 3 Prod promotes past finance_report@v0.3.2 and truealpha@v0.3.6."""
+    if not isinstance(raw, Mapping):
+        return raw
+    fields = raw.get("fields")
+    if not isinstance(fields, list):
+        return raw
+    is_legacy_truealpha = str(raw.get("source") or "") in _LEGACY_PROD_TRUEALPHA_SOURCES
+    cleaned_fields = []
+    for fld in fields:
+        if isinstance(fld, Mapping):
+            item = {k: v for k, v in fld.items() if k != "mirror_to_1password"}
+            if (
+                is_legacy_truealpha
+                and item.get("env") == "DATABASE_URL"
+                and item.get("sensitive") is False
+            ):
+                item["sensitive"] = True
+            cleaned_fields.append(item)
+        else:
+            cleaned_fields.append(fld)
+    return {**raw, "fields": cleaned_fields}
+
+
+def parse_manifest(
+    body: str | bytes, *, label: str, strict: bool = False
+) -> EnvironmentManifest:
     """Parse and validate one App environment manifest.
 
     Raises ``ValueError`` when ``body`` is not valid manifest JSON or declares no fields.
     """
     try:
-        manifest = parse_env_manifest_dict(json.loads(body))
+        raw = json.loads(body)
+        if not strict:
+            raw = _strip_legacy_prod_manifest_fields(raw)
+        manifest = parse_env_manifest_dict(raw)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise ValueError(f"{label} is not an App env manifest: {exc!r}") from None
     if not manifest.fields:
