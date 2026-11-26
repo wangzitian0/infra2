@@ -663,18 +663,6 @@ class Deployer:
         existing = client.find_compose_by_name(
             cls.service, project_name, env_name=env_name
         )
-        if not existing:
-            for legacy_name in getattr(cls, "legacy_compose_names", ()):
-                existing = client.find_compose_by_name(
-                    legacy_name, project_name, env_name=env_name
-                )
-                if existing:
-                    info(f"Adopting legacy compose {legacy_name} -> {cls.service}")
-                    adopt = {"name": cls.service}
-                    if source_type == "github":
-                        adopt["composePath"] = cls.compose_path
-                    client.update_compose(existing["composeId"], **adopt)
-                    break
 
         # autoDeploy=False on every path. These services are deployed by the
         # iac-runner, which already does change detection via the content
@@ -1395,7 +1383,6 @@ class Deployer:
             cls.service,
             cls.project_name(e),
             env_name=e.get("ENV", "production"),
-            legacy_names=getattr(cls, "legacy_compose_names", ()),
         )
 
     @classmethod

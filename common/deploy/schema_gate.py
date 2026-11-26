@@ -97,34 +97,55 @@ _SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
 
 # Runs in the target image as ``python3 -c _LAUNCHER <spec options>``. It reads the
 # database URL from stdin and calls the SDK CLI with an explicit ``--db-url``. An image
-# without ``infra2_sdk.runtime.schema_check`` (an SDK before infra2-sdk#239) exits
-# EXIT_NOT_EVALUATED. Any other import failure, and an exception that escapes
-# ``main``, also exit EXIT_NOT_EVALUATED: no comparison ran, so the result is not
-# BLOCKED. The return code of ``main`` (0, 1 or 3) and SystemExit pass unchanged.
+# This launcher tries ``infra2_sdk.storage`` (`check-schema` subcommand, v4.10+)
+# first, then falls back to ``infra2_sdk.runtime.schema_check`` (v4.9.x). An image
+# without either exits EXIT_NOT_EVALUATED. Any other import failure, and an exception
+# that escapes ``main``, also exit EXIT_NOT_EVALUATED: no comparison ran, so the result
+# is not BLOCKED. The return code of ``main`` (0, 1 or 3) and SystemExit pass unchanged.
 _LAUNCHER = f"""\
 import sys
+_use_storage = False
 try:
-    from infra2_sdk.runtime import schema_check
-except ImportError as exc:
-    print(
-        "NOT EVALUATED - deploy blocked: the image has no "
-        "infra2_sdk.runtime.schema_check (the image SDK is too old): " + repr(exc),
-        file=sys.stderr,
-    )
-    sys.exit({EXIT_NOT_EVALUATED})
+    from infra2_sdk import storage
+    _use_storage = hasattr(storage, "main")
+except ImportError:
+    storage = None
 except Exception as exc:
     print(
-        "NOT EVALUATED - deploy blocked: infra2_sdk.runtime.schema_check "
+        "NOT EVALUATED - deploy blocked: infra2_sdk.storage "
         "does not import: " + repr(exc),
         file=sys.stderr,
     )
     sys.exit({EXIT_NOT_EVALUATED})
+schema_check = None
+if not _use_storage:
+    try:
+        from infra2_sdk.runtime import schema_check
+    except ImportError as exc:
+        print(
+            "NOT EVALUATED - deploy blocked: the image has neither "
+            "infra2_sdk.storage nor infra2_sdk.runtime.schema_check "
+            "(the image SDK is too old): " + repr(exc),
+            file=sys.stderr,
+        )
+        sys.exit({EXIT_NOT_EVALUATED})
+    except Exception as exc:
+        print(
+            "NOT EVALUATED - deploy blocked: infra2_sdk.runtime.schema_check "
+            "does not import: " + repr(exc),
+            file=sys.stderr,
+        )
+        sys.exit({EXIT_NOT_EVALUATED})
 db_url = sys.stdin.readline().strip()
 try:
-    code = schema_check.main([*sys.argv[1:], "--db-url", db_url])
+    if _use_storage:
+        code = storage.main(["check-schema", *sys.argv[1:], "--db-url", db_url])
+    else:
+        code = schema_check.main([*sys.argv[1:], "--db-url", db_url])
 except Exception as exc:
+    entry = "storage.main" if _use_storage else "schema_check.main"
     print(
-        "NOT EVALUATED - deploy blocked: schema_check.main raised " + repr(exc),
+        f"NOT EVALUATED - deploy blocked: {{entry}} raised " + repr(exc),
         file=sys.stderr,
     )
     sys.exit({EXIT_NOT_EVALUATED})

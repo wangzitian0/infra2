@@ -253,7 +253,7 @@ services:
       # promote-not-rebuild image stays env-agnostic. deployment.environment + git
       # sha mirror the backend's OTEL_RESOURCE_ATTRIBUTES so FE/BE spans correlate.
       # #368: the endpoint is built ONCE in common.deploy.env_config.otel_env (single
-      # source: common.common.otel_ingest_endpoint) and injected by every deploy path
+      # source: common.deploy.env_config.otel_ingest_endpoint) and injected by every deploy path
       # (deploy_primitive for staging/prod, preview_lifecycle for preview). Consumed
       # here, never re-constructed — no inline otel.<domain>/v1/traces literal. Empty
       # when unset, which config-gates the FE OTel SDK to a no-op (same as OpenPanel).

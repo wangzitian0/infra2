@@ -3,32 +3,33 @@
 from __future__ import annotations
 
 from pathlib import Path
-import dataclasses
 import types
 
 import yaml
 
 from common.deploy.compose_compile import load_stack
+from common.security import vault_audit as vault_audit_module
 from common.security import vault_self_refresh_audit as vault_self_refresh_audit_module
-from common.security.vault_self_refresh_audit import (
-    classify_deployed_template,
+from common.security.vault_audit import (
     VaultService,
+    audit_from_observations,
+    classify_container,
+    classify_deployed_template,
+    classify_rendered_env,
+    classify_token,
+    classify_vault_agent_logs,
+    discover_vault_agent_compose_paths,
+    inventory_compose_paths,
+    load_inventory,
+    redact,
+)
+from common.security.vault_self_refresh_audit import (
     _remote_container_logs,
     _remote_container_state,
     _remote_secret_file_state,
     _remote_secret_file_text,
     _vault_addr_from_env,
-    audit_from_observations,
-    classify_container,
-    classify_optional_field_inertness,
-    classify_rendered_env,
-    classify_token,
-    classify_vault_agent_logs,
     collect_live_observations,
-    discover_vault_agent_compose_paths,
-    inventory_compose_paths,
-    load_inventory,
-    redact,
     write_report,
 )
 
@@ -880,133 +881,6 @@ def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> No
     assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
 
 
-def test_no_service_declares_an_optional_inert_field_after_llm_encryption_keys_went() -> (
-    None
-):
-    """#526: LLM_ENCRYPTION_KEYS was the one optional-by-architecture field. #542: the watchlist lives as
-    `optional_inert_fields` on the owning service's SecretsFacet. finance_report deleted the field (v0.2.96), so the
-    watchlist is empty; the classifier below stays generic and is tested with a synthetic field."""
-    by_id = {service.id: service for service in load_inventory()}
-    assert {
-        sid: svc.optional_inert_fields
-        for sid, svc in by_id.items()
-        if svc.optional_inert_fields
-    } == {}
-
-
-def test_optional_field_inertness_classifier_reports_empty_value_as_inert() -> None:
-    """#526: EXAMPLE_OPTIONAL_KEY="" (the secrets.ctmpl unset-render shape) is
-    reported informationally, never as a failure."""
-    service = _service()
-
-    result = classify_optional_field_inertness(
-        service, "EXAMPLE_OPTIONAL_KEY", 'EXAMPLE_OPTIONAL_KEY=""\n'
-    )
-
-    assert result.status == "info"
-    assert result.severity == "P3"
-    assert "inert" in result.summary
-    assert result.evidence == {"field": "EXAMPLE_OPTIONAL_KEY", "populated": False}
-
-
-def test_optional_field_inertness_classifier_reports_missing_field_as_inert() -> None:
-    """#526: a field absent entirely from the rendered file is also inert."""
-    service = _service()
-
-    result = classify_optional_field_inertness(
-        service, "EXAMPLE_OPTIONAL_KEY", "OTHER_KEY=value\n"
-    )
-
-    assert result.status == "info"
-    assert result.evidence["populated"] is False
-
-
-def test_optional_field_inertness_classifier_reports_populated_value_as_active() -> (
-    None
-):
-    """#526: once a real value is provisioned, the field reports as active --
-    still informational, not a pass/fail gate."""
-    service = _service()
-
-    result = classify_optional_field_inertness(
-        service,
-        "EXAMPLE_OPTIONAL_KEY",
-        'EXAMPLE_OPTIONAL_KEY="gAAAAA-fake-fernet-key-material"\n',
-    )
-
-    assert result.status == "info"
-    assert "active" in result.summary
-    assert result.evidence == {"field": "EXAMPLE_OPTIONAL_KEY", "populated": True}
-    # The actual key material must never leak into the report evidence.
-    assert "fake-fernet-key-material" not in str(result.evidence)
-
-
-def test_audit_from_observations_reports_inert_field_without_failing_audit() -> None:
-    """#526: an otherwise-healthy service with an inert optional field still
-    reports overall status "pass" -- the inertness signal never gates.
-
-    #531: `_service()` is auth_method="approle" in the real inventory.
-    """
-    service = dataclasses.replace(
-        _service(), optional_inert_fields=("EXAMPLE_OPTIONAL_KEY",)
-    )
-    report = audit_from_observations(
-        [service],
-        {
-            "services": {
-                service.id: {
-                    "dokploy_env": (
-                        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
-                        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
-                    ),
-                    "token_lookup": None,
-                    "rendered_env": {
-                        "exists": True,
-                        "readable": True,
-                        "size": 20,
-                        "mtime": 950,
-                    },
-                    "rendered_env_text": 'EXAMPLE_OPTIONAL_KEY=""\n',
-                    "vault_agent_logs": "template rendered successfully",
-                    "vault_agent_container": {
-                        "name": "finance_report-app-vault-agent",
-                        "exists": True,
-                        "state": "running",
-                        "health": "healthy",
-                        "restart_count": 0,
-                    },
-                    "app_containers": [
-                        {
-                            "name": "finance_report-backend",
-                            "exists": True,
-                            "state": "running",
-                            "health": "healthy",
-                            "restart_count": 0,
-                            "mounts": ["/secrets/.env"],
-                        }
-                    ],
-                }
-            }
-        },
-        env="production",
-        now=1000,
-    )
-
-    assert report["status"] == "pass"
-    inertness_results = [
-        result
-        for result in report["results"]
-        if result["check_id"] == "optional-field-inertness::EXAMPLE_OPTIONAL_KEY"
-    ]
-    assert len(inertness_results) == 1
-    assert inertness_results[0]["status"] == "info"
-    assert inertness_results[0]["evidence"]["populated"] is False
-    assert (
-        "INFO P3 finance_report/app::optional-field-inertness::EXAMPLE_OPTIONAL_KEY"
-        in write_report(report)
-    )
-
-
 def test_collect_live_observations_skips_token_lookup_for_approle_service(
     monkeypatch,
 ) -> None:
@@ -1056,95 +930,6 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
     assert requested_envs == ["production"]
 
 
-def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
-    monkeypatch,
-) -> None:
-    """Issue #954/#958: When a platform service is renamed (e.g. minio -> s3), production
-    runs on the legacy Dokploy compose name until explicitly promoted. The audit must
-    fall back to legacy_dokploy_services rather than falsely reporting empty env."""
-    service = VaultService(
-        id="platform/s3",
-        project="platform",
-        dokploy_service="s3",
-        compose_path="platform/03.s3/compose.yaml",
-        vault_agent_config_path="platform/03.s3/vault-agent.hcl",
-        secret_template_path="platform/03.s3/secrets.ctmpl",
-        vault_path_template="secret/data/platform/{env}/s3",
-        rendered_secret_path="/data/platform/s3/secrets.env",
-        vault_agent_container="platform-s3-vault-agent",
-        app_containers=("platform-s3",),
-        vault_token_env_key="VAULT_TOKEN",
-        auth_method="approle",
-        legacy_dokploy_services=("minio",),
-    )
-
-    searched_names: list[str] = []
-
-    class FakeDokployClient:
-        def find_compose_by_name(self, name, project_name=None, env_name=None):
-            searched_names.append(name)
-            if name == "s3":
-                return None
-            if name == "minio":
-                return {
-                    "env": (
-                        "VAULT_ROLE_ID=test-role-id-legacy\n"
-                        "VAULT_SECRET_ID=test-secret-id-legacy\n"
-                    )
-                }
-            return None
-
-    requested_envs: list[str | None] = []
-
-    def fake_get_env(env_name=None):
-        requested_envs.append(env_name)
-        return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
-
-    def fake_container_state(host, container_name):
-        if "minio" in container_name:
-            return {"status": "running", "healthy": True, "container": container_name}
-        return {"status": "missing", "healthy": False, "container": container_name}
-
-    _patch_fake_ssh(
-        monkeypatch,
-        stdout='{"exists":true,"readable":true,"size":10,"mtime":1,"has_no_value":false}',
-    )
-    monkeypatch.setattr("common.core.environ.get_env", fake_get_env)
-    monkeypatch.setattr(
-        "common.deploy.dokploy_client.get_dokploy",
-        lambda host=None: FakeDokployClient(),
-    )
-    monkeypatch.setattr(
-        vault_self_refresh_audit_module,
-        "_remote_container_state",
-        fake_container_state,
-    )
-
-    observations = collect_live_observations([service], env="production")
-
-    assert searched_names == ["s3", "minio"]
-    assert requested_envs == ["production"]
-    assert (
-        "VAULT_ROLE_ID=test-role-id-legacy"
-        in observations["services"][service.id]["dokploy_env"]
-    )
-    assert (
-        observations["services"][service.id]["vault_agent_container"]["status"]
-        == "running"
-    )
-    assert (
-        observations["services"][service.id]["vault_agent_container"]["container"]
-        == "platform-minio-vault-agent"
-    )
-    assert (
-        observations["services"][service.id]["app_containers"][0]["status"] == "running"
-    )
-    assert (
-        observations["services"][service.id]["app_containers"][0]["container"]
-        == "platform-minio"
-    )
-
-
 def test_age_alone_is_information_however_old_the_render_is() -> None:
     """#688: treating age as a fault failed five services at 65-67 days on 2026-09-10 —
     authentik, openpanel, postgres, prefect, redis — every one a long-lived secret nobody
@@ -1172,7 +957,7 @@ def test_the_deployed_template_is_compared_by_content(monkeypatch) -> None:
     content answers. An unreadable copy is information, never a page."""
     service = _service()
     monkeypatch.setattr(
-        vault_self_refresh_audit_module,
+        vault_audit_module,
         "_release_template_sha256",
         lambda _service: "a" * 64,
     )
@@ -1235,7 +1020,7 @@ def test_the_audit_does_not_fail_on_age_but_does_on_a_template_mismatch(
         }
 
     monkeypatch.setattr(
-        vault_self_refresh_audit_module,
+        vault_audit_module,
         "_release_template_sha256",
         lambda _service: "a" * 64,
     )
@@ -1270,7 +1055,7 @@ def test_a_preview_stack_is_reported_as_skipped_not_measured_on_the_fixed_stack(
     assert not services["truealpha/app"].ephemeral
 
     monkeypatch.setattr(
-        vault_self_refresh_audit_module,
+        vault_audit_module,
         "_release_template_sha256",
         lambda _service: "a" * 64,
     )
@@ -1296,7 +1081,7 @@ def test_safe_excerpt_redacts_keys_with_spaces_and_quotes() -> None:
         "DEBUG authorization: Bearer s.vaultToken123456\n"
         "INFO Running normally"
     )
-    excerpt = vault_self_refresh_audit_module._safe_excerpt(raw_log)
+    excerpt = vault_audit_module._safe_excerpt(raw_log)
     assert "my_super_secret_password" not in excerpt
     assert "super_secret_key" not in excerpt
     assert "s.vaultToken123456" not in excerpt
@@ -1309,7 +1094,7 @@ def test_audit_token_redacts_malformed_token_in_evidence() -> None:
 
     service = dataclasses.replace(load_inventory()[0], auth_method="token")
     malformed_token = "secret1234"
-    result = vault_self_refresh_audit_module.classify_token(
+    result = classify_token(
         service,
         env_text=f"{service.vault_token_env_key}={malformed_token}\n",
         lookup=None,

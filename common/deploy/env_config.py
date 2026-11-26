@@ -186,7 +186,7 @@ def services_without_prod_compose() -> frozenset[str]:
     ("fails closed if prod ever appears without this being updated first"), so
     "not yet in production" is DERIVED from it rather than declared a second
     time — consumed by the vault self-refresh audit's production exclusion
-    (common.vault_self_refresh_audit.inventory_ids_not_in_production).
+    (common.security.vault_audit.inventory_ids_not_in_production).
     """
     return frozenset(
         service

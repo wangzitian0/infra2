@@ -6,6 +6,7 @@ import json
 import shlex
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1427,6 +1428,112 @@ def test_app_peer_pillar_passes_on_460_and_enforces_fail_closed() -> None:
     )
     assert missing_460.app_peer.ok is False
     assert "unsupported" in missing_460.app_peer.summary
+
+
+def test_schema_check_command_supports_both_v49_and_v410_sdk(tmp_path: Path) -> None:
+    """Emitted SCHEMA_CHECK shell selects infra2_sdk.storage check-schema on v4.10+ and
+    falls back to infra2_sdk.runtime.schema_check on v4.9.x without passing --app-path to storage."""
+    import os
+    import re
+    import sys
+
+    _, commands = _verify_with_canned_ssh(
+        "staging",
+        _canned_stdout(
+            traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+            logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+            environment="staging",
+            sdk="4.10.2",
+        ),
+    )
+    assert len(commands) == 1
+    match = re.search(
+        r"schema_out=\$\(docker exec [^\s]+ sh -c ('.+?') 2>&1\)",
+        commands[0],
+    )
+    assert match is not None, commands[0]
+    (inner_sh,) = shlex.split(match.group(1))
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "canary_schema.py").write_text("METADATA = object()\n")
+    secrets_env = tmp_path / "secrets.env"
+    secrets_env.write_text("DATABASE_URL=postgresql://u:p@h:5432/db\n")
+    rewritten_sh = inner_sh.replace("/app", str(app_dir)).replace(
+        "/secrets/.env", str(secrets_env)
+    )
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    py_shim = bin_dir / "python3"
+    py_shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    py_shim.chmod(0o755)
+
+    # Case 1: v4.10+ SDK with infra2_sdk.storage (no --app-path accepted)
+    sdk410 = tmp_path / "sdk410"
+    (sdk410 / "infra2_sdk").mkdir(parents=True)
+    (sdk410 / "infra2_sdk" / "__init__.py").write_text("")
+    (sdk410 / "infra2_sdk" / "storage.py").write_text(
+        "import json, sys\n"
+        "args = sys.argv[1:]\n"
+        "assert args[0] == 'check-schema', args\n"
+        "assert '--app-path' not in args, args\n"
+        "import canary_schema  # noqa: F401 - verifies PYTHONPATH includes app dir\n"
+        "print(json.dumps(args))\n"
+    )
+    res410 = subprocess.run(
+        ["sh", "-c", rewritten_sh],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "PYTHONPATH": str(sdk410),
+        },
+        timeout=30,
+    )
+    assert res410.returncode == 0, res410.stderr
+    assert json.loads(res410.stdout) == [
+        "check-schema",
+        "--metadata",
+        "canary_schema:METADATA",
+        "--db-url",
+        "postgresql://u:p@h:5432/db",
+        "--label",
+        "platform/todo",
+    ]
+
+    # Case 2: v4.9.x SDK with infra2_sdk.runtime.schema_check
+    sdk49 = tmp_path / "sdk49"
+    (sdk49 / "infra2_sdk" / "runtime").mkdir(parents=True)
+    (sdk49 / "infra2_sdk" / "__init__.py").write_text("")
+    (sdk49 / "infra2_sdk" / "runtime" / "__init__.py").write_text("")
+    (sdk49 / "infra2_sdk" / "runtime" / "schema_check.py").write_text(
+        "import json, sys\n"
+        "args = sys.argv[1:]\n"
+        "assert '--app-path' in args, args\n"
+        "print(json.dumps(args))\n"
+    )
+    res49 = subprocess.run(
+        ["sh", "-c", rewritten_sh],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "PYTHONPATH": str(sdk49),
+        },
+        timeout=30,
+    )
+    assert res49.returncode == 0, res49.stderr
+    assert json.loads(res49.stdout) == [
+        "--app-path",
+        str(app_dir),
+        "--metadata",
+        "canary_schema:METADATA",
+        "--db-url",
+        "postgresql://u:p@h:5432/db",
+        "--label",
+        "platform/todo",
+    ]
 
 
 def test_app_peer_pillar_rejects_unsupported_and_accepts_platform_todo_service() -> (

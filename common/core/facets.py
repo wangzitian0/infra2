@@ -17,7 +17,7 @@ These dataclasses are the typed vocabulary those declarations use:
                             ``common.backup.verification.BackupEntry``; ``service_id``
                             and ``data_path`` stay on the Deployer itself).
 - :class:`SecretsFacet`   — Vault self-refresh facts (fields aligned with
-                            ``common.vault_self_refresh_audit.VaultService``); the
+                            ``common.security.vault_audit.VaultService``); the
                             audit inventory is DERIVED from these (#542), so the
                             audit's expectations and the deployed vault-agent
                             wiring come from the same declaration.
@@ -217,11 +217,9 @@ class SecretsFacet:
     mirroring ProbeFacet's out-of-registry ``service_id`` convention.
 
     ``mount_exempt_containers`` (#531) names app_containers that by design run
-    WITHOUT the ``/secrets/.env`` mount (e.g. platform-prefect-worker), and
-    ``optional_inert_fields`` (#526) names optional vault:true fields whose
-    populated-ness is reported informationally — both formerly module-level
-    constants in common/security/vault_audit.py, now declared where the
-    service lives.
+    WITHOUT the ``/secrets/.env`` mount (e.g. platform-prefect-worker), formerly a
+    module-level constant in common/security/vault_audit.py, now declared where
+    the service lives.
     """
 
     vault_agent_container: str
@@ -235,7 +233,6 @@ class SecretsFacet:
     max_rendered_secret_age_seconds: int = 900
     min_token_ttl_hours: int = 48
     mount_exempt_containers: tuple[str, ...] = ()
-    optional_inert_fields: tuple[str, ...] = ()
     vault_path_template: str = ""
 
 

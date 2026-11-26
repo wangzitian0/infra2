@@ -170,9 +170,7 @@ class AppDeployer(Deployer):
 
     # Vault self-refresh facts (#542): the audit inventory derives from these
     # (AppRole auth — the #257/#259 pilot). Two surfaces:
-    #   1. the app itself. It declares no optional_inert_fields (#526): the one
-    #      field that it declared, LLM_ENCRYPTION_KEYS, went with the per-user
-    #      LLM provider layer that finance_report deleted (v0.2.96).
+    #   1. the app itself.
     #   2. the multi-alias ephemeral PREVIEW surface (declared here with an
     #      explicit service_id — an alias stack has no registry Deployer of its
     #      own). Same AppRole auth; its secrets template reads the SOURCE env's

@@ -22,9 +22,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from common.core.constants import REPO_ROOT
 from common.deploy.compose_compile import has_x_infra2, load_stack
-from common.security.vault_self_refresh_audit import (
-    REPO_ROOT,
+from common.security.vault_audit import (
     discover_vault_agent_compose_paths,
     load_inventory,
 )
