@@ -607,45 +607,6 @@ jobs:
           cd ${{ github.workspace }}
           python3 -m tools.ci_runner vault --require-hcl2
 
-  validate-vault-policy:
-    name: Validate Vault Policy Syntax
-    needs: detect-changes
-    if: needs.detect-changes.outputs.has_non_doc == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Install python-hcl2
-        run: pip install python-hcl2
-
-      - name: Validate vault-policy.hcl syntax
-        run: |
-          set -e
-          echo "🔍 Validating vault-policy.hcl files..."
-          failed=0
-          while IFS= read -r -d '' file; do
-            echo "Checking: $file"
-            if FILE="$file" python3 -c 'import hcl2, os; hcl2.load(open(os.environ["FILE"]))' 2>&1; then
-              echo "  ✅ Valid HCL"
-            else
-              echo "  ❌ Invalid HCL syntax"
-              failed=1
-            fi
-          done < <(find . -name "vault-policy.hcl" -type f -print0)
-          if [ $failed -eq 1 ]; then
-            echo ""
-            echo "⚠️  Fix HCL syntax errors before merging."
-            exit 1
-          fi
-          echo "✅ All vault-policy.hcl files have valid syntax"
-
   validate-deployers:
     name: Validate Deployer Classes
     needs: detect-changes

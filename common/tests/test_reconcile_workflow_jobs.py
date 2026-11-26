@@ -256,6 +256,27 @@ def test_phase_pre_runs_the_guards_and_nothing_else() -> None:
     assert not _runs(_if("post"), needs={"operation": "success"}, **only_pre)
 
 
+def test_alert_skips_green_schedule_or_sync_runs_and_runs_otherwise() -> None:
+    alert_if = _if("alert")
+    for event, inputs in (
+        ("schedule", {}),
+        ("workflow_dispatch", {"sync_app_releases": True}),
+    ):
+        assert not _runs(
+            alert_if, needs={"operation": "success"}, event=event, inputs=inputs
+        )
+        assert _runs(
+            alert_if, needs={"operation": "failure"}, event=event, inputs=inputs
+        )
+    assert _runs(alert_if, needs={"operation": "success"}, event="push", inputs={})
+    assert not _runs(
+        alert_if,
+        needs={"operation": "failure"},
+        event="workflow_dispatch",
+        inputs={"dry_run": True},
+    )
+
+
 def test_the_phase_input_offers_all_pre_and_post() -> None:
     phase = _load()["on"]["workflow_dispatch"]["inputs"]["phase"]
     assert phase["type"] == "choice" and phase["default"] == "all"

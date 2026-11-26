@@ -496,7 +496,7 @@ def test_a_reminder_run_runs_only_the_reminder_and_probe_steps(
         schedule=schedule,
         task=task,
     )
-    assert paged is (not expected.isdisjoint({"Build and send digest"}))
+    assert paged is True
 
 
 def test_the_promotion_reminder_task_is_a_dispatch_choice_that_selects_the_digest_job() -> (

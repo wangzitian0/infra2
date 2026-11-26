@@ -36,6 +36,7 @@ jobs:
     # The observability apply is a production change. Every run waits for the owner (#1125).
     environment: production
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       ENV: production
       DEPLOY_ENV: production
