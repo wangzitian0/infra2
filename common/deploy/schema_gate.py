@@ -103,7 +103,10 @@ _SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
 # that escapes ``main``, also exit EXIT_NOT_EVALUATED: no comparison ran, so the result
 # is not BLOCKED. The return code of ``main`` (0, 1 or 3) and SystemExit pass unchanged.
 _LAUNCHER = f"""\
+import contextlib
 import importlib
+import io
+import json
 import sys
 _use_storage = False
 try:
@@ -166,7 +169,44 @@ try:
                     file=sys.stderr,
                 )
                 sys.exit({EXIT_NOT_EVALUATED})
-        code = storage.main(["check-schema", *rest, "--db-url", db_url])
+        storage_argv = ["check-schema", *rest, "--db-url", db_url]
+        if "--json" not in rest:
+            storage_argv.append("--json")
+        captured_buf = io.StringIO()
+        with contextlib.redirect_stdout(captured_buf):
+            code = storage.main(storage_argv)
+        captured_out = captured_buf.getvalue()
+        payload = None
+        if captured_out.strip():
+            try:
+                parsed = json.loads(captured_out.strip().splitlines()[-1])
+                if isinstance(parsed, dict) and "rollback_class" in parsed:
+                    payload = parsed
+            except Exception:
+                payload = None
+        if payload is not None:
+            label = str(payload.get("label") or "").strip()
+            prefix = f"[{{label}}] " if label else ""
+            rb_class = payload.get("rollback_class", "")
+            pending = payload.get("migrations_pending", False)
+            print(f"{{prefix}}ROLLBACK_CLASS: {{rb_class}} pending={{pending}}")
+            if code != 0:
+                summary = {{
+                    k: payload[k]
+                    for k in (
+                        "dropped_tables",
+                        "dropped_columns",
+                        "enum_discrepancies",
+                        "precondition_failures",
+                        "new_tables",
+                        "additive_columns",
+                    )
+                    if payload.get(k)
+                }}
+                if summary:
+                    print("SCHEMA_DIFF: " + json.dumps(summary, sort_keys=True), file=sys.stderr)
+        elif captured_out:
+            sys.stdout.write(captured_out)
     else:
         code = schema_check.main([*sys.argv[1:], "--db-url", db_url])
 except SystemExit:

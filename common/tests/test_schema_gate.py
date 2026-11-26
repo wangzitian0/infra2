@@ -602,7 +602,98 @@ def test_launcher_prefers_storage_check_schema_on_v410_sdk(tmp_path):
         "finance_report/app",
         "--db-url",
         url,
+        "--json",
     ]
+
+
+def test_launcher_emits_structured_schema_diff_when_storage_check_schema_blocks(
+    tmp_path,
+):
+    """_LAUNCHER preserves ROLLBACK_CLASS on stdout and emits compact SCHEMA_DIFF on block without leaking db_url."""
+    (tmp_path / "src_mod.py").write_text("VALUE = 1\n")
+    ok_dir = tmp_path / "ok"
+    blk_dir = tmp_path / "blk"
+    ok_dir.mkdir()
+    blk_dir.mkdir()
+    ok_payload = {
+        "label": "finance_report/app",
+        "rollback_class": "A",
+        "migrations_pending": False,
+        "dropped_tables": [],
+    }
+    stub_ok = _stub_sdk(
+        ok_dir,
+        "def main(argv):\n    raise AssertionError('legacy runtime should not run')\n",
+        storage_source=(
+            "import json\n"
+            f"PAYLOAD = {ok_payload!r}\n"
+            "def main(argv):\n"
+            "    assert '--json' in argv\n"
+            "    print(json.dumps(PAYLOAD, sort_keys=True))\n"
+            "    return 0\n"
+        ),
+    )
+    ok_res = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x", "--import", "src_mod", "--label", "finance_report/app"],
+        "postgresql://user:secretpw@h:5432/db\n",
+        stub_ok,
+    )
+    assert ok_res.returncode == 0, ok_res.stderr
+    assert (
+        ok_res.stdout.strip() == "[finance_report/app] ROLLBACK_CLASS: A pending=False"
+    )
+    assert "SCHEMA_DIFF" not in ok_res.stderr
+    assert "secretpw" not in ok_res.stdout + ok_res.stderr
+
+    block_payload = {
+        "label": "finance_report/app",
+        "rollback_class": "C",
+        "migrations_pending": False,
+        "dropped_tables": [["public", "legacy_foo"]],
+        "enum_discrepancies": [{"name": "status_enum", "kind": "extra_type"}],
+        "additive_columns": [],
+    }
+    stub_block = _stub_sdk(
+        blk_dir,
+        "def main(argv):\n    raise AssertionError('legacy runtime should not run')\n",
+        storage_source=(
+            "import json\n"
+            f"PAYLOAD = {block_payload!r}\n"
+            "def main(argv):\n"
+            "    print(json.dumps(PAYLOAD, sort_keys=True))\n"
+            "    return 1\n"
+        ),
+    )
+    blk_res = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x", "--import", "src_mod", "--label", "finance_report/app"],
+        "postgresql://user:secretpw@h:5432/db\n",
+        stub_block,
+    )
+    assert blk_res.returncode == sg.EXIT_BLOCKED
+    assert (
+        blk_res.stdout.strip() == "[finance_report/app] ROLLBACK_CLASS: C pending=False"
+    )
+    assert "SCHEMA_DIFF:" in blk_res.stderr
+    assert "legacy_foo" in blk_res.stderr
+    assert "status_enum" in blk_res.stderr
+    assert "secretpw" not in blk_res.stdout + blk_res.stderr
+
+    block_runner = FakeRunner(
+        [
+            _ok(stdout='DATABASE_URL="postgresql://u:secretpw@h:5432/db"\n'),
+            _fail(1, stdout=blk_res.stdout, stderr=blk_res.stderr),
+        ]
+    )
+    with pytest.raises(sg.SchemaGateError) as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=block_runner, timeout=5))
+    err_text = str(exc_info.value)
+    assert exc_info.value.verdict == sg.VERDICT_BLOCKED
+    assert "(ROLLBACK_CLASS: C)" in err_text
+    assert "legacy_foo" in err_text
+    assert "status_enum" in err_text
+    assert "secretpw" not in err_text
 
 
 def test_launcher_imports_modules_against_real_storage_cli(tmp_path):
