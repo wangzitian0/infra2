@@ -25,7 +25,7 @@
 
 ## 3. Artifact and Configuration Binding
 
-All three Dagster roles (`dagster-code-server`, `dagster-daemon`, and `dagster-webserver`)
+All Dagster roles (`dagster-code-server` and `dagster-daemon`)
 must run the same full OCI digest. Deploy fails closed unless Vault supplies:
 
 - `IMAGE_DIGEST` as `sha256:<64 lowercase hex>`;
@@ -42,12 +42,10 @@ to the promoted digest; recording a Dokploy config hash alone is insufficient.
 ## 4. Network and Storage Boundary
 
 - OpenD remains host-only on `127.0.0.1:11111`; no bridge-facing proxy is permitted.
-- All three Dagster roles use host networking. They reach the environment's
+- All Dagster roles use host networking. They reach the environment's
   loopback-only Postgres port (`15432` Staging, `15433` Production) and the loopback
   S3 API port (`19000` Staging, `19001` Production) served by the platform S3
-  storage (`platform-s3`).
-- Dagster UI binds only to host loopback (`13001` Staging, `13002` Production), has
-  `traefik.enable=false`, and is accessed through an SSH tunnel.
+  storage (`platform-s3`). Unrouted `dagster-webserver` is retired from runtime deployment.
 - Dagster run/event/schedule metadata uses the environment Postgres `dagster` schema.
   Local SQLite storage is prohibited for deployed runs.
 - `/data/truealpha/dagster[-<env>]` contains only compute logs and IO artifacts. Raw

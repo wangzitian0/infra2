@@ -1088,6 +1088,25 @@ def test_sensitive_values_are_redacted_in_outputs(keys):
     )
 
 
+def test_key_prefix_vars_are_not_classified_as_secret_literals(tmp_path):
+    w(
+        tmp_path,
+        "svc/compose.yaml",
+        """
+        services:
+          app:
+            image: platform-app:1
+            environment:
+              REDIS_KEY_PREFIX: "canary:v4-13:probe:"
+              S3_KEY_PREFIX: "canary/v4-13/"
+        """,
+    )
+    inv_ = envinv.run({"fx": tmp_path})
+    k, *_ = envreport.analyze(inv_)
+    assert "SECRET_LITERAL" not in k["REDIS_KEY_PREFIX"].flags
+    assert "SECRET_LITERAL" not in k["S3_KEY_PREFIX"].flags
+
+
 # ---------------------------------------------------------------------------------------------
 # Repository contract guards (G1, G2, G3) and their mutation proofs (#1236)
 # ---------------------------------------------------------------------------------------------
@@ -1297,7 +1316,10 @@ def test_g1_reads_the_compiled_x_infra2_stack(repo_scan):
         assert 1 <= o.line <= len(source), o
         assert o.key in source[o.line - 1] or o.line == origin, (o.key, o.line)
     port = [o for o in writes if o.key == "PORT"]
-    assert [source[o.line - 1].strip() for o in port] == ['PORT: "8000"']
+    assert [source[o.line - 1].strip() for o in port] == [
+        'PORT: "8000"',
+        'PORT: "8000"',
+    ]
 
 
 def test_g1_reads_the_rendered_vault_template_of_an_x_infra2_stack(repo_scan):

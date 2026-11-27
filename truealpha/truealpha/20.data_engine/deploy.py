@@ -60,17 +60,16 @@ class DataEngineDeployer(Deployer):
 
     subdomain = None
     service_port = 3001
-    # No network probe on purpose: the stack runs on the host network and the dagster
-    # webserver binds 127.0.0.1, unreachable from the probe runner's network. Its
-    # container healthcheck and the breakdown watch are the liveness signal.
+    # No network probe on purpose: the stack runs on host network and exposes no
+    # public HTTP endpoint; container healthchecks and breakdown watch cover liveness.
     exemptions = (
         Exemption(
             check_id="probes",
-            reason="host-network stack; dagster webserver binds 127.0.0.1 — covered by "
-            "the container healthcheck and the breakdown watch",
+            reason="host-network stack without webserver route — covered by "
+            "daemon/code-server container healthchecks and breakdown watch",
         ),
     )
-    service_name = "dagster-webserver"
+    service_name = "dagster-daemon"
     telemetry_service_name = "truealpha-data-engine"
 
     # Values sourced from the independently released TrueAlpha artifact/runtime
@@ -99,7 +98,6 @@ class DataEngineDeployer(Deployer):
         SecretsFacet(
             vault_agent_container="truealpha-data-engine-vault-agent${ENV_SUFFIX}",
             app_containers=(
-                "truealpha-dagster-webserver${ENV_SUFFIX}",
                 "truealpha-dagster-daemon${ENV_SUFFIX}",
                 "truealpha-dagster-code-server${ENV_SUFFIX}",
             ),
@@ -114,7 +112,6 @@ class DataEngineDeployer(Deployer):
     # rather than imported: the two stacks deploy independently, and a shared
     # constant would imply an ordering that does not exist. A test asserts they agree.
     _MINIO_S3_PORTS = {"staging": "19000", "production": "19001"}
-    _WEBSERVER_PORTS = {"staging": "13001", "production": "13002"}
     # S3_ENDPOINT is deliberately absent: the template does not read it (#637, #1279).
     # SEC_USER_AGENT is optional: the template renders it from the data_engine path when
     # the key is present. Requiring a Vault key nothing consumes is worse than
@@ -304,7 +301,6 @@ class DataEngineDeployer(Deployer):
         return {
             "TA_POSTGRES_PORT": cls._POSTGRES_PORTS.get(environment, "0"),
             "TA_MINIO_S3_PORT": cls._MINIO_S3_PORTS.get(environment, "0"),
-            "DAGSTER_WEBSERVER_PORT": cls._WEBSERVER_PORTS.get(environment, "0"),
             "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
             # truealpha#854: the moomoo origins soaked on staging and were proven on a
             # manual forced TOPT tick there (2026-09-16 11:08Z, truealpha#874). Production
@@ -373,7 +369,6 @@ class DataEngineDeployer(Deployer):
         ssh_user = e.get("VPS_SSH_USER") or "root"
         suffix = e.get("ENV_SUFFIX") or ""
         containers = (
-            f"truealpha-dagster-webserver{suffix}",
             f"truealpha-dagster-daemon{suffix}",
             f"truealpha-dagster-code-server{suffix}",
         )

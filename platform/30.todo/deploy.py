@@ -12,10 +12,15 @@ from invoke.exceptions import Exit
 from common.deploy.routing import CANARY_SLOT
 
 from common.console import error, header, info, run_with_status, success
+from common.deploy.canary_pin import CanarySlot, load_canary_slots, primary_canary_slot
 from common.deploy.deployer import Deployer, make_tasks
 from common.core.facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.30.todo.shared")
+
+
+def _active_slots() -> tuple[CanarySlot, ...]:
+    return load_canary_slots()
 
 
 class TodoDeployer(Deployer):
@@ -25,36 +30,34 @@ class TodoDeployer(Deployer):
 
     subdomain = None
     service_port = 8000
-    service_name = "todo"
+    service_name = "todo-v4-13"
     canary_slot = CANARY_SLOT
     redeploy_on_ref_change = True
     secret_key = ""
 
     backups = ()
 
-    # The deploy issues OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES under this name
-    # (Deployer.sync); the compose passes them to the container (#991).
+    # Each slot emits OTEL_SERVICE_NAME=platform-todo-<slot> and SERVICE_VERSION=vX.Y.Z.
     telemetry_service_name = "platform-todo"
 
-    # The probe runner reads the status document over the Docker network (#991). The old
-    # `Exemption(probes)` called the service "self-proving"; nothing read the status, and
-    # staging answered 503 for hours unnoticed. Severity is `error` (P1): it shipped at
-    # `warning` and was raised after the staging fault drill and a full green production
-    # day (#991). The platform's own probes carry P0 for the core services, so an outage
-    # of a dependency pages there first. The 15 s timeout exceeds the 8 s per-check
-    # deadline in app.py.
     probes = (
         ProbeFacet(
             name="todo-canary-status",
             kind="http",
-            target="http://platform-todo${ENV_SUFFIX}:8000/api/canary/status",
+            target="http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status",
+            expected="200",
+            severity="error",
+            timeout_seconds=15,
+        ),
+        ProbeFacet(
+            name="todo-v4-11-canary-status",
+            kind="http",
+            target="http://platform-todo-v4-11${ENV_SUFFIX}:8000/api/canary/status",
             expected="200",
             severity="error",
             timeout_seconds=15,
         ),
     )
-    # Signal classification: a minute-tier alert debounced by the probe runner's shared
-    # loop (DEFAULT_FAILURE_THRESHOLD=3, DEFAULT_RENOTIFY_SECONDS=0, tools/infra_probe_runner.py).
     signals = (
         SignalFacet(
             tier="minute",
@@ -64,18 +67,17 @@ class TodoDeployer(Deployer):
         ),
     )
 
-    # Vault self-refresh facts: the vault-agent renders the Redis password, DATABASE_URL
-    # and the S3 canary key into the app container (AppRole auth).
     secrets = (
         SecretsFacet(
             vault_agent_container="platform-todo-vault-agent${ENV_SUFFIX}",
-            app_containers=("platform-todo${ENV_SUFFIX}",),
+            app_containers=(
+                "platform-todo-v4-11${ENV_SUFFIX}",
+                "platform-todo-v4-13${ENV_SUFFIX}",
+            ),
             auth_method="approle",
         ),
     )
 
-    # The one Postgres login of the Canary Todo. The Vault template composes DATABASE_URL
-    # with this role (common/tests/test_preview_platform_render.py keeps them equal).
     TODO_PG_ROLE = "todo_app"
     # Staging v3.2.22 (run 45754381410): one platform batch recreated platform-postgres and
     # then ran this psql before the new container accepted it, so the deploy failed. The
@@ -103,51 +105,75 @@ class TodoDeployer(Deployer):
         return base
 
     @classmethod
-    def todos_storage_sql(cls, password: str) -> str:
-        """Idempotent SQL for the todos persistence role, table, enum, and minimal DML grants."""
+    def todos_storage_sql(
+        cls,
+        password: str,
+        *,
+        slots: tuple[CanarySlot, ...] | None = None,
+    ) -> str:
+        """Idempotent SQL for slot databases, roles, schema types, and minimal DML grants."""
         if not cls._TODO_PG_PASSWORD.fullmatch(password or ""):
             raise ValueError(
                 "todo Postgres password must be 16-128 characters from [A-Za-z0-9_-]"
             )
-        role = cls.TODO_PG_ROLE
+        active = _active_slots() if slots is None else slots
         attributes = (
             "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION "
             f"CONNECTION LIMIT {cls.TODO_PG_CONNECTION_LIMIT}"
         )
-        return (
-            "SET log_min_error_statement = 'panic';\n"
-            "SET log_statement = 'none';\n"
-            "SET log_min_duration_statement = -1;\n"
-            "DO $do$\nBEGIN\n"
-            f"  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n"
-            f"    CREATE ROLE {role} {attributes};\n"
-            "  END IF;\n"
-            "END\n$do$;\n"
-            f"ALTER ROLE {role} WITH {attributes} PASSWORD '{password}';\n"
-            "DO $enum$\nBEGIN\n"
-            "  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'canary_todo_capability') THEN\n"
-            "    CREATE TYPE canary_todo_capability AS ENUM "
-            "('general', 'postgres', 'redis', 's3', 'llm', 'otel', 'sso');\n"
-            "  END IF;\n"
-            "END\n$enum$;\n"
-            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'general';\n"
-            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'postgres';\n"
-            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'redis';\n"
-            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 's3';\n"
-            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'llm';\n"
-            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'otel';\n"
-            "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'sso';\n"
-            "CREATE TABLE IF NOT EXISTS todos (\n"
-            "  id SERIAL PRIMARY KEY,\n"
-            "  title TEXT NOT NULL,\n"
-            "  completed BOOLEAN NOT NULL DEFAULT FALSE,\n"
-            "  capability canary_todo_capability NOT NULL DEFAULT 'general',\n"
-            "  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n"
-            ");\n"
-            "ALTER TABLE todos ADD COLUMN IF NOT EXISTS capability canary_todo_capability NOT NULL DEFAULT 'general';\n"
-            f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO {role};\n"
-            f"GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO {role};\n"
-        )
+        parts: list[str] = [
+            "SET log_min_error_statement = 'panic';\n",
+            "SET log_statement = 'none';\n",
+            "SET log_min_duration_statement = -1;\n",
+        ]
+        targets = [(cls.TODO_PG_ROLE, "postgres")] + [
+            (s.pg_role, s.database) for s in active
+        ]
+        for role, db in targets:
+            parts.append(
+                "DO $do$\nBEGIN\n"
+                f"  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n"
+                f"    CREATE ROLE {role} {attributes};\n"
+                "  END IF;\n"
+                "END\n$do$;\n"
+                f"ALTER ROLE {role} WITH {attributes} PASSWORD '{password}';\n"
+            )
+            if db != "postgres":
+                parts.append(
+                    f"SELECT 'CREATE DATABASE {db} OWNER {role}' "
+                    f"WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{db}')\\gexec\n"
+                )
+        for role, db in targets:
+            if db != "postgres":
+                parts.append(f"\\connect {db}\n")
+            parts.append(
+                "DO $enum$\nBEGIN\n"
+                "  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'canary_todo_capability') THEN\n"
+                "    CREATE TYPE canary_todo_capability AS ENUM "
+                "('general', 'postgres', 'redis', 's3', 'llm', 'otel', 'sso');\n"
+                "  END IF;\n"
+                "END\n$enum$;\n"
+                "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'general';\n"
+                "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'postgres';\n"
+                "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'redis';\n"
+                "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 's3';\n"
+                "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'llm';\n"
+                "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'otel';\n"
+                "ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS 'sso';\n"
+                "CREATE TABLE IF NOT EXISTS todos (\n"
+                "  id SERIAL PRIMARY KEY,\n"
+                "  title TEXT NOT NULL,\n"
+                "  completed BOOLEAN NOT NULL DEFAULT FALSE,\n"
+                "  capability canary_todo_capability NOT NULL DEFAULT 'general',\n"
+                "  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n"
+                ");\n"
+                "ALTER TABLE todos ADD COLUMN IF NOT EXISTS capability canary_todo_capability NOT NULL DEFAULT 'general';\n"
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO {role};\n"
+                f"GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO {role};\n"
+            )
+            if db != "postgres":
+                parts.append("\\connect postgres\n")
+        return "".join(parts)
 
     @staticmethod
     def redact_password(text: str, password: str) -> str:
@@ -244,7 +270,8 @@ def sso_setup(c):
     suffix = coords.env_suffix
     domain_suffix = coords.env_domain_suffix
     todo_url = coords.preview_url
-    internal_host = f"platform-todo{suffix}"
+    primary = primary_canary_slot()
+    internal_host = f"{primary.container_prefix}{suffix}"
     app_name = f"Canary Todo{(' (' + domain_suffix.lstrip('-') + ')') if domain_suffix else ''}"
     app_slug = f"canary-todo{domain_suffix}"
 

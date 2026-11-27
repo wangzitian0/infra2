@@ -329,7 +329,7 @@ jobs:
           if [[ -z "${INFRA2_WATCHDOG_SSH_KEY_PATH:-}" ]]; then
             python tools/deploy_guard_audit.py --skip-check guard:canary-verify-staging missing-ssh-key
           else
-            python tools/deploy_guard_audit.py --record-check guard:canary-verify-staging "Canary Todo staging reality verification" -- python -m tools.canary_verify --env staging --require-platform-deps
+            python tools/deploy_guard_audit.py --record-check guard:canary-verify-staging "Canary Todo staging reality verification" -- python -m tools.canary_verify --env staging --require-platform-deps --deep
           fi
 
       - name: Upload scheduled audit artifacts

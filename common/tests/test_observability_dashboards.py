@@ -473,16 +473,24 @@ def test_promql_selectors_reach_series_the_app_exports() -> None:
                 val for key, op, val in matchers if key == "service.name" and op == "=~"
             ]
             if pattern:
-                # #1431: the parse metrics come from the backend and the worker process.
+                # #1431: parse metrics come from backend+worker; Canary slots use platform-todo-vX-Y.
                 assert services == [], alert_name
                 assert len(pattern) == 1, alert_name
-                matched = {
-                    name
-                    for name in ("finance-report-backend", "finance-report-worker")
-                    if re.fullmatch(pattern[0], name)
-                }
-                assert matched == {"finance-report-backend", "finance-report-worker"}
-                assert not re.fullmatch(pattern[0], "finance-report-frontend")
+                if alert_name.startswith("CanaryTodo"):
+                    assert re.fullmatch(pattern[0], "platform-todo")
+                    assert re.fullmatch(pattern[0], "platform-todo-v4-11")
+                    assert re.fullmatch(pattern[0], "platform-todo-v4-13")
+                else:
+                    matched = {
+                        name
+                        for name in ("finance-report-backend", "finance-report-worker")
+                        if re.fullmatch(pattern[0], name)
+                    }
+                    assert matched == {
+                        "finance-report-backend",
+                        "finance-report-worker",
+                    }
+                    assert not re.fullmatch(pattern[0], "finance-report-frontend")
             else:
                 assert services in [
                     ["finance-report-backend"],
@@ -723,7 +731,17 @@ def test_backend_telemetry_absence_is_expressed_in_promql(
     selectors = _selectors(promql)
     assert [metric for metric, _ in selectors] == [survivor]
     for _metric, matchers in selectors:
-        assert ("service.name", "=", service) in matchers
+        if service == "platform-todo":
+            assert any(
+                k == "service.name"
+                and (
+                    (op == "=" and v == service)
+                    or (op == "=~" and re.fullmatch(v, service))
+                )
+                for k, op, v in matchers
+            ), matchers
+        else:
+            assert ("service.name", "=", service) in matchers
         assert ("deployment.environment.name", "=", "production") in matchers
 
 
@@ -859,19 +877,21 @@ _NEW_HTTP = set(fr.OTEL_HTTP_SERVER_METRICS)
 _FINANCE_REPORT_SERVICES = frozenset(
     {"finance-report-backend", "finance-report-worker", "finance-report-frontend"}
 )
+_TODO_METRICS = _NEW_HTTP | {
+    "http.server.active_requests",
+    "canary.probe.duration_ms.bucket",
+    "canary.probe.outcomes",
+    # Slice 3 of #1807: emitted by infra2_sdk.runtime.llm (read from staging SigNoz).
+    "gen_ai.client.token.usage.sum",
+    "gen_ai.client.operation.duration.bucket",
+}
 SERVICE_METRICS = {
     "truealpha-app": _NEW_HTTP | {"http.server.active_requests"},
     "truealpha-data-engine": set(),
     "platform-alerting": _NEW_HTTP | {"http.server.active_requests"},
-    "platform-todo": _NEW_HTTP
-    | {
-        "http.server.active_requests",
-        "canary.probe.duration_ms.bucket",
-        "canary.probe.outcomes",
-        # Slice 3 of #1807: emitted by infra2_sdk.runtime.llm (read from staging SigNoz).
-        "gen_ai.client.token.usage.sum",
-        "gen_ai.client.operation.duration.bucket",
-    },
+    "platform-todo": _TODO_METRICS,
+    "platform-todo-v4-11": _TODO_METRICS,
+    "platform-todo-v4-13": _TODO_METRICS,
 }
 KNOWN_SERVICES = SERVICE_METRICS.keys() | _FINANCE_REPORT_SERVICES
 

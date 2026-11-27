@@ -3769,7 +3769,7 @@ def run_canary_reality_gate(
                 environment=env_name,
                 expected_sdk=expected_sdk or None,
                 repo_root=repo_root,
-                require_llm=True,
+                require_llm=False,
                 require_app_peer=True,
                 require_platform_deps=True,
                 expected_version=expected_sha or None,

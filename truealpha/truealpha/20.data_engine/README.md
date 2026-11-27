@@ -1,22 +1,16 @@
 # TrueAlpha Data Engine and Dagster
 
-This service deploys the exact reviewed `truealpha-data-engine` OCI digest as three
+This service deploys the exact reviewed `truealpha-data-engine` OCI digest as two
 runtime roles:
 
-- `dagster-webserver` exposes the Dagster UI on a host-loopback-only port.
 - `dagster-daemon` is the sole recurring-run authority and launches capture runs.
 - `dagster-code-server` is a persistent `dagster api grpc` process serving the
   `data_engine.dagster_defs` Definitions over a unix socket
-  (`/var/lib/dagster/code-server.sock`). `dagster-webserver`/`dagster-daemon` load
-  it via `--grpc-socket /var/lib/dagster/code-server.sock` instead of each spawning and heartbeat-
-  managing their own local code-server subprocess (the framework default for
-  `-m data_engine.dagster_defs`, which self-terminates ~20s after its last
-  heartbeat and gets respawned — harmless per `dagster.job_ticks` history, but
-  needless churn for an always-on deployment). In contrast, local developer
-  workflows (`dagster-webserver -m data_engine.dagster_defs`) keep the
-  framework default without the dedicated code-server daemon.
+  (`/var/lib/dagster/code-server.sock`). `dagster-daemon` loads
+  it via `--grpc-socket /var/lib/dagster/code-server.sock` instead of spawning and heartbeat-
+  managing its own local code-server subprocess. Local developer workflows still run Dagster UI locally.
 
-All three roles use the same image digest, isolated environment credentials, the
+Both roles use the same image digest, isolated environment credentials, the
 environment's TrueAlpha Postgres, and a dedicated artifact directory. Dagster
 run/event/schedule metadata is stored in Postgres's `dagster` schema. Each
 environment's scheduled universes and cadence live in `truealpha`'s

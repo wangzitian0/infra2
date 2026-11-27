@@ -116,39 +116,6 @@ services:
       retries: 5
       start_period: 60s
 
-  dagster-webserver:
-    <<: *dagster-service
-    container_name: truealpha-dagster-webserver${ENV_SUFFIX}
-    depends_on:
-      vault-agent:
-        condition: service_healthy
-      dagster-code-server:
-        condition: service_healthy
-    x-vault: {}
-    command:
-      - /bin/sh
-      - /app/dagster-entrypoint.sh
-      - dagster-webserver
-      - --grpc-socket
-      - /var/lib/dagster/code-server.sock
-      - --host
-      - 127.0.0.1
-      - --port
-      - ${DAGSTER_WEBSERVER_PORT}
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['DAGSTER_WEBSERVER_PORT'] + '/server_info', timeout=3)"
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    environment:
-      <<: *dagster-env
-      DAGSTER_WEBSERVER_PORT: ${DAGSTER_WEBSERVER_PORT}
-
   dagster-daemon:
     <<: *dagster-service
     container_name: truealpha-dagster-daemon${ENV_SUFFIX}

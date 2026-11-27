@@ -14,7 +14,7 @@
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "sum(increase({\"canary.probe.outcomes\",\"service.name\"=\"platform-todo\",\"deployment.environment.name\"=\"{env}\",\"canary.check\"=~\"^(postgres|redis|s3)$\",\"canary.status\"=~\"^(fail|unconfigured)$\"}[5m]))",
+      "promql": "sum(increase({\"canary.probe.outcomes\",\"service.name\"=~\"^platform-todo(-v[0-9]+-[0-9]+)?$\",\"deployment.environment.name\"=\"{env}\",\"canary.check\"=~\"^(postgres|redis|s3)$\",\"canary.status\"=~\"^(fail|unconfigured)$\"}[5m]))",
       "summary": "platform-todo gating probe (postgres, redis, or s3) reported fail or unconfigured within 5 minutes. Severity P1."
     },
     {
@@ -28,7 +28,7 @@
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "absent_over_time({\"canary.probe.outcomes\",\"service.name\"=\"platform-todo\",\"deployment.environment.name\"=\"{env}\"}[10m])",
+      "promql": "absent_over_time({\"canary.probe.outcomes\",\"service.name\"=~\"^platform-todo(-v[0-9]+-[0-9]+)?$\",\"deployment.environment.name\"=\"{env}\"}[10m])",
       "summary": "platform-todo reported no canary.probe.outcomes metric for 10 minutes: the Canary service or its OTLP export stopped. Severity P1."
     }
   ]

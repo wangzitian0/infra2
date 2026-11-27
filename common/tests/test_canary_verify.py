@@ -380,8 +380,8 @@ def test_remote_queries_filter_on_environment_and_window(environment: str) -> No
 
     assert predicate in traces_sql
     assert predicate in logs_sql
-    assert "'platform-todo'" in traces_sql
-    assert "'platform-todo'" in logs_sql
+    assert "'platform-todo-v4-13'" in traces_sql
+    assert "'platform-todo-v4-13'" in logs_sql
     assert "INTERVAL 3600 SECOND" in traces_sql
     assert "INTERVAL 3600 SECOND" in logs_sql
     assert traces_sql.startswith("SELECT count(), ")
@@ -483,8 +483,8 @@ def test_alert_bridge_summary_reports_the_real_status() -> None:
 @pytest.mark.parametrize(
     ("environment", "bridge", "todo"),
     [
-        ("production", "platform-alerting", "platform-todo"),
-        ("staging", "platform-alerting-staging", "platform-todo-staging"),
+        ("production", "platform-alerting", "platform-todo-v4-13"),
+        ("staging", "platform-alerting-staging", "platform-todo-v4-13-staging"),
     ],
 )
 def test_the_ssh_command_asks_the_bridge_of_the_same_environment(
@@ -1827,3 +1827,84 @@ def test_llm_pillar_rejects_broken_or_incomplete_sse_stream() -> None:
     assert zero_report.llm is not None
     assert zero_report.llm.ok is False
     assert "stream usage tokens missing/zero" in zero_report.llm.summary
+
+
+def test_fast_gate_default_omits_llm_queries_and_deep_enables_them() -> None:
+    pass_report = CanaryRealityReport(
+        environment="staging",
+        all_ok=True,
+        tracking=PillarResult(ok=True, summary="t"),
+        logs=PillarResult(ok=True, summary="l"),
+        monitoring=PillarResult(ok=True, summary="m"),
+        alerts=PillarResult(ok=True, summary="a"),
+        installed_sdk="4.13.0",
+    )
+    with patch(
+        "common.observability.canary_verify.verify_canary", return_value=pass_report
+    ) as mock_verify:
+        assert main(["--env", "staging"]) == 0
+        assert mock_verify.call_args.kwargs["require_llm"] is False
+        assert main(["--env", "staging", "--deep"]) == 0
+        assert mock_verify.call_args.kwargs["require_llm"] is True
+
+    fresh = _relative_ts(30, now=FIXED_NOW)
+    base_stdout = _canned_stdout(
+        traces=f"500\t{fresh}",
+        logs=f"100\t{fresh}",
+        environment="staging",
+    )
+    fast_stdout = (
+        base_stdout.split("=== LLM_SUMMARY ===")[0]
+        + "=== WORKER ==="
+        + base_stdout.split("=== WORKER ===")[1]
+    )
+    fast_report, fast_commands = _verify_with_canned_ssh(
+        "staging", fast_stdout, require_llm=False
+    )
+    assert fast_report.all_ok is True
+    assert fast_report.llm is not None
+    assert fast_report.llm.ok is True
+    assert fast_report.llm.summary == "LLM summary not sampled"
+    assert "=== LLM_SUMMARY ===" not in fast_commands[0]
+    assert "=== GEN_AI_METRICS ===" not in fast_commands[0]
+
+
+def test_slot_v4_11_targets_isolated_service_db_and_probe() -> None:
+    fresh = _relative_ts(30, now=FIXED_NOW)
+    stdout = _canned_stdout(
+        traces=f"500\t{fresh}",
+        logs=f"100\t{fresh}",
+        environment="staging",
+        sdk="4.11.2",
+    )
+
+    report, commands = _verify_with_canned_ssh(
+        "staging", stdout, slot="v4-11", require_llm=False
+    )
+
+    assert len(commands) == 1
+    cmd = commands[0]
+    assert report.all_ok is True, report
+    assert "platform-todo-v4-11-staging" in cmd
+    assert "'platform-todo-v4-11'" in cmd
+    assert "todo_v4_11_app" in cmd
+    assert "todo_v4_11" in cmd
+    assert "todo-v4-11-canary-status" in cmd
+
+
+def test_restart_grace_seconds_is_45() -> None:
+    from common.observability.canary_verify import RESTART_GRACE_SECONDS
+
+    assert RESTART_GRACE_SECONDS == 45
+    started_iso = (FIXED_NOW - timedelta(seconds=800)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    within_grace = _signal(ok=10, fail=1, fail_age=800 - 45, ok_age=30)
+    ok_report = _monitoring_report(
+        within_grace, environment="production", container_started_at=started_iso
+    )
+    assert ok_report.monitoring.ok is True
+
+    beyond_grace = _signal(ok=10, fail=1, fail_age=800 - 46, ok_age=30)
+    fail_report = _monitoring_report(
+        beyond_grace, environment="production", container_started_at=started_iso
+    )
+    assert fail_report.monitoring.ok is False
