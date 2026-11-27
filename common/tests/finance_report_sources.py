@@ -1,11 +1,11 @@
 """Read the pinned finance_report sources that the alert and dashboard contracts check (#1816).
 
-The pin is the `repos/finance_report` gitlink of this checkout. A local checkout at the
-pinned commit supplies the files. Infra CI checks out only PINNED_FILES, outside the infra2
-tree, in the step "Check out the pinned finance_report contract files" of infra-ci.yml (#506).
-That step exports the path as FINANCE_REPORT_PINNED_CHECKOUT. With `CI` set, the reader uses
-only that path. A local run uses repos/finance_report when it is at the pin, and otherwise
-fetches the files at the pinned commit from the public repository.
+The pin is the ``finance-report`` ``release_tag`` in ``harness/repos.yaml``. A local
+checkout at that tag or commit supplies the files. Infra CI checks out only PINNED_FILES,
+outside the infra2 tree, in the step "Check out the pinned finance_report contract files"
+of infra-ci.yml (#506). That step exports the path as FINANCE_REPORT_PINNED_CHECKOUT. With
+`CI` set, the reader uses only that path. A local run uses repos/finance_report when it
+is at the pin, and otherwise fetches the files at the pinned ref from GitHub.
 
 Every read is lazy: a test calls the reader, an import never does. An unreadable source fails
 only the tests that read it, with one PinnedSourceUnavailable message, and the reader keeps
@@ -24,6 +24,7 @@ from pathlib import Path
 
 from common.core.constants import APP_SOURCES, SERVICE_TO_SUBMODULE_PATH
 from common.core.fetch_app_manifests import http_get
+from common.deploy.reconcile_iac_inputs import load_app_release_tags
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_ID = "finance_report/app"
@@ -58,37 +59,56 @@ def _git(*args: str, cwd: Path) -> str:
     ).stdout.strip()
 
 
-def pinned_sha(root: Path = ROOT) -> str:
-    """Return the commit of the finance_report gitlink in the index of ``root``."""
-    path = SERVICE_TO_SUBMODULE_PATH[SERVICE_ID]
-    mode, sha, _stage, _name = _git("ls-files", "--stage", "--", path, cwd=root).split()
-    if mode != "160000":
-        raise PinnedSourceUnavailable(f"{path} is not a gitlink (mode {mode})")
-    return sha
+def pinned_ref(root: Path = ROOT) -> str:
+    """Return the pinned finance_report release tag from ``harness/repos.yaml``."""
+    try:
+        tags = load_app_release_tags(root)
+    except Exception as exc:
+        raise PinnedSourceUnavailable(
+            f"cannot read harness/repos.yaml pin for {SERVICE_ID}: {exc}"
+        ) from exc
+    tag = (tags.get(SERVICE_ID) or "").strip()
+    if not tag:
+        raise PinnedSourceUnavailable(
+            f"{SERVICE_ID} has no release_tag in harness/repos.yaml"
+        )
+    return tag
 
 
-def _at_pin(checkout: Path, sha: str) -> bool:
-    return (checkout / ".git").exists() and _git(
-        "rev-parse", "HEAD", cwd=checkout
-    ) == sha
+pinned_sha = pinned_ref
+
+
+def _at_pin(checkout: Path, ref: str) -> bool:
+    if not (checkout / ".git").exists():
+        return False
+    head = _git("rev-parse", "HEAD", cwd=checkout)
+    if head == ref:
+        return True
+    try:
+        tag_commit = _git(
+            "rev-parse", "--verify", f"refs/tags/{ref}^{{commit}}", cwd=checkout
+        )
+    except subprocess.SubprocessError:
+        return False
+    return tag_commit == head
 
 
 def _read(relative_path: str) -> str:
-    sha = pinned_sha()
+    ref = pinned_ref()
     if os.environ.get("CI"):
         configured = os.environ.get(PINNED_CHECKOUT_ENV, "")
-        if not configured or not _at_pin(Path(configured), sha):
+        if not configured or not _at_pin(Path(configured), ref):
             raise PinnedSourceUnavailable(
                 f"CI reads only the checkout in {PINNED_CHECKOUT_ENV} "
-                f"({configured or 'not set'}), and it is missing or not at {sha}. "
+                f"({configured or 'not set'}), and it is missing or not at {ref}. "
                 f'Run the infra-ci.yml step "{CI_STEP}" before pytest. '
                 "PINNED_FILES must list each file that a test reads."
             )
         return (Path(configured) / relative_path).read_text(encoding="utf-8")
     checkout = ROOT / SERVICE_TO_SUBMODULE_PATH[SERVICE_ID]
-    if _at_pin(checkout, sha):
+    if _at_pin(checkout, ref):
         return (checkout / relative_path).read_text(encoding="utf-8")
-    url = f"https://raw.githubusercontent.com/{APP_SOURCES[SERVICE_ID]}/{sha}/{relative_path}"
+    url = f"https://raw.githubusercontent.com/{APP_SOURCES[SERVICE_ID]}/{ref}/{relative_path}"
     try:
         return http_get(url).decode("utf-8")
     except SystemExit as exc:  # http_get exits on a permanent error

@@ -74,7 +74,7 @@ jobs:
               exit 1
             fi
             prod_tag="${marker#production/}"
-            if ! git diff --quiet "${prod_tag}" HEAD -- platform/12.alerting common/alerting common/observability_dashboards.py; then
+            if ! git diff --quiet "${prod_tag}" HEAD -- platform/12.alerting common/alerting common/observability_dashboards.py common/observability/apply_tasks.py common/signoz_alert_rule_probe.py tools/signoz_alert_rule_probe.py platform/30.todo/alert_rules.json platform/30.todo/dashboard.json finance_report/finance_report/observability truealpha/truealpha/observability; then
               echo "::error::Alerting/observability code changed since ${prod_tag}; promote platform-alerting to production before applying observability rules."
               exit 1
             fi
@@ -86,11 +86,11 @@ jobs:
 
       # prune-alerts deletes unmanaged rules once, after the owner checks the would-prune list (#1435).
       - name: Apply alert rules (idempotent)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' || inputs.mode == 'prune-alerts' }}
+        if: ${{ inputs.mode == 'apply' || inputs.mode == 'prune-alerts' }}
         env:
           PRUNE_FLAG: ${{ inputs.mode == 'prune-alerts' && '--prune' || '' }}
         run: uv run --locked python -m invoke fr-observability.shared.apply-alerts $PRUNE_FLAG
 
       - name: Apply dashboard (idempotent)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}
+        if: ${{ inputs.mode == 'apply' }}
         run: uv run --locked python -m invoke fr-observability.shared.apply-dashboard

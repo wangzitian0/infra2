@@ -394,20 +394,6 @@ jobs:
           raise SystemExit(outcome.exit_code)
           PY
 
-  watchdog:
-    # Moved to .github/workflows/watchdog.yml; zero-secret stub removed once main contract drops entry.
-    if: false
-    runs-on: ubuntu-latest
-    steps:
-      - run: "true"
-
-  digest:
-    # Moved to .github/workflows/watchdog.yml; zero-secret stub removed once main contract drops entry.
-    if: false
-    runs-on: ubuntu-latest
-    steps:
-      - run: "true"
-
   preview-leak-check:
     # signal: preview-leak-check
     name: Detect leaked Dokploy previews
@@ -1183,10 +1169,16 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Restore App tool caches
+        id: caches
         uses: ./.github/actions/app-caches
 
       - name: Install Playwright chromium
-        run: playwright install --with-deps chromium
+        run: |
+          if [[ "${{ steps.caches.outputs.browsers-hit }}" == "true" ]]; then
+            playwright install-deps chromium
+          else
+            playwright install --with-deps chromium
+          fi
 
       - name: Run e2e_regressions smoke suite against production
         env:

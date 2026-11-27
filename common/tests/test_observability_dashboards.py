@@ -2162,10 +2162,7 @@ def test_apply_observability_alerts_step_prunes_only_in_prune_alerts_mode() -> N
 
     assert step == {
         "name": "Apply alert rules (idempotent)",
-        "if": (
-            "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' "
-            "|| inputs.mode == 'prune-alerts' }}"
-        ),
+        "if": "${{ inputs.mode == 'apply' || inputs.mode == 'prune-alerts' }}",
         "env": {
             "PRUNE_FLAG": "${{ inputs.mode == 'prune-alerts' && '--prune' || '' }}"
         },
@@ -2182,9 +2179,7 @@ def test_apply_observability_dashboard_step_never_runs_in_prune_alerts_mode() ->
 
     assert step == {
         "name": "Apply dashboard (idempotent)",
-        "if": (
-            "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}"
-        ),
+        "if": "${{ inputs.mode == 'apply' }}",
         "run": (
             "uv run --locked python -m invoke fr-observability.shared.apply-dashboard"
         ),

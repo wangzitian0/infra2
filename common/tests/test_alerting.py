@@ -1902,7 +1902,7 @@ def test_ci_reads_only_the_pinned_checkout_that_the_ci_step_names(
 
     fetched: list[str] = []
     monkeypatch.setattr(fr, "ROOT", tmp_path / "infra2")  # no repos/finance_report
-    monkeypatch.setattr(fr, "pinned_sha", lambda: head)
+    monkeypatch.setattr(fr, "pinned_ref", lambda: head)
     monkeypatch.setattr(fr, "http_get", lambda url: fetched.append(url) or b"fetched")
     monkeypatch.setenv("CI", "true")
 
@@ -1919,13 +1919,13 @@ def test_ci_reads_only_the_pinned_checkout_that_the_ci_step_names(
     monkeypatch.setattr(fr, "_READS", {})
     monkeypatch.setenv(fr.PINNED_CHECKOUT_ENV, str(pin))
     monkeypatch.setattr(
-        fr, "pinned_sha", lambda: "0" * 40
+        fr, "pinned_ref", lambda: "0" * 40
     )  # the checkout is not at the pin
     with pytest.raises(fr.PinnedSourceUnavailable):
         fr.read_pinned(fr.OPENAPI)
 
     monkeypatch.setattr(fr, "_READS", {})
-    monkeypatch.setattr(fr, "pinned_sha", lambda: head)
+    monkeypatch.setattr(fr, "pinned_ref", lambda: head)
     assert fr.read_pinned(fr.OPENAPI) == "pinned text"
     assert fetched == []
 

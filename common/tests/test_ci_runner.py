@@ -347,10 +347,10 @@ def test_select_changed_compose_targets_scopes_services_and_contracts() -> None:
         all_compose, ["platform/02.redis/compose.yaml"]
     ) == [redis_compose]
     assert _select_changed_compose_targets(
-        all_compose, ["contracts/truealpha/data-engine.required-env.generated.json"]
+        all_compose, ["truealpha/truealpha/20.data_engine/required-env.generated.json"]
     ) == [ta_compose]
     assert _select_changed_compose_targets(
-        all_compose, ["contracts/finance_report/required-env.generated.json"]
+        all_compose, ["finance_report/finance_report/10.app/env.manifest.json"]
     ) == [fr_compose]
     assert (
         _select_changed_compose_targets(all_compose, ["tools/ci_runner.py"])

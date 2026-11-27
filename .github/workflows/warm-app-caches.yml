@@ -12,8 +12,6 @@ run-name: Warm App tool caches (${{ github.event_name }})
     branches: [main]
     paths:
       - harness/repos.yaml
-      - repos/truealpha
-      - repos/finance_report
       - .github/actions/app-caches/action.yml
       - .github/workflows/warm-app-caches.yml
   schedule:

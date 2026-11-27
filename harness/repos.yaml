@@ -50,7 +50,7 @@ repositories:
     contract: snapshot
     source: https://github.com/wangzitian0/finance_report
     release_identity: app-image-ref-or-digest
-    release_tag: v0.3.9
+    release_tag: v0.3.12
     sdk_lock: apps/backend/uv.lock
     # Public health endpoints. `harness status --online` reads the served release from
     # `version`, else `git_sha`, of each JSON body. Keys: staging, production.
@@ -71,7 +71,7 @@ repositories:
     contract: snapshot
     source: https://github.com/wangzitian0/truealpha
     release_identity: app-image-ref-or-digest
-    release_tag: v0.3.25
+    release_tag: v0.3.26
     sdk_lock: uv.lock
     # The production host is the bare product domain (Deployer.domain of truealpha/app).
     health:

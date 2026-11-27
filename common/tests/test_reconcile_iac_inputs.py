@@ -1906,7 +1906,6 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
     res = reconcile.sync_app_releases(
         tmp_path,
         apply_repos_yaml=True,
-        sync_gitlinks=True,
         create_pr=True,
         pr_branch="chore/sync-app-releases",
         runner=_runner,
@@ -1931,7 +1930,6 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
         "add",
         "harness/repos.yaml",
         _FAKE_COPY,
-        "repos/finance_report",
     ] in calls
 
     # Second run when an open PR already exists -> updates via gh pr edit
@@ -1953,7 +1951,6 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
     res2 = reconcile.sync_app_releases(
         tmp_path,
         apply_repos_yaml=True,
-        sync_gitlinks=True,
         create_pr=True,
         pr_branch="chore/sync-app-releases",
         runner=_runner,
@@ -2264,13 +2261,6 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     fr_manifest = load_hooks_manifest(fr_manifest_path)
     ta_manifest = load_hooks_manifest(ta_manifest_path)
 
-    disk_fr = ROOT / "repos" / "finance_report" / "runtime-hooks.manifest.json"
-    disk_ta = ROOT / "repos" / "truealpha" / "runtime-hooks.manifest.json"
-    if disk_fr.is_file():
-        assert load_hooks_manifest(disk_fr).schema_version == 3
-    if disk_ta.is_file():
-        assert load_hooks_manifest(disk_ta).schema_version == 3
-
     invocations: list[tuple[list[str], Path | None, dict[str, str]]] = []
 
     def _capturing_runner(cmd, *, env=None, cwd=None, **_kw):
@@ -2465,7 +2455,6 @@ def test_sync_app_releases_create_pr_surfaces_gh_stderr_on_failure(
         reconcile.sync_app_releases(
             tmp_path,
             apply_repos_yaml=True,
-            sync_gitlinks=True,
             create_pr=True,
             pr_branch="chore/sync-app-releases",
             runner=_failing_runner,
@@ -2938,7 +2927,8 @@ def test_reconcile_workflow_always_runs_gates_and_every_sync_exits_after_its_pr(
     with pytest.raises(SystemExit) as refused:
         reconcile.main(["--run-post-deploy-hooks"])
     assert refused.value.code == 2  # argparse: unrecognized argument
-    assert "--sync-app-releases --apply-repos-yaml --sync-gitlinks" in sync_script
+    assert "--sync-app-releases --apply-repos-yaml" in sync_script
+    assert "--sync-gitlinks" not in sync_script
     assert "sync_args+=(--create-pr)" in sync_script
     assert "promote_prod" not in sync_script
     assert "sync_app_releases" not in operation_script
@@ -4101,7 +4091,6 @@ def _origin_with_release_tag(tmp_path: Path) -> tuple[Path, str, str, str]:
 def _checkout_of(monkeypatch, origin: Path, sha: str, **kwargs):
     monkeypatch.setitem(reconcile.APP_SOURCES, "test/app", "test/app")
     monkeypatch.setattr(reconcile, "git_url", lambda _slug: origin.as_uri())
-    monkeypatch.setattr(reconcile, "SERVICE_TO_SUBMODULE_PATH", {})
     return reconcile.resolve_app_hook_cwd("test/app", sha, **kwargs)
 
 
