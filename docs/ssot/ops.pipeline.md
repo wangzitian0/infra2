@@ -115,7 +115,7 @@ Owner direction of 2026-11-27: thin gates; make each dependency explicit early a
 Rules 10 to 13 are the frame of that direction. Rules 10, 11 and 13 are targets; slices Q2 to Q4 of #1644 make them true. Rule 12 states the present behaviour.
 
 10. Each stage asks one question, one time. PR: is the change consistent, and is each dependency ready? Train: does each changed unit start and serve (`smoke`)? Post: is the App good? Prod: the owner approves, and `smoke` runs.
-11. One train runs at a time. The tag carries each merge and each pin move since the last tag. Since #1644 Q3 a session cuts the tag with `tools/release_tag.py`: no tag while a tag train runs, and one tag in 30 minutes. A bot that cuts the tag is the target.
+11. One train runs at a time. The tag carries each merge and each pin move since the last tag. Since #1644 Q3 a session cuts the tag with `tools/release_tag.py`: no tag while a Staging run of the train workflow runs or waits, and one tag in 30 minutes. A bot that cuts the tag is the target.
 12. A red post check stops the promotion of its release tag. This text replaces the first target of 2026-11-27 ("a red post check stops only the promotion of its own App"). One release tag holds the pin of each App, and each App gate is also the bench of the infra change of that tag. A split of the promotion by App does not fit this release model (measured 2026-11-27, #1644).
 13. A test stays only when it protects a cross-repository contract or the production reservation. The board proves a deletion.
 
@@ -704,7 +704,7 @@ gh pr create --base main --fill          # fast-track review → 合并回 main(
 # 合并后,从 main 打 patch tag → 自动晋升 staging:
 uv run python tools/release_tag.py --push -m "hotfix: critical issue"   # prints the tag, e.g. v1.3.1
 # `wait` for a running train: wait for it. `wait` for the 30 minutes while production is down:
-# git tag -a v1.3.1 -m "hotfix: critical issue" origin/main && git push origin v1.3.1
+# git fetch origin main && git tag -a v1.3.1 -m "hotfix: critical issue" FETCH_HEAD && git push origin v1.3.1
 # staging soak 后,显式 promote 平台服务到 prod
 # (紧接着前,`uv run --locked python -m tools.harness prod-queue` 必须退出 0):
 gh workflow run reconcile-iac-inputs.yml -f after=v1.3.1 -f promote_prod=true

@@ -66,9 +66,9 @@ def test_a_tag_waits_30_minutes_after_the_start_of_the_newest_train() -> None:
 def test_a_tag_waits_when_the_train_of_the_newest_tag_is_not_listed() -> None:
     for runs in ([], [_run("v3.2.58", "completed", DONE)]):
         decision = release_tag.decide(MAIN, TAGS, runs, NOW)
-        assert decision == release_tag.Decision(
-            "wait", "the train of v3.2.59 is not in the run list"
-        )
+        assert decision.action == "wait"
+        assert decision.reason.startswith("the train of v3.2.59 is not in the run list")
+        assert "after=v3.2.59" in decision.reason
 
 
 def test_no_tag_when_the_newest_tag_is_the_head_of_main() -> None:
@@ -84,6 +84,7 @@ class _Git:
     def __init__(self, runs: list[dict], *, fail: str = "") -> None:
         self.runs, self.fail = runs, fail
         self.commands: list[list[str]] = []
+        self.queries: list[str] = []
         self.cwds: set[object] = set()
 
     def __call__(self, argv, **kwargs):
@@ -92,6 +93,7 @@ class _Git:
             self.cwds.add(kwargs.get("cwd"))
             assert kwargs.get("timeout")
         if argv[:2] == ["git", "ls-remote"]:
+            code = 1 if self.fail == "ls-remote" else 0
             # v3.2.59 is an annotated tag: its commit is on the peeled row.
             out = (
                 f"{MAIN}\trefs/heads/main\n"
@@ -100,7 +102,9 @@ class _Git:
                 f"{MAIN}\trefs/tags/v4.14.2-canary\n"
             )
         elif argv[:2] == ["gh", "api"]:
+            self.queries.append(argv[2].split("?", 1)[1])
             out = json.dumps({"workflow_runs": self.runs})
+            code = 1 if self.fail == "gh" else 0
         else:
             self.commands.append(argv)
             code = 1 if argv[1] == self.fail else 0
@@ -117,6 +121,7 @@ def test_push_tags_the_commit_of_origin_main_and_a_plain_run_changes_nothing(
     git = _Git([_run("v3.2.59", "completed", DONE)])
     assert _main(git, tmp_path) == 0
     assert git.commands == []
+    assert git.queries == ["per_page=30", "event=push&per_page=20"]
     assert "release tag: cut v3.2.60 at aaaaaaaa" in capsys.readouterr().out
 
     assert _main(git, tmp_path, "--push") == 0
@@ -162,3 +167,79 @@ def test_an_unreadable_run_list_exits_4(tmp_path, capsys) -> None:
     assert _main(git, tmp_path, "--push") == 4
     assert git.commands == []
     assert "release tag: unreadable: a tag train" in capsys.readouterr().out
+
+
+def test_a_failed_tag_deletes_no_tag(tmp_path, capsys) -> None:
+    """The name exists in this checkout: this run made no tag, so it deletes none."""
+    git = _Git([_run("v3.2.59", "completed", DONE)], fail="tag")
+    assert _main(git, tmp_path, "--push") == 4
+    assert [argv[1] for argv in git.commands] == ["fetch", "tag"]
+    assert "release tag: failed v3.2.60: git tag failed" in capsys.readouterr().out
+
+
+def test_an_interrupt_in_the_push_deletes_the_tag_of_this_run(tmp_path) -> None:
+    import pytest
+
+    class _Interrupted(_Git):
+        def __call__(self, argv, **kwargs):
+            if argv[:2] == ["git", "push"]:
+                self.commands.append(argv)
+                raise KeyboardInterrupt
+            return super().__call__(argv, **kwargs)
+
+    git = _Interrupted([_run("v3.2.59", "completed", DONE)])
+    with pytest.raises(KeyboardInterrupt):
+        _main(git, tmp_path, "--push")
+    assert git.commands[-1] == ["git", "tag", "-d", "v3.2.60"]
+
+
+def test_an_unreadable_source_exits_4_and_pushes_nothing(tmp_path, capsys) -> None:
+    for source in ("gh", "ls-remote"):
+        git = _Git([_run("v3.2.59", "completed", DONE)], fail=source)
+        assert _main(git, tmp_path, "--push") == 4
+        assert git.commands == []
+        assert "release tag: unreadable:" in capsys.readouterr().out
+
+
+def test_none_reads_no_run_list(tmp_path, capsys) -> None:
+    class _Released(_Git):
+        def __call__(self, argv, **kwargs):
+            done = super().__call__(argv, **kwargs)
+            if argv[:2] == ["git", "ls-remote"]:
+                done.stdout = done.stdout.replace(
+                    MAIN + "\trefs/heads", OLD + "\trefs/heads"
+                )
+            return done
+
+    git = _Released([])
+    assert _main(git, tmp_path, "--push") == 0
+    assert (git.queries, git.commands) == ([], [])
+    assert "release tag: none: v3.2.59 is the head" in capsys.readouterr().out
+
+
+def test_a_dispatch_replay_of_the_newest_tag_counts_as_its_train() -> None:
+    replay = _run(
+        "main",
+        "completed",
+        DONE,
+        event="workflow_dispatch",
+        title="Reconcile IaC Inputs (staging v3.2.59)",
+    )
+    assert release_tag.decide(MAIN, TAGS, [replay], NOW).action == "cut"
+
+
+def test_the_production_title_prefix_is_the_run_name_of_the_workflow() -> None:
+    """A production promotion waits for the owner; it must not count as a busy Staging run."""
+    from common.core.constants import REPO_ROOT
+
+    workflow = (
+        REPO_ROOT / ".github/workflows" / release_tag.TRAIN_WORKFLOW
+    ).read_text()
+    run_name = next(
+        line for line in workflow.splitlines() if line.startswith("run-name:")
+    )
+    assert (
+        "Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }} "
+        in run_name
+    )
+    assert release_tag.PROD_TITLE_PREFIX == "Reconcile IaC Inputs (PROD"

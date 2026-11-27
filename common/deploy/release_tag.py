@@ -7,7 +7,8 @@ behind it, and was refused for the red Canary check of v3.2.59. This tool cuts n
 * when the newest release tag is the head of ``origin/main``;
 * while a Staging run of the train workflow runs or waits (a tag push, a dispatch or the
   schedule: they share one concurrency group);
-* while the train of the newest release tag is not in the run list;
+* while the train of the newest release tag is not in the run list (a dispatch replay of
+  that tag counts as its train);
 * in the 30 minutes after the start of the newest tag train.
 
 The pull requests that merge in that time ride the next tag. Without ``--push`` the tool
@@ -93,9 +94,18 @@ def decide(
             f"the {run.get('event')} run of {run.get('head_branch')} is "
             f"{run.get('status')} ({run.get('html_url')})",
         )
-    trains = [run for run in runs if is_tag_train(run)]
-    if not any(run.get("head_branch") == newest for run in trains):
-        return Decision("wait", f"the train of {newest} is not in the run list")
+    replays = [
+        run
+        for run in runs
+        if str(run.get("display_title") or "").endswith(f"(staging {newest})")
+    ]
+    trains = [run for run in runs if is_tag_train(run)] + replays
+    if not replays and not any(run.get("head_branch") == newest for run in trains):
+        return Decision(
+            "wait",
+            f"the train of {newest} is not in the run list; when it stays out, "
+            f"dispatch the train workflow with after={newest}",
+        )
     starts = [str(run.get("run_started_at") or "") for run in trains]
     if not all(starts):
         raise ValueError("a tag train of the run list has no run_started_at")
@@ -191,7 +201,9 @@ def cut(decision: Decision, message: str, root: Path, runner: Runner) -> None:
     must("tag", "-a", decision.tag, "-m", message, decision.sha)
     try:
         must("push", ORIGIN, f"refs/tags/{decision.tag}")
-    except (RuntimeError, subprocess.TimeoutExpired):
+    except (
+        BaseException
+    ):  # also an interrupt: a local tag left behind stops each later run
         git("tag", "-d", decision.tag)
         raise
 
@@ -212,7 +224,10 @@ def main(
     args = parser.parse_args(argv)
     try:
         main_sha, tags = remote_refs(root, runner)
-        decision = decide(main_sha, tags, train_runs(args.repo, runner), now())
+        released = bool(tags) and tags[max(tags, key=version_key)] == main_sha
+        # `none` needs no run list: each REST call counts on a shared hourly budget.
+        runs = [] if released else train_runs(args.repo, runner)
+        decision = decide(main_sha, tags, runs, now())
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"release tag: unreadable: {exc}")
         return EXIT_UNREADABLE
