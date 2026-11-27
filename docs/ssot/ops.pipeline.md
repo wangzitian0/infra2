@@ -849,6 +849,13 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 Without `--apply` the tool prints the plan and deletes nothing. A deletion is permanent, so a person confirms the dry-run counts before the first `--apply`.
 
+| Trigger | Value |
+|---|---|
+| Schedule | `.github/workflows/ghcr-retention.yml` runs `--apply` daily at 03:41 UTC on `main`. Exit 3 (call reserve) is a warning; the next run resumes. |
+| Manual replay | `workflow_dispatch` of the same workflow; input `dry_run` prints the plan only. |
+| Token | Secret `GHCR_RETENTION_TOKEN`: a classic PAT of the package owner with `read:packages` and `delete:packages`. Without it the run fails. |
+| Retries | A read, a delete and the `git clone` of `recent_commits` get 3 attempts. A 404 on a delete retry is a success: the lost first reply had deleted the version. |
+
 ## Used by
 
 - [docs/ssot/README.md](./README.md)

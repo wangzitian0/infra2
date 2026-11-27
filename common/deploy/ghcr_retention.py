@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -222,12 +224,57 @@ class Ghcr:
         reply.raise_for_status()
         return children_in(reply.json())
 
-    def delete(self, package: str, version_id: int) -> int:
-        """Delete one version. Return the REST calls left in this hour for the shared login."""
+    def delete(self, package: str, version_id: int, attempts: int = 3) -> int:
+        """Delete one version. Return the REST calls left in this hour for the shared login.
+
+        A timeout, a connection error or a 5xx gets 3 attempts. The first attempt can delete
+        the version before its reply is lost, so a 404 after a failed attempt is a success."""
         url = f"https://api.github.com/users/{self.owner}/packages/container/{package}/versions/{version_id}"
-        reply = self.client.delete(url, headers=self.api_headers)
-        reply.raise_for_status()
-        return int(reply.headers.get("x-ratelimit-remaining", "0"))
+        for attempt in range(attempts):
+            last = attempt == attempts - 1
+            try:
+                reply = self.client.delete(url, headers=self.api_headers)
+            except (httpx.TimeoutException, httpx.TransportError):
+                if last:
+                    raise
+                continue
+            if reply.status_code == 404 and attempt > 0:
+                return int(reply.headers.get("x-ratelimit-remaining", "0"))
+            if reply.status_code >= 500 and not last:
+                continue
+            reply.raise_for_status()
+            return int(reply.headers.get("x-ratelimit-remaining", "0"))
+        raise AssertionError("unreachable")
+
+
+def clone(
+    runner: Callable[..., subprocess.CompletedProcess],
+    argv: list[str],
+    env: Mapping[str, str],
+    sleep: Callable[[float], None],
+    attempts: int = 3,
+) -> None:
+    """Run `git clone` with 3 attempts 30 s apart. A network error after a sleep is common."""
+    for attempt in range(attempts):
+        try:
+            runner(
+                argv,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env=env,
+            )
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if attempt == attempts - 1:
+                raise
+            sleep(30)
+            # A failed clone can leave files in the target; git refuses a non-empty target.
+            target = argv[-1]
+            for entry in os.listdir(target):
+                path = os.path.join(target, entry)
+                (shutil.rmtree if os.path.isdir(path) else os.remove)(path)
 
 
 def recent_commits(
@@ -235,6 +282,7 @@ def recent_commits(
     since: datetime,
     owner: str = OWNER,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> frozenset[str]:
     """Short SHAs of the commits on `main` of `repo` since `since`. Uses git, not the REST API.
 
@@ -244,7 +292,8 @@ def recent_commits(
     with tempfile.TemporaryDirectory() as tmp:
         url = f"https://github.com/{owner}/{repo}.git"
         stamp = since.strftime("%Y-%m-%dT%H:%M:%SZ")
-        runner(
+        clone(
+            runner,
             [
                 "git",
                 "clone",
@@ -258,11 +307,8 @@ def recent_commits(
                 url,
                 tmp,
             ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            env=env,
+            env,
+            sleep,
         )
         log = runner(
             ["git", "-C", tmp, "log", "--format=%H", f"--since={stamp}", "main"],

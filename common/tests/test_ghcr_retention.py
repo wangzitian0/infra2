@@ -294,3 +294,64 @@ def test_a_read_timeout_is_retried_and_a_third_one_stops_the_plan() -> None:
 
     with pytest.raises(httpx.ReadTimeout):
         ghcr_with(dead)._get("https://api.github.com/x")
+
+
+def test_a_delete_whose_reply_was_lost_counts_once_the_retry_sees_404() -> None:
+    attempts: list[int] = []
+
+    def lost_reply(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(404, headers={"x-ratelimit-remaining": "4321"})
+
+    assert ghcr_with(lost_reply).delete("p", 7) == 4321
+    assert len(attempts) == 2
+
+
+def test_a_404_on_the_first_delete_attempt_is_an_error() -> None:
+    def missing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        ghcr_with(missing).delete("p", 7)
+
+
+def test_a_delete_retries_a_5xx_and_a_third_one_stops_the_run() -> None:
+    replies = iter([502, 503, 204])
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(next(replies), headers={"x-ratelimit-remaining": "3000"})
+
+    assert ghcr_with(flaky).delete("p", 7) == 3000
+
+    def dead(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        ghcr_with(dead).delete("p", 7)
+
+
+def test_a_failed_clone_is_tried_again_and_a_third_failure_stops_the_plan() -> None:
+    calls: list[str] = []
+    naps: list[float] = []
+
+    def runner(argv, **kwargs):
+        if argv[1] == "clone":
+            calls.append("clone")
+            if len(calls) < 3:
+                raise subprocess.CalledProcessError(128, argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="abc1234ff\n", stderr="")
+
+    assert r.recent_commits("truealpha", NOW, runner=runner, sleep=naps.append) == {
+        "abc1234"
+    }
+    assert calls == ["clone"] * 3
+    assert naps == [30, 30]
+
+    def broken(argv, **kwargs):
+        raise subprocess.CalledProcessError(128, argv)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        r.recent_commits("truealpha", NOW, runner=broken, sleep=lambda s: None)

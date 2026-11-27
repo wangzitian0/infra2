@@ -1,0 +1,59 @@
+name: GHCR Retention
+run-name: GHCR retention (${{ github.event_name }}${{ inputs.dry_run && ', dry run' || '' }})
+
+# Deletes old App image versions by the policy in `common/deploy/ghcr_retention.py`
+# (docs/ssot/ops.pipeline.md §13). A daily run keeps each deletion small. A manual run
+# replays it or prints the plan only. The token is a classic PAT of the package owner with
+# `read:packages` and `delete:packages`; GITHUB_TOKEN of this repository cannot delete App
+# packages. It shares the hourly REST limit of that login, so the tool stops at its reserve.
+
+"on":
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the plan and delete nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghcr-retention
+  cancel-in-progress: false
+
+jobs:
+  retention:
+    name: retention (App image versions)
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install httpx
+        run: python -m pip install --quiet httpx
+
+      - name: Delete old versions
+        env:
+          GHCR_RETENTION_TOKEN: ${{ secrets.GHCR_RETENTION_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ -z "$GHCR_RETENTION_TOKEN" ]; then
+            echo "::error::secret GHCR_RETENTION_TOKEN is not set (classic PAT: read:packages, delete:packages)"
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            python tools/ghcr_retention.py
+          else
+            # Exit 3: the tool stopped at the REST call reserve; the next daily run resumes.
+            python tools/ghcr_retention.py --apply || { rc=$?; [ "$rc" -eq 3 ] || exit "$rc"; echo "::warning::stopped at the call reserve; the next run resumes"; }
+          fi
