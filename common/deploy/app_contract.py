@@ -60,7 +60,7 @@ from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.fetch_app_manifests import http_get
 from common.core.registry import ServiceMeta, domain_for_service, service_attrs
 from common.deploy.release_markers import PRODUCTION_MARKER_PREFIX
-from common.security.registry import SERVICES, Service
+from common.security.registry import Service
 
 ROOT = REPO_ROOT
 FIXED_DEPLOY_TYPES = frozenset(
@@ -308,9 +308,13 @@ def unmet(release: Contract, provided: Sequence[Contract]) -> list[Gap]:
 
 def service_for_id(service_id: str, *, preview: bool = False) -> Service:
     """Return the registered ``Service`` for ``service_id`` and ``preview`` mode."""
-    for service in SERVICES:
-        if service.id == service_id and service.preview == preview:
-            return service
+    from common.security.registry import lookup
+
+    project, _, name = service_id.partition("/")
+    if name:
+        found = lookup(project, name, preview=preview)
+        if found is not None:
+            return found
     raise ValueError(f"unknown service {service_id!r} (preview={preview})")
 
 

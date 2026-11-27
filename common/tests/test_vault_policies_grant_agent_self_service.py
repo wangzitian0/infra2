@@ -31,7 +31,7 @@ def _grants(text: str, path: str) -> set[str]:
 
 
 def test_every_policy_is_found() -> None:
-    assert len(POLICIES) >= 16, [str(p.relative_to(ROOT)) for p in POLICIES]
+    assert len(POLICIES) >= 15, [str(p.relative_to(ROOT)) for p in POLICIES]
 
 
 @pytest.mark.parametrize("policy", POLICIES, ids=lambda p: str(p.relative_to(ROOT)))

@@ -164,7 +164,8 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
         min_token_ttl_hours=facet.min_token_ttl_hours,
         auth_method=facet.auth_method,
         mount_exempt_containers=tuple(facet.mount_exempt_containers),
-        ephemeral=_is_preview_stack(compose_dir),
+        ephemeral=bool(facet.service_id and facet.service_id.endswith("/preview"))
+        or _is_preview_stack(compose_dir),
     )
 
 

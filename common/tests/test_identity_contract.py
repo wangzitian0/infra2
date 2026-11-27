@@ -217,11 +217,11 @@ def _mutated(meta: reg.ServiceMeta, compose_service: str, value: str | None) -> 
 @pytest.mark.parametrize(
     ("service_id", "compose_service", "mutant"),
     [
-        ("platform/todo", "todo-v4-13", "unknown"),
-        ("platform/todo", "todo-v4-13", None),
-        ("platform/todo", "todo-v4-13", "${GIT_COMMIT_SHA:-unknown}"),
-        ("platform/todo", "todo-v4-13", "${INFRA_IAC_REF}"),
-        ("platform/todo", "todo-v4-13", SHA40),
+        ("platform/todo", "todo-v4-14", "unknown"),
+        ("platform/todo", "todo-v4-14", None),
+        ("platform/todo", "todo-v4-14", "${GIT_COMMIT_SHA:-unknown}"),
+        ("platform/todo", "todo-v4-14", "${INFRA_IAC_REF}"),
+        ("platform/todo", "todo-v4-14", SHA40),
         ("platform/alerting", "feishu-alert-bridge", "unknown"),
         ("platform/alerting", "feishu-alert-bridge", None),
         ("finance_report/app", "backend", "unknown"),
@@ -251,7 +251,7 @@ def test_guard_rejects_a_platform_compose_that_drops_the_key_everywhere() -> Non
         service["environment"] = environment
     assert violations_of(meta, services) == [
         f"no compose service sets {ENV_KEY}",
-        f"todo-v4-13 does not set {ENV_KEY}",
+        f"todo-v4-14 does not set {ENV_KEY}",
     ]
 
 
@@ -593,7 +593,6 @@ def test_the_container_values_exist_for_both_classes() -> None:
     """Control: the container values exist for every service of both classes."""
     assert {(service_id, name) for service_id, name, _ in PLATFORM_VALUES} == {
         ("platform/alerting", "feishu-alert-bridge"),
-        ("platform/todo", "todo-v4-11"),
         ("platform/todo", "todo-v4-13"),
         ("platform/todo", "todo-v4-14"),
     }

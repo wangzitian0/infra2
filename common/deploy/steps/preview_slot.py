@@ -141,6 +141,8 @@ def build_preview_env_vars(
     _now=time.time,
 ) -> dict[str, str]:
     """Assemble Dokploy compose environment variables for one preview slot."""
+    from common.deploy.deployer import load_deployer_class
+
     config = preview_service_config(service)
     coords = preview_coordinates(service, alias, domain=domain)
     image_tag = image_ref or sha[:7]
@@ -162,6 +164,31 @@ def build_preview_env_vars(
         "INTERNAL_DOMAIN": domain,
         "CONFIGURATION_SHA256": config_hash,
     }
+    deployer_cls = load_deployer_class(service)
+    env_vars.update(
+        deployer_cls.compose_env_overrides(
+            env=alias.deployment_environment,
+            domain=domain,
+            env_suffix=coords.env_domain_suffix,
+        )
+    )
+    if not config.throwaway_secrets:
+        env_vars["S3_ENDPOINT"] = f"http://platform-s3-{config.secret_env}:9000"
+        if service == "finance_report/app":
+            env_vars.update(
+                deployer_cls.compose_env_overrides(
+                    env=config.secret_env,
+                    domain=domain,
+                    env_suffix=coords.env_domain_suffix,
+                )
+            )
+            env_vars.update(
+                {
+                    "S3_PUBLIC_ENDPOINT": f"https://s3-{config.secret_env}.{domain}",
+                    "PREFECT_API_URL": "",
+                    "ENABLE_STORAGE_SWEEP": "false",
+                }
+            )
     vault_template = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
     if vault_template and not config.throwaway_secrets:
         env_vars["VAULT_SECRETS_TEMPLATE"] = vault_template

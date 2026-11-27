@@ -160,11 +160,31 @@ def _cached_meta_from_deploy_file(
     where: str,
     service_id: str,
     layer: str,
+    slots_mtime_ns: int = 0,
 ) -> ServiceMeta:
     """Build and cache one ServiceMeta from a deploy.py via AST (never imported)."""
-    _ = (mtime_ns, file_size)
+    _ = (mtime_ns, file_size, slots_mtime_ns)
     service_name_dir = service_id.split("/", 1)[1]
     tree = ast.parse(deploy_file.read_text(encoding="utf-8"))
+    service_name = _class_attr(tree, "service_name")
+    probes = _facet_seq(tree, "probes", ProbeFacet, where)
+    secrets = _facet_seq(tree, "secrets", SecretsFacet, where)
+    slots_file = deploy_file.parent / "slots.yaml"
+    if (
+        service_id == "platform/todo"
+        and slots_mtime_ns > 0
+        and slots_file.is_file()
+        and not probes
+        and not secrets
+    ):
+        from common.deploy.canary_pin import canary_todo_facets
+
+        derived_name, derived_probes, derived_secrets = canary_todo_facets(
+            deploy_file.parents[2]
+        )
+        service_name = service_name or derived_name
+        probes = derived_probes
+        secrets = derived_secrets
     return ServiceMeta(
         service_id=service_id,
         layer=layer,
@@ -173,18 +193,18 @@ def _cached_meta_from_deploy_file(
         subdomain=_class_attr(tree, "subdomain"),
         domain=_class_attr(tree, "domain"),
         service_port=_class_attr(tree, "service_port"),
-        service_name=_class_attr(tree, "service_name"),
+        service_name=service_name,
         telemetry_service_name=_class_attr(tree, "telemetry_service_name"),
         telemetry_component=_class_attr(tree, "telemetry_component"),
         project=_class_attr(tree, "project") or "platform",
         compose_path=_class_attr(tree, "compose_path"),
         data_path=_class_attr(tree, "data_path"),
         not_yet_in_production=bool(_class_attr(tree, "not_yet_in_production") or False),
-        probes=_facet_seq(tree, "probes", ProbeFacet, where),
+        probes=probes,
         public_routes=_facet_seq(tree, "public_routes", PublicRouteFacet, where),
         signals=_facet_seq(tree, "signals", SignalFacet, where),
         backups=_facet_seq(tree, "backups", BackupFacet, where),
-        secrets=_facet_seq(tree, "secrets", SecretsFacet, where),
+        secrets=secrets,
         exemptions=_facet_seq(tree, "exemptions", Exemption, where),
         restart_after=_facet_seq(tree, "restart_after", RestartAfterFacet, where),
         storage=_facet_seq(tree, "storage", StorageFacet, where),
@@ -197,6 +217,8 @@ def _meta_from_deploy_file(
 ) -> ServiceMeta:
     """Build one ServiceMeta from a deploy.py via AST (never imported)."""
     st = deploy_file.stat()
+    slots_file = deploy_file.parent / "slots.yaml"
+    slots_mtime_ns = slots_file.stat().st_mtime_ns if slots_file.is_file() else 0
     where = str(deploy_file.relative_to(REPO_ROOT))
     return _cached_meta_from_deploy_file(
         deploy_file.resolve(),
@@ -205,6 +227,7 @@ def _meta_from_deploy_file(
         where,
         service_id,
         layer,
+        slots_mtime_ns,
     )
 
 

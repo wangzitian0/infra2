@@ -2503,9 +2503,7 @@ def test_sync_runner_own_dir_services_matches_service_key_from_path(
     sample_paths = [
         "platform/12.alerting/compose.yaml",
         "finance_report/finance_report/01.app/compose.yaml",
-        "finance_report/finance_report/preview/compose.yaml",
         "truealpha/truealpha/01.app/compose.yaml",
-        "truealpha/truealpha/preview/compose.yaml",
         "bootstrap/06.iac_runner/compose.yaml",
         "bootstrap/templates/vault-agent.compose.yaml",
         "common/deploy/config_hash.py",

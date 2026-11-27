@@ -79,7 +79,19 @@ def test_the_sdk_unit_names_the_canary_image_not_the_runner(
     compose = tmp_path / "platform/30.todo/compose.yaml"
     compose.parent.mkdir(parents=True)
     compose.write_text(
-        _compose(f"    image: {CANARY_IMAGE_REPOSITORY}:v9.8.7@{DIGEST}\n")
+        "services:\n  todo-v9-8:\n"
+        f"    image: {CANARY_IMAGE_REPOSITORY}:v9.8.7@{DIGEST}\n"
+        '    command: ["sh", "-c", \'export SERVICE_VERSION="v9.8.7"\']\n',
+        encoding="utf-8",
+    )
+    (compose.parent / "slots.yaml").write_text(
+        "slots:\n"
+        "- slot: v9-8\n"
+        "  version: 9.8.7\n"
+        f"  digest: {DIGEST}\n"
+        "  compose_service: todo-v9-8\n"
+        "  primary: true\n",
+        encoding="utf-8",
     )
     assert canary_sdk_unit(tmp_path) == "sdk:9.8.7"
     monkeypatch.setattr(canary_pin, "REPO_ROOT", tmp_path)
@@ -96,10 +108,10 @@ def test_an_unreadable_pin_fails_closed(tmp_path) -> None:
 @pytest.mark.parametrize(
     ("version", "inside"),
     [
-        ("4.4.9", False),
-        ("4.5.0", True),
-        ("4.6.0", True),
-        ("4.9.9", True),
+        ("4.8.9", False),
+        ("4.9.0", True),
+        ("4.10.0", True),
+        ("4.14.2", True),
         ("5.0.0", False),
         ("not-a-version", False),
     ],
@@ -112,9 +124,9 @@ def test_canary_slots_and_retirement_guard() -> None:
     from common.deploy.canary_pin import can_retire_canary_slot, load_canary_slots
 
     slots = load_canary_slots(REPO_ROOT)
-    assert [s.slot for s in slots] == ["v4-11", "v4-13", "v4-14"]
-    assert [s.version for s in slots] == ["4.11.2", "4.13.2", "4.14.1"]
-    assert [s.primary for s in slots] == [False, False, True]
+    assert [s.slot for s in slots] == ["v4-13", "v4-14"]
+    assert [s.version for s in slots] == ["4.13.2", "4.14.2"]
+    assert [s.primary for s in slots] == [False, True]
 
     pkg = "infra2" + "-sdk"
     whl_pkg = "infra2" + "_sdk"
@@ -147,10 +159,10 @@ def test_load_canary_slots_rejects_service_version_drift(tmp_path) -> None:
         shutil.copy2(REPO_ROOT / "platform/30.todo" / fname, todo_dir / fname)
     compose = (todo_dir / "compose.yaml").read_text(encoding="utf-8")
     (todo_dir / "compose.yaml").write_text(
-        compose.replace('SERVICE_VERSION="v4.14.1"', 'SERVICE_VERSION="v4.12.9"'),
+        compose.replace('SERVICE_VERSION="v4.14.2"', 'SERVICE_VERSION="v4.12.9"'),
         encoding="utf-8",
     )
-    with pytest.raises(CanaryPinError, match='SERVICE_VERSION="v4.14.1"'):
+    with pytest.raises(CanaryPinError, match='SERVICE_VERSION="v4.14.2"'):
         load_canary_slots(tmp_path)
 
 
@@ -168,15 +180,15 @@ def test_sync_canary_pin_files_patch_and_minor_bump(tmp_path) -> None:
         shutil.copy2(REPO_ROOT / "platform/30.todo" / fname, todo_dir / fname)
 
     patch_digest = "sha256:" + "b" * 64
-    updated_patch = sync_canary_pin_files(tmp_path, "4.14.2", patch_digest)
+    updated_patch = sync_canary_pin_files(tmp_path, "4.14.3", patch_digest)
     assert set(updated_patch) == {
         "platform/30.todo/slots.yaml",
         "platform/30.todo/compose.yaml",
         "platform/30.todo/preview.compose.yaml",
     }
-    assert primary_canary_slot(tmp_path).version == "4.14.2"
+    assert primary_canary_slot(tmp_path).version == "4.14.3"
     assert primary_canary_slot(tmp_path).digest == patch_digest
-    assert 'SERVICE_VERSION="v4.14.2"' in (todo_dir / "compose.yaml").read_text(
+    assert 'SERVICE_VERSION="v4.14.3"' in (todo_dir / "compose.yaml").read_text(
         encoding="utf-8"
     )
 
@@ -186,23 +198,27 @@ def test_sync_canary_pin_files_patch_and_minor_bump(tmp_path) -> None:
         "platform/30.todo/slots.yaml",
         "platform/30.todo/compose.yaml",
         "platform/30.todo/preview.compose.yaml",
-        "platform/30.todo/deploy.py",
     }
     slots = load_canary_slots(tmp_path)
-    assert [s.slot for s in slots] == ["v4-11", "v4-13", "v4-14", "v4-15"]
-    assert [s.primary for s in slots] == [False, False, False, True]
+    assert [s.slot for s in slots] == ["v4-13", "v4-14", "v4-15"]
+    assert [s.primary for s in slots] == [False, False, True]
     assert primary_canary_slot(tmp_path).version == "4.15.0"
-    deploy_text = (todo_dir / "deploy.py").read_text(encoding="utf-8")
-    assert 'name="todo-v4-14-canary-status"' in deploy_text
-    assert (
-        'target="http://platform-todo-v4-14${ENV_SUFFIX}:8000/api/canary/status"'
-        in deploy_text
+    from common.tests.conftest import load_repo_module
+
+    deploy_mod = load_repo_module(
+        str(todo_dir / "deploy.py"), "todo_deploy_minor_bump_test"
+    )
+    probe_names = {p.name: p.target for p in deploy_mod.TodoDeployer.probes}
+    assert probe_names["todo-canary-status"] == (
+        "http://platform-todo-v4-15${ENV_SUFFIX}:8000/api/canary/status"
+    )
+    assert probe_names["todo-v4-14-canary-status"] == (
+        "http://platform-todo-v4-14${ENV_SUFFIX}:8000/api/canary/status"
     )
     assert (
-        'target="http://platform-todo-v4-15${ENV_SUFFIX}:8000/api/canary/status"'
-        in deploy_text
+        "platform-todo-v4-15${ENV_SUFFIX}"
+        in deploy_mod.TodoDeployer.secrets[0].app_containers
     )
-    assert '"platform-todo-v4-15${ENV_SUFFIX}"' in deploy_text
 
 
 def test_a_verified_sdk_outside_the_range_is_still_held(monkeypatch) -> None:
@@ -219,17 +235,17 @@ def test_a_verified_sdk_outside_the_range_is_still_held(monkeypatch) -> None:
 
 def test_an_sdk_inside_the_range_still_needs_the_canary(monkeypatch) -> None:
     monkeypatch.setattr(
-        reconcile, "locked_sdk_version_for_app_ref", lambda *a, **k: "4.6.0"
+        reconcile, "locked_sdk_version_for_app_ref", lambda *a, **k: "4.10.0"
     )
     with pytest.raises(reconcile.UnverifiedSdkError, match="has not passed"):
         reconcile.assert_app_sdk_version_verified(
-            "finance_report/app", "v0.0.1", verified_versions={"4.5.0"}
+            "finance_report/app", "v0.0.1", verified_versions={"4.9.0"}
         )
     assert (
         reconcile.assert_app_sdk_version_verified(
-            "finance_report/app", "v0.0.1", verified_versions={"4.6.0"}
+            "finance_report/app", "v0.0.1", verified_versions={"4.10.0"}
         )
-        == "4.6.0"
+        == "4.10.0"
     )
 
 
@@ -273,8 +289,8 @@ def test_probe_health_reads_the_pin_format_that_canary_pin_owns() -> None:
         "platform/30.todo/probe_health.py", "probe_health_pin_format"
     )
     real = (REPO_ROOT / "platform/30.todo/compose.yaml").read_text(encoding="utf-8")
-    assert set(probe.CANARY_PIN_RE.findall(real)) == {"4.11.2", "4.13.2", "4.14.1"}
-    assert canary_image_from_compose_text(real)[1] == canary_sdk_version() == "4.14.1"
+    assert set(probe.CANARY_PIN_RE.findall(real)) == {"4.13.2", "4.14.2"}
+    assert canary_image_from_compose_text(real)[1] == canary_sdk_version() == "4.14.2"
     for bad in (
         f"{CANARY_IMAGE_REPOSITORY}:v3.35.0",
         f"{CANARY_IMAGE_REPOSITORY}@{DIGEST}",

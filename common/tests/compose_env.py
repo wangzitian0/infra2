@@ -18,9 +18,9 @@ from pathlib import Path
 
 import yaml
 
-_REFERENCE = re.compile(r"\$\{(?P<name>[A-Za-z_]\w*)(?P<default>:[-+][^${}]*)?\}")
-# A reference whose name is followed by anything but `:-` or the closing brace (`:?`, `-`, `+`...).
-_UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:[-+]|\}|[A-Za-z0-9_])")
+_REFERENCE = re.compile(r"\$\{(?P<name>[A-Za-z_]\w*)(?P<default>:?[-+][^${}]*)?\}")
+# A reference whose name is followed by anything but `:-`, `:+`, `-`, `+`, or `}` (e.g. `:?`).
+_UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:?[-+]|\}|[A-Za-z0-9_])")
 _OR_ENV_GROUP = re.compile(r'\bor((?:\s+\(env "[A-Za-z0-9_]+"\)){2,})')
 TEMPLATE_ENV_CALL = re.compile(r'env "([A-Za-z0-9_]+)"')
 
@@ -67,11 +67,19 @@ def resolve(value: str, issued_env: dict[str, str]) -> str:
     )
 
     def _sub(match: re.Match[str]) -> str:
-        issued = issued_env.get(match["name"], "")
+        name = match["name"]
+        is_set = name in issued_env
+        issued = issued_env.get(name, "")
         default = match["default"]
         if default and default.startswith(":+"):
             # `${VAR:+text}`: text when VAR is set and non-empty, else empty.
             return default[2:] if issued else ""
+        if default and default.startswith("+"):
+            # `${VAR+text}`: text when VAR is set (even if empty), else empty.
+            return default[1:] if is_set else ""
+        if default and default.startswith("-"):
+            # `${VAR-default}`: default only when VAR is unset (empty stays empty).
+            return issued if is_set else default[1:]
         if issued:
             return issued
         return default[2:] if default else ""

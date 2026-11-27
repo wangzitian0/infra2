@@ -110,23 +110,31 @@ def escape_composed_url_secrets(template: str) -> str:
     return _COMPOSED_URL_LINE_RE.sub(_rewrite_line, template)
 
 
-def render(service: Service, *, root: Path | None = None) -> dict[str, str]:
+def render(
+    service: Service, *, root: Path | None = None, preview: bool = False
+) -> dict[str, str]:
     """The files of ``service``. ``root`` holds the manifests; the default is ``ROOT``.
 
     The config-drift check passes a directory that holds the manifests of a release ref.
     """
+    effective_preview = preview or service.preview
     manifest = (
-        merged_manifest(service)
+        _merged_manifest(service, root=ROOT, preview=effective_preview)
         if root is None
-        else _merged_manifest(service, root=root)
+        else _merged_manifest(service, root=root, preview=effective_preview)
     )
     errors = validate_manifest_offline(manifest)
     if errors:
         raise ValueError(f"{service.directory}: " + "; ".join(errors))
+    source_env = (
+        service.preview_source_env
+        if (preview and service.preview_source_env is not None)
+        else service.source_env
+    )
     kwargs = {
         "project": service.project,
         "service": service.service,
-        "source_env": service.source_env,
+        "source_env": source_env,
     }
     outputs = {
         "secrets.ctmpl": escape_composed_url_secrets(

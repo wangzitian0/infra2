@@ -22,11 +22,11 @@ from common.tests.compose_env import container_env
 
 COMPOSE_PATH = (
     Path(__file__).resolve().parents[2]
-    / "finance_report/finance_report/preview/compose.yaml"
+    / "finance_report/finance_report/10.app/compose.yaml"
 )
 
 TRUEALPHA_PREVIEW_COMPOSE = (
-    Path(__file__).resolve().parents[2] / "truealpha/truealpha/preview/compose.yaml"
+    Path(__file__).resolve().parents[2] / "truealpha/truealpha/10.app/compose.yaml"
 )
 
 # resolve_to_sha is patched in every test so no `git ls-remote` runs.
@@ -282,15 +282,13 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert created["name"] == "finance-report-preview-pr-5"
     assert created["app_name"] == "finance-report-preview-pr-5"
     assert created["environment_id"] == "env-preview"
-    # created as github source from the start (never a raw/empty compose); the github
-    # binding is still re-applied via update_compose since compose.create drops it.
-    assert created["source_type"] == "github"
+    assert created["source_type"] == "raw"
     assert len(client.updated) == 1
     upd = client.updated[0]
     assert upd["composeId"] == "cmp-new"
-    assert upd["source_type"] == "github"
-    assert upd["composePath"] == "finance_report/finance_report/preview/compose.yaml"
-    assert upd["autoDeploy"] is False
+    assert upd["source_type"] == "raw"
+    assert "finance_report-preview-db" in upd["compose_file"]
+    assert "prefect-worker:" not in upd["compose_file"]
     # env applied via update_compose_env (also dropped by compose.create)
     assert len(client.env_updates) == 1 and client.env_updates[0][0] == "cmp-new"
     assert client.replace_flags == [True]
@@ -562,7 +560,8 @@ def test_up_updates_existing_compose_in_place():
     assert client.created == []
     assert len(client.updated) == 1
     assert client.updated[0]["composeId"] == "cmp-existing"
-    assert client.updated[0]["composePath"].endswith("preview/compose.yaml")
+    assert client.updated[0]["source_type"] == "raw"
+    assert "compose_file" in client.updated[0]
     # env is MERGED (not replaced) so runtime VAULT creds survive a redeploy
     assert len(client.env_updates) == 1
     cid, env_vars = client.env_updates[0]
@@ -655,14 +654,19 @@ def test_up_rejects_bad_domain_before_any_side_effect():
     assert client.deployed == []
 
 
-def test_up_fails_closed_without_github_provider():
+def test_up_fails_closed_without_github_provider(tmp_path):
+    from types import SimpleNamespace
+
+    plain_compose = tmp_path / "plain-preview.compose.yaml"
+    plain_compose.write_text(
+        "services:\n  app:\n    image: alpine:3.20\n", encoding="utf-8"
+    )
     client = FakeDokploy(existing=None, github_id=None)
+    cfg = SimpleNamespace(compose_path=str(plain_compose))
     with pytest.raises(RuntimeError, match="no GitHub provider"):
-        pl.execute_preview_up(
-            "pr", 5, code="main", deps=PreviewDeps(client=client, domain="z.p")
+        pl._preview_source(
+            cfg, PreviewOptions(), PreviewDeps(client=client, domain="z.p")
         )
-    assert client.created == []
-    assert client.deployed == []
 
 
 def test_up_fails_closed_if_environment_cannot_be_ensured():
@@ -896,34 +900,60 @@ def test_up_image_ref_overrides_short_sha_for_releases():
     assert any(url.endswith("/frontend-version.json") for url in seen)
 
 
-def test_preview_entrypoint_overrides_environment_to_match_otel_tag():
-    """Regression test: every preview boot borrows staging's Vault secrets (the source
-    env fixed in the generated secrets.ctmpl), which bake in ENVIRONMENT=staging — while
-    OTEL_RESOURCE_ATTRIBUTES is correctly templated per-alias by secrets.ctmpl
-    (deployment.environment=<this alias's ENV token>). Nothing overrode
-    ENVIRONMENT the way DATABASE_URL already is, so the app's
-    #1828 telemetry-tag-consistency guard (config.py::
-    _require_telemetry_contract_in_deployed_envs) compared a borrowed "staging"
-    against the correct per-alias tag and failed closed on every single preview
-    boot (finance_report#1851 investigation) -- alembic migrations crash-looped
-    10/10 attempts, the container never went healthy, and Dokploy's compose-up
-    call timed out with no output. ENV: ${ENV} must be passed into the backend
-    service, and the entrypoint must export ENVIRONMENT="$ENV" AFTER sourcing
-    /secrets/.env, mirroring the existing DATABASE_URL override exactly.
+def test_compiled_preview_overrides_environment_and_db_after_secrets_env():
+    """Compiled mode="preview" sources staging Vault secrets, excludes live DB URLs,
+    drops prefect-worker, and overrides DATABASE_URL and ENVIRONMENT after /secrets/.env.
     """
-    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    import yaml
+    from common.deploy.compose_compile import SOURCE_RAW, load_stack
+    from common.deploy.env_config import preview_alias
+
+    fr_stack = load_stack(COMPOSE_PATH, mode="preview")
+    assert fr_stack.source_type == SOURCE_RAW
+    source = fr_stack.compiled
+    assert "prefect-worker:" not in source
+    assert "finance_report-preview-db${ENV_SUFFIX}" in source
+    parsed_fr = yaml.safe_load(source)
+    fr_tmpl = str(
+        parsed_fr["services"]["vault-agent"]["environment"]["VAULT_SECRETS_TEMPLATE"]
+    ).replace("$$", "$")
+    assert 'printf "secret/data/finance_report/%s/app" "staging"' in fr_tmpl
+    assert "DATABASE_URL=" not in fr_tmpl
+    assert "REDIS_URL=" not in fr_tmpl
+    assert "/pr-" not in source
+    assert "/pr-" not in fr_tmpl
+
     backend_start = source.index("\n  backend:")
     frontend_start = source.index("\n  frontend:")
     backend_block = source[backend_start:frontend_start]
 
-    assert "ENV: ${ENV}" in backend_block, (
-        "backend service must receive ENV so the entrypoint can override "
-        "ENVIRONMENT with it"
+    assert "ENVIRONMENT: ${ENV}" in backend_block
+    secrets_source_idx = backend_block.index(". /secrets/.env")
+    database_url_idx = backend_block.index(
+        'export DATABASE_URL="postgresql+asyncpg://ephemeral:ephemeral@finance_report-preview-db${ENV_SUFFIX}:5432/preview"'
     )
-    database_url_idx = backend_block.index('export DATABASE_URL="$$DATABASE_URL"')
-    environment_idx = backend_block.index('export ENVIRONMENT="$$ENV"')
-    assert environment_idx > database_url_idx, (
-        "ENVIRONMENT override must come AFTER `. /secrets/.env` is sourced "
-        "(same ordering requirement as the DATABASE_URL override), or Vault's "
-        "borrowed staging value would win"
+    environment_idx = backend_block.index('export ENVIRONMENT="${ENV}"')
+    assert database_url_idx > secrets_source_idx
+    assert environment_idx > database_url_idx
+
+    ta_stack = load_stack(TRUEALPHA_PREVIEW_COMPOSE, mode="preview")
+    assert ta_stack.source_type == SOURCE_RAW
+    ta_source = ta_stack.compiled
+    assert "truealpha-preview-db${ENV_SUFFIX}" in ta_source
+    parsed_ta = yaml.safe_load(ta_source)
+    ta_tmpl = str(
+        parsed_ta["services"]["vault-agent"]["environment"]["VAULT_SECRETS_TEMPLATE"]
+    ).replace("$$", "$")
+    assert 'printf "secret/data/truealpha/%s/app" "staging"' in ta_tmpl
+    assert "MIGRATIONS_DATABASE_URL=" not in ta_tmpl
+    assert "/pr-" not in ta_source
+    assert "/pr-" not in ta_tmpl
+
+    ta_env = pl.build_preview_env_vars(
+        preview_alias("pr", "5"),
+        service="truealpha/app",
+        sha=FULL_SHA,
+        domain="truealpha.club",
     )
+    assert ta_env["APP_HOST"] == "truealpha-pr-5.truealpha.club"
+    assert ta_env["S3_ENDPOINT"] == "http://platform-s3-staging:9000"

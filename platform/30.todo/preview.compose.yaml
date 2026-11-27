@@ -59,12 +59,8 @@ services:
         max-file: "2"
 
   s3:
-    # Built from the platform S3 Dockerfile: the image carries the mc client used below.
-    build:
-      context: ../..
-      dockerfile: platform/03.s3/Dockerfile
-    pull_policy: build
-    image: platform-s3:${CONFIGURATION_SHA256:-}
+    image: ghcr.io/wangzitian0/infra2-s3:cf98f82b3ac4d47559a305f6900f5c4c@sha256:fa369a4d862a15ce5e6203952dc12ff38c03769307faf784dcc30b177ac7faa8
+    pull_policy: if_not_present
     container_name: platform-s3${ENV_SUFFIX}
     mem_limit: 256m
     environment:
@@ -89,7 +85,7 @@ services:
 
   s3-init:
     # One shot: create the canary bucket, then exit. The todo service starts after it.
-    image: platform-s3:${CONFIGURATION_SHA256:-}
+    image: ghcr.io/wangzitian0/infra2-s3:cf98f82b3ac4d47559a305f6900f5c4c@sha256:fa369a4d862a15ce5e6203952dc12ff38c03769307faf784dcc30b177ac7faa8
     pull_policy: never
     container_name: platform-s3-init${ENV_SUFFIX}
     mem_limit: 64m
@@ -118,7 +114,7 @@ services:
     # Built and published by infra2-sdk release.yml from canary/todo at the same tag, so the
     # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
     # is the one reader of this line.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.14.1@sha256:a0d5f800d1a82ae784c15439996db8baeb597fdea747cac6b2564356185ac3f3
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.14.2@sha256:420080e3a057a3f2e3ec1febff9ccc3c40d213ae282b0ac904e3544e859e9d2c
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
     cpu_shares: 512

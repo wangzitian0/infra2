@@ -2,68 +2,6 @@ x-infra2:
   vault:
     name: platform-todo
 services:
-  todo-v4-11:
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.11.2@sha256:b5e9a3c547360e7d93d4f0fda873e797d82498ef2f1214042da2127e4cd925eb
-    container_name: platform-todo-v4-11${ENV_SUFFIX}
-    user: 65532:65532
-    cap_drop:
-    - ALL
-    security_opt:
-    - no-new-privileges:true
-    mem_limit: 256m
-    cpu_shares: 512
-    command:
-    - sh
-    - -c
-    - export DATABASE_URL="$(printf '%s' "$$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_11_app:|; s|/postgres$|/todo_v4_11|')" && export SERVICE_VERSION="v4.11.2" && exec python /app/app.py
-    x-vault: {}
-    x-capabilities:
-      s3: {}
-      otel:
-        service_name: platform-todo-v4-11
-        service_name_var: OTEL_SERVICE_NAME_V4_11
-      openpanel:
-        script: true
-      browser_otel: {}
-    environment:
-      PORT: '8000'
-      PYTHONDONTWRITEBYTECODE: '1'
-      ENVIRONMENT: ${ENV}
-      S3_BUCKET: platform-canary
-      S3_KEY_PREFIX: canary/v4-11/
-      REDIS_KEY_PREFIX: 'canary:v4-11:probe:'
-      CANARY_SERVICE_ID: platform/todo
-      CANARY_SERVICE_NAME: platform-todo-v4-11
-      CANARY_DOMAIN: todo-v4-11${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
-      SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
-      OPENPANEL_HEALTH_URL: http://platform-openpanel-api:3000/healthcheck
-      AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
-      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
-      SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}
-      LLM_PROVIDER: ${LLM_PROVIDER:-}
-      LLM_BASE_URL: ${LLM_BASE_URL:-}
-      LLM_SMALL_MODEL: ${LLM_SMALL_MODEL:-}
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=8).read()"
-      interval: 15s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    x-routes:
-      service: platform-todo-v4-11
-      port: 8000
-      routes:
-      - name: platform-todo-v4-11-public
-        rule: Host(`todo-v4-11${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && Path(`/api/health`)
-        tls: true
-        priority: 100
-      - name: platform-todo-v4-11
-        rule: Host(`todo-v4-11${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)
-        tls: true
-        priority: 10
-        sso: todo-v4-11-auth
   todo-v4-13:
     image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.2@sha256:6c7d0bf0d8bd4e49bc0b88ea5ecff4713532f23636d8997dc61aec9103178bb3
     container_name: platform-todo-v4-13${ENV_SUFFIX}
@@ -127,7 +65,7 @@ services:
         priority: 10
         sso: todo-v4-13-auth
   todo-v4-14:
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.14.1@sha256:a0d5f800d1a82ae784c15439996db8baeb597fdea747cac6b2564356185ac3f3
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.14.2@sha256:420080e3a057a3f2e3ec1febff9ccc3c40d213ae282b0ac904e3544e859e9d2c
     container_name: platform-todo-v4-14${ENV_SUFFIX}
     user: 65532:65532
     cap_drop:
@@ -139,7 +77,7 @@ services:
     command:
     - sh
     - -c
-    - export DATABASE_URL="$(printf '%s' "$$DATABASE_URL" | sed 's|://todo_app:|://todo_4_14_app:|; s|/postgres$|/todo_4_14|')" && export SERVICE_VERSION="v4.14.1" && exec python /app/app.py
+    - export DATABASE_URL="$(printf '%s' "$$DATABASE_URL" | sed 's|://todo_app:|://todo_4_14_app:|; s|/postgres$|/todo_4_14|')" && export SERVICE_VERSION="v4.14.2" && exec python /app/app.py
     x-vault: {}
     x-capabilities:
       s3: {}

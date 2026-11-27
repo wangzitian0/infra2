@@ -17,7 +17,9 @@ from common.tests.compose_env import compiled_vault_template
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "finance_report/finance_report/10.app/compose.yaml"
-PREFECT_SERVER = "http://platform-prefect-server${ENV_SUFFIX}:4200/api"
+PREFECT_SERVER = (
+    "${PREFECT_API_URL-http://platform-prefect-server${ENV_SUFFIX}:4200/api}"
+)
 
 
 def _environment(service: dict) -> dict[str, str]:
@@ -84,11 +86,19 @@ def test_compose_files_do_not_redeclare_model_defaults_and_frontend_uses_app_url
 ):
     """#1279: model defaults live in Python Settings only; frontend NEXT_PUBLIC_APP_URL
     respects the deployer-supplied NEXT_PUBLIC_APP_URL variable."""
-    preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
-    for path in (COMPOSE, preview_compose):
-        text = path.read_text(encoding="utf-8")
-        assert "PRIMARY_MODEL" not in text, path.name
-        assert "FALLBACK_MODELS" not in text, path.name
+    from common.deploy.compose_compile import load_stack
+
+    for text, label in (
+        (COMPOSE.read_text(encoding="utf-8"), COMPOSE.name),
+        (
+            load_stack(
+                "finance_report/finance_report/10.app/compose.yaml", mode="preview"
+            ).compiled,
+            "10.app[mode=preview]",
+        ),
+    ):
+        assert "PRIMARY_MODEL" not in text, label
+        assert "FALLBACK_MODELS" not in text, label
 
     services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
     frontend = _environment(services["frontend"])
@@ -119,10 +129,16 @@ def test_backend_only_configuration_stays_off_the_worker() -> None:
 
 
 def test_s3_endpoints_isolate_staging_and_preview_from_production() -> None:
+    from common.deploy.env_config import preview_alias
+    from common.deploy.steps.preview_slot import build_preview_env_vars
+
     services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
     for name in ("backend", "prefect-worker"):
         env = _environment(services[name])
-        assert env.get("S3_ENDPOINT") == "http://platform-s3${ENV_SUFFIX}:9000", name
+        assert (
+            env.get("S3_ENDPOINT")
+            == "${S3_ENDPOINT:-http://platform-s3${ENV_SUFFIX}:9000}"
+        ), name
         assert (
             env.get("S3_PUBLIC_ENDPOINT")
             == "${S3_PUBLIC_ENDPOINT:-https://s3${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}"
@@ -130,29 +146,48 @@ def test_s3_endpoints_isolate_staging_and_preview_from_production() -> None:
     frontend_env = _environment(services["frontend"])
     assert frontend_env.get("GIT_COMMIT_SHA") == "${GIT_COMMIT_SHA:-unknown}"
 
-    preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
-    preview_services = yaml.safe_load(preview_compose.read_text(encoding="utf-8"))[
-        "services"
-    ]
-    preview_backend = _environment(preview_services["backend"])
-    assert preview_backend.get("S3_ENDPOINT") == "http://platform-s3-staging:9000"
-    assert preview_backend.get("S3_PUBLIC_ENDPOINT") == "${S3_PUBLIC_ENDPOINT:-}"
-    preview_frontend = _environment(preview_services["frontend"])
-    assert preview_frontend.get("GIT_COMMIT_SHA") == "${GIT_COMMIT_SHA:-unknown}"
+    preview_env = build_preview_env_vars(
+        preview_alias("pr", "5"),
+        service="finance_report/app",
+        sha="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        domain="zitian.party",
+    )
+    assert preview_env["S3_ENDPOINT"] == "http://platform-s3-staging:9000"
+    assert preview_env["S3_PUBLIC_ENDPOINT"] == "https://s3-staging.zitian.party"
+    assert preview_env["PREFECT_API_URL"] == ""
 
 
 def test_preview_backend_disables_storage_sweep_and_raises_rate_limit() -> None:
     """#1540: Preview shares Staging's S3 bucket and runs bursty E2E suites."""
-    preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
-    preview_services = yaml.safe_load(preview_compose.read_text(encoding="utf-8"))[
-        "services"
-    ]
+    from common.deploy.compose_compile import load_stack
+    from common.deploy.env_config import preview_alias
+    from common.deploy.steps.preview_slot import build_preview_env_vars
+
+    preview_services = yaml.safe_load(
+        load_stack(
+            "finance_report/finance_report/10.app/compose.yaml", mode="preview"
+        ).compiled
+    )["services"]
+    assert "prefect-worker" not in preview_services
     preview_backend = _environment(preview_services["backend"])
-    assert preview_backend.get("ENABLE_STORAGE_SWEEP") == "false"
+    assert (
+        preview_backend.get("ENABLE_STORAGE_SWEEP") == "${ENABLE_STORAGE_SWEEP:-true}"
+    )
     assert (
         preview_backend.get("API_RATE_LIMIT_REQUESTS")
-        == "${API_RATE_LIMIT_REQUESTS:-2000}"
+        == "${API_RATE_LIMIT_REQUESTS:-300}"
     )
+
+    preview_env = build_preview_env_vars(
+        preview_alias("pr", "5"),
+        service="finance_report/app",
+        sha="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        domain="zitian.party",
+    )
+    assert preview_env["ENABLE_STORAGE_SWEEP"] == "false"
+    assert preview_env["API_RATE_LIMIT_REQUESTS"] == "2000"
+    assert preview_env["S3_BUCKET"] == "finance-report-staging"
+    assert preview_env["S3_PUBLIC_BUCKET"] == "finance-report-staging"
 
 
 def _load_finance_report_deploy_module():

@@ -293,7 +293,9 @@ def check(base_ref: str, root: Path = REPO_ROOT) -> CheckReport:
         mode = _mode_for(path)
         try:
             compiled = compile_stack(
-                text, vault_template=vault_template_for(path, text), mode=mode
+                text,
+                vault_template=vault_template_for(path, text, mode=mode),
+                mode=mode,
             )
         except ComposeSourceError as exc:
             report.problems.append(f"{path}: {exc}")

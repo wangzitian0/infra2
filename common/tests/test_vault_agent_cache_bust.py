@@ -37,9 +37,7 @@ CACHE_BUST_VARIABLES = ("CONFIGURATION_SHA256",)
 # source the rendered file at boot, so they must be recreated alongside the agent.
 PROMOTE_TIER_COMPOSE_FILES = (
     "finance_report/finance_report/10.app/compose.yaml",
-    "finance_report/finance_report/preview/compose.yaml",
     "truealpha/truealpha/10.app/compose.yaml",
-    "truealpha/truealpha/preview/compose.yaml",
 )
 
 
@@ -88,7 +86,7 @@ VAULT_AGENT_COMPOSE_FILES = _vault_agent_composes()
 
 
 def test_every_vault_agent_is_discovered():
-    assert len(VAULT_AGENT_COMPOSE_FILES) >= 16, VAULT_AGENT_COMPOSE_FILES
+    assert len(VAULT_AGENT_COMPOSE_FILES) >= 14, VAULT_AGENT_COMPOSE_FILES
     assert set(PROMOTE_TIER_COMPOSE_FILES) <= set(VAULT_AGENT_COMPOSE_FILES)
     assert "bootstrap/06.iac_runner/compose.yaml" in VAULT_AGENT_COMPOSE_FILES
     assert "platform/30.todo/compose.yaml" in VAULT_AGENT_COMPOSE_FILES

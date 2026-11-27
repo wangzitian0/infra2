@@ -154,10 +154,12 @@ def test_status_combines_boolean_readiness_instead_of_truthy_result_dicts(monkey
 
 
 def test_preview_api_router_does_not_claim_the_bare_api_prefix() -> None:
-    """Issue #803: Preview compose llm router must match production/staging routing
+    """Issue #803: Compiled preview llm router must match 10.app routing
     and not claim the bare /api prefix, which would swallow web API routes."""
+    from common.deploy.compose_compile import load_stack
+
     preview_compose = yaml.safe_load(
-        (ROOT / "truealpha/truealpha/preview/compose.yaml").read_text(encoding="utf-8")
+        load_stack("truealpha/truealpha/10.app/compose.yaml", mode="preview").compiled
     )
     llm_labels = preview_compose["services"]["llm"]["labels"]
     rule_label = next(
@@ -192,7 +194,7 @@ def test_the_guard_covers_every_truealpha_compose() -> None:
     three files: a compose added later is in scope by the glob, and an empty glob (a
     moved directory) fails here instead of turning every guard green-while-empty."""
     names = {compose.parent.name for compose in TRUEALPHA_COMPOSES}
-    assert {"10.app", "20.data_engine", "preview"} <= names
+    assert {"10.app", "20.data_engine"} <= names
 
 
 @pytest.mark.parametrize("compose", TRUEALPHA_COMPOSES, ids=lambda c: c.parent.name)
@@ -231,7 +233,7 @@ def test_otlp_export_is_only_ever_enabled_with_the_issued_identity(
         )
 
 
-@pytest.mark.parametrize("stack", ["10.app", "preview"])
+@pytest.mark.parametrize("stack", ["10.app"])
 def test_only_the_llm_service_exports_telemetry(stack: str) -> None:
     """llm (FastAPI, infra2-sdk configure_telemetry) is the one Python HTTP service. web is
     Node with no OTel SDK, and the single compose-level OTEL_SERVICE_NAME the deployment
@@ -413,10 +415,7 @@ def test_the_llm_start_period_is_not_below_the_sdk_standard(tmp_path: Path) -> N
     assert standard >= 120, (
         f"the SDK standard changed to {standard} s: review this test"
     )
-    for path in (
-        SERVICE_DIR / "compose.yaml",
-        ROOT / "truealpha/truealpha/preview/compose.yaml",
-    ):
+    for path in (SERVICE_DIR / "compose.yaml",):
         compose = yaml.safe_load(path.read_text(encoding="utf-8"))
         llm = _compose_seconds(
             compose["services"]["llm"]["healthcheck"]["start_period"]
@@ -431,7 +430,6 @@ def test_the_llm_start_period_is_not_below_the_sdk_standard(tmp_path: Path) -> N
     "compose_rel",
     [
         "truealpha/truealpha/10.app/compose.yaml",
-        "truealpha/truealpha/preview/compose.yaml",
     ],
 )
 def test_web_service_is_zero_db_and_does_not_wait_on_vault_secrets(

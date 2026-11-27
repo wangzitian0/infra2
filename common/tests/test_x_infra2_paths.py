@@ -170,9 +170,7 @@ def test_preview_stops_an_x_infra2_slot_that_is_not_raw_eligible_before_any_writ
     assert client.created == [] and client.updated == [] and client.deployed == []
 
 
-@pytest.mark.parametrize(
-    "service", ["finance_report/app", "truealpha/app", "platform/todo"]
-)
+@pytest.mark.parametrize("service", ["platform/todo"])
 def test_preview_keeps_the_github_source_and_the_bytes_of_every_plain_slot(
     monkeypatch, service: str
 ) -> None:
@@ -199,6 +197,24 @@ def test_preview_keeps_the_github_source_and_the_bytes_of_every_plain_slot(
         }
     ]
     assert client.github_reads == 1
+
+
+@pytest.mark.parametrize("service", ["finance_report/app", "truealpha/app"])
+def test_app_preview_slots_compile_x_infra2_as_raw(monkeypatch, service: str) -> None:
+    from common.deploy.env_config import preview_service_config
+
+    path = preview_service_config(service).compose_path
+    stack = load_stack(path, mode="preview")
+    assert stack.source_type == "raw"
+    assert "x-infra2" not in stack.compiled
+    assert "db" in yaml.safe_load(stack.compiled)["services"]
+
+    client = _PreviewClient(github_id=None)
+    _preview_up(monkeypatch, service, client)
+    assert client.created[0]["source_type"] == "raw"
+    assert client.updated[0]["source_type"] == "raw"
+    assert client.updated[0]["compose_file"] == stack.compiled
+    assert client.github_reads == 0
 
 
 # --- 2. config drift -------------------------------------------------------------------

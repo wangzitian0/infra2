@@ -17,6 +17,8 @@ x-infra2:
   # deploy stops when the release template differs (deploy_v2).
   vault:
     name: truealpha-app
+  preview:
+    db_container: truealpha-preview-db${ENV_SUFFIX}
 
 services:
   llm:
@@ -36,6 +38,8 @@ services:
         condition: service_healthy
     # x-vault waits for /secrets/.env, exports it, then runs this command.
     x-vault: {}
+    x-preview:
+      database_url: postgresql
     command:
       - sh
       - -c
@@ -53,7 +57,7 @@ services:
       # only human / runtime values, so the deployment states these here.
       ENVIRONMENT: ${ENV}
       NODE_ENV: production
-      S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://platform-s3${ENV_SUFFIX}:9000}
       # Telemetry (infra2#906, docs/ssot/ops.observability.md 4.2). The endpoint is the ONE
       # shared collector: no ${ENV_SUFFIX}, reachable only on dokploy-network. Identity is
       # issued by the deployment (common.service_identity, every deploy path), never defaulted
@@ -140,7 +144,7 @@ services:
       LLM_SERVICE_URL: http://truealpha-llm${ENV_SUFFIX}:8000
       NODE_ENV: production
       # Kept for stack-level 10.app/env.manifest.json injected contract parity; only llm uses S3.
-      S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://platform-s3${ENV_SUFFIX}:9000}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://${APP_HOST}}
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}

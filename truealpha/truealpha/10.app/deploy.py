@@ -122,7 +122,7 @@ class AppDeployer(Deployer):
         ),
         SecretsFacet(
             service_id="truealpha/preview",
-            compose_path="truealpha/truealpha/preview/compose.yaml",
+            compose_path="truealpha/truealpha/10.app/compose.yaml",
             vault_agent_container="truealpha-app-vault-agent${ENV_SUFFIX}",
             app_containers=("truealpha-llm${ENV_SUFFIX}",),
             auth_method="approle",

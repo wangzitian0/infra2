@@ -564,7 +564,7 @@ def _preview_overrides(options: dict[str, Any], db_container: str) -> str:
     scheme = options.get("database_url")
     if scheme is not None:
         url = f"{scheme}://ephemeral:ephemeral@{db_container}:5432/preview"
-        lines.append(_dollar(f'export DATABASE_URL="{url}"'))
+        lines.append(f'export DATABASE_URL="{url}"')
     if scheme is not None or options.get("environment"):
         # Compose fills `${ENV}` from the deploy, so the container needs no ENV (infra2#1823).
         lines.append('export ENVIRONMENT="${ENV}"')

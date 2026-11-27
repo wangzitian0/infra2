@@ -350,7 +350,7 @@ _PREVIEW_SERVICE_CONFIGS: dict[str, PreviewServiceConfig] = {
     "finance_report/app": PreviewServiceConfig(
         project="finance_report",
         slug_prefix="finance-report-preview",
-        compose_path="finance_report/finance_report/preview/compose.yaml",
+        compose_path="finance_report/finance_report/10.app/compose.yaml",
         db_name="finance_report",
         base_subdomain="report",
         readiness_probes=(
@@ -362,12 +362,12 @@ _PREVIEW_SERVICE_CONFIGS: dict[str, PreviewServiceConfig] = {
             ),
         ),
     ),
-    # #522: truealpha/app preview — own Dokploy project, own ephemeral DB (never the
-    # shared staging/prod truealpha-postgres). See truealpha/truealpha/preview/compose.yaml.
+    # #522: truealpha/app preview — own Dokploy project, own ephemeral DB compiled from
+    # truealpha/truealpha/10.app/compose.yaml with mode="preview" (never the shared staging/prod postgres).
     "truealpha/app": PreviewServiceConfig(
         project="truealpha",
         slug_prefix="truealpha-preview",
-        compose_path="truealpha/truealpha/preview/compose.yaml",
+        compose_path="truealpha/truealpha/10.app/compose.yaml",
         db_name="truealpha",
         base_subdomain="truealpha",
     ),

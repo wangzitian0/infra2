@@ -101,7 +101,9 @@ def _canned_stdout(
         "=== LLM_SUMMARY ===\n"
         '{"status": "pass", "input_tokens": 120, "output_tokens": 35}\n'
         "=== LLM_SUMMARY_STREAM ===\n"
-        '{"status": "pass", "input_tokens": 120, "output_tokens": 35}\n'
+        'event: meta\ndata: {"model": "glm-5.3-flash"}\n'
+        'event: delta\ndata: {"text": "Summary ok"}\n'
+        'event: done\ndata: {"input_tokens": 120, "output_tokens": 35}\n'
         "=== GEN_AI_SPANS ===\n"
         "1\t1\t2\t0\t1\n"
         "=== GEN_AI_METRICS ===\n"
@@ -1214,13 +1216,25 @@ def _with_llm_sections(
     metrics_row: str = "2\t2",
 ) -> str:
     stream_doc = stream if stream is not None else non_stream
+    if stream_doc.get("status") == "unconfigured":
+        stream_text = json.dumps(stream_doc)
+    else:
+        in_tok = int(stream_doc.get("input_tokens", 0) or 0)
+        out_tok = int(stream_doc.get("output_tokens", 0) or 0)
+        stream_text = "\n".join(
+            [
+                'event: meta\ndata: {"model": "glm-5.3-flash"}',
+                'event: delta\ndata: {"text": "Summary ok"}',
+                f'event: done\ndata: {{"input_tokens": {in_tok}, "output_tokens": {out_tok}}}',
+            ]
+        )
     return (
         base_stdout
         + "=== LLM_SUMMARY ===\n"
         + json.dumps(non_stream)
         + "\n"
         + "=== LLM_SUMMARY_STREAM ===\n"
-        + json.dumps(stream_doc)
+        + stream_text
         + "\n"
         + "=== GEN_AI_SPANS ===\n"
         + f"{spans_row}\n"
@@ -1756,13 +1770,14 @@ def _with_llm_stream_section(stream_body: str) -> str:
         logs=f"100\t{fresh}",
         environment="staging",
     )
-    old_line = '{"status": "pass", "input_tokens": 120, "output_tokens": 35}'
-    marker = "=== LLM_SUMMARY_STREAM ===\n"
-    idx = base.index(marker) + len(marker)
-    return base[:idx] + stream_body + "\n" + base[idx + len(old_line) + 1 :]
+    start_marker = "=== LLM_SUMMARY_STREAM ===\n"
+    end_marker = "\n=== GEN_AI_SPANS ==="
+    start = base.index(start_marker) + len(start_marker)
+    end = base.index(end_marker, start)
+    return base[:start] + stream_body + base[end:]
 
 
-def test_llm_pillar_accepts_v4_13_sse_stream_and_legacy_json() -> None:
+def test_llm_pillar_accepts_v4_13_sse_stream_and_rejects_legacy_json() -> None:
     sse_payload = "\n".join(
         [
             'event: meta\ndata: {"model": "glm-5.3-flash", "todo_count": 0}',
@@ -1784,7 +1799,7 @@ def test_llm_pillar_accepts_v4_13_sse_stream_and_legacy_json() -> None:
         "staging", _with_llm_stream_section(legacy_payload)
     )
     assert legacy_report.llm is not None
-    assert legacy_report.llm.ok is True
+    assert legacy_report.llm.ok is False
 
 
 def test_llm_pillar_rejects_broken_or_incomplete_sse_stream() -> None:
@@ -1869,27 +1884,27 @@ def test_fast_gate_default_omits_llm_queries_and_deep_enables_them() -> None:
     assert "=== GEN_AI_METRICS ===" not in fast_commands[0]
 
 
-def test_slot_v4_11_targets_isolated_service_db_and_probe() -> None:
+def test_slot_v4_13_targets_isolated_service_db_and_probe() -> None:
     fresh = _relative_ts(30, now=FIXED_NOW)
     stdout = _canned_stdout(
         traces=f"500\t{fresh}",
         logs=f"100\t{fresh}",
         environment="staging",
-        sdk="4.11.2",
+        sdk="4.13.2",
     )
 
     report, commands = _verify_with_canned_ssh(
-        "staging", stdout, slot="v4-11", require_llm=False
+        "staging", stdout, slot="v4-13", require_llm=False
     )
 
     assert len(commands) == 1
     cmd = commands[0]
     assert report.all_ok is True, report
-    assert "platform-todo-v4-11-staging" in cmd
-    assert "'platform-todo-v4-11'" in cmd
-    assert "todo_v4_11_app" in cmd
-    assert "todo_v4_11" in cmd
-    assert "todo-v4-11-canary-status" in cmd
+    assert "platform-todo-v4-13-staging" in cmd
+    assert "'platform-todo-v4-13'" in cmd
+    assert "todo_v4_13_app" in cmd
+    assert "todo_v4_13" in cmd
+    assert "todo-v4-13-canary-status" in cmd
 
 
 def test_restart_grace_seconds_is_45() -> None:
@@ -1924,13 +1939,11 @@ def test_all_slots_cli_verifies_primary_and_secondary_slots() -> None:
         "common.observability.canary_verify.verify_canary", return_value=pass_report
     ) as mock_verify:
         assert main(["--env", "staging", "--deep", "--all-slots"]) == 0
-    assert len(mock_verify.call_args_list) == 3
+    assert len(mock_verify.call_args_list) == 2
     assert mock_verify.call_args_list[0].kwargs["slot"] is None
     assert mock_verify.call_args_list[0].kwargs["require_llm"] is True
-    assert mock_verify.call_args_list[1].kwargs["slot"] == "v4-11"
+    assert mock_verify.call_args_list[1].kwargs["slot"] == "v4-13"
     assert mock_verify.call_args_list[1].kwargs["require_llm"] is False
-    assert mock_verify.call_args_list[2].kwargs["slot"] == "v4-13"
-    assert mock_verify.call_args_list[2].kwargs["require_llm"] is False
 
 
 def test_app_peer_pillar_accepts_versioned_slot_service_name_and_rejects_other_slot() -> (

@@ -691,8 +691,8 @@ def test_check_reports_a_plain_file_that_the_compile_changes(monkeypatch) -> Non
     monkeypatch.setattr(eq, "compile_stack", lambda text, **k: text + "\n")
     report = eq.check("HEAD")
     plain = [p for p in report.problems if not p.startswith(tuple(X_INFRA2_FILES))]
-    # 13 plain files on 2026-11-26, after platform/12.alerting moved to x-infra2 (#1822).
-    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 13
+    # 11 plain files remain after deleting handwritten app preview composes.
+    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 11
     assert all("a plain file changed in the compile" in p for p in plain)
 
 

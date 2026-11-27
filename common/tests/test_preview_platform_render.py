@@ -228,14 +228,12 @@ def test_slot_backing_services_use_the_platform_unit_images():
         == _services("platform/01.postgres/compose.yaml")["postgres"]["image"]
     )
     # The unit runs the GHCR image that CI builds from platform/03.s3/Dockerfile (#1822).
-    # The slot has a checkout and builds the same Dockerfile.
+    # The slot pins that same published image with no local Docker build context.
     s3 = _services("platform/03.s3/compose.yaml")["s3"]
     published = PLATFORM_IMAGES["s3"]
     assert published.pin_re.match(s3["image"]), s3["image"]
-    assert slot["s3"]["build"] == {
-        "context": "../..",
-        "dockerfile": published.dockerfile,
-    }
+    assert "build" not in slot["s3"]
+    assert slot["s3"]["image"] == s3["image"]
 
 
 def test_slot_postgres_keeps_no_data_across_up():

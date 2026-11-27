@@ -225,7 +225,7 @@ def test_branch_is_reasserted_on_every_deploy_when_given(monkeypatch):
     # it was set to at creation and never advances on its own — deploy_v2's iac_ref was
     # validated/recorded but never reached the actual git source Dokploy clones. branch
     # must be re-asserted on every call for a plain (github) stack.
-    _plain_app_stack(monkeypatch, "finance_report/finance_report/preview/compose.yaml")
+    _plain_app_stack(monkeypatch, "platform/21.portal/compose.yaml")
     client = FakeDokploy()
     dp.execute_fixed_rollout(
         "staging",
@@ -240,7 +240,7 @@ def test_branch_is_reasserted_on_every_deploy_when_given(monkeypatch):
                 "source_type": "github",
                 "repository": "infra2",
                 "owner": "wangzitian0",
-                "composePath": "finance_report/finance_report/preview/compose.yaml",
+                "composePath": "platform/21.portal/compose.yaml",
                 "branch": "v1.1.38",
             },
         )
@@ -249,7 +249,7 @@ def test_branch_is_reasserted_on_every_deploy_when_given(monkeypatch):
 
 def test_branch_omitted_leaves_a_plain_composes_source_untouched(monkeypatch):
     # A plain stack without a branch: no update_compose call at all.
-    _plain_app_stack(monkeypatch, "finance_report/finance_report/preview/compose.yaml")
+    _plain_app_stack(monkeypatch, "platform/21.portal/compose.yaml")
     client = FakeDokploy()
     dp.execute_fixed_rollout(
         "staging",
