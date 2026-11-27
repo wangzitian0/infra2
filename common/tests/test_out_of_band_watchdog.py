@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ops-checks.yml"
+WATCHDOG_WORKFLOW = ROOT / ".github/workflows/watchdog.yml"
 WATCHDOG = ROOT / "common/observability/out_of_band_watchdog.py"
 ALERTING_README = ROOT / "platform/12.alerting/README.md"
 ALERTING_SSOT = ROOT / "docs/ssot/ops.observability.md"
@@ -90,41 +91,38 @@ def _load_watchdog():
 
 def test_workflow_runs_daily_and_can_be_dispatched() -> None:
     """#209: GitHub watchdog is a daily audit with manual dispatch."""
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    wd_workflow = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))
+    ops_workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
-    assert {"cron": "17 2 * * *"} in workflow["on"]["schedule"]
-    assert "workflow_dispatch" in workflow["on"]
+    assert {"cron": "17 2 * * *"} in wd_workflow["on"]["schedule"]
+    assert "workflow_dispatch" in wd_workflow["on"]
     assert (
         "out-of-band-watchdog"
-        in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
+        in wd_workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     )
-    assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "ssh_targets_override" in wd_workflow["on"]["workflow_dispatch"]["inputs"]
     # issues: per job, never workflow-wide: each job gets only the scopes it uses.
-    assert workflow["permissions"] == {"contents": "read", "actions": "read"}
-    jobs = workflow["jobs"]
-    assert jobs["watchdog"]["permissions"] == {
+    assert wd_workflow["permissions"] == {"contents": "read", "actions": "read"}
+    assert ops_workflow["permissions"] == {"contents": "read", "actions": "read"}
+    wd_jobs = wd_workflow["jobs"]
+    assert wd_jobs["watchdog"]["permissions"] == {
         "contents": "read",
         "actions": "read",
         "issues": "write",
     }
-    assert jobs["digest"]["permissions"] == {
+    assert wd_jobs["digest"]["permissions"] == {
         "contents": "read",
         "actions": "read",
         "issues": "write",
     }
-    writers = [
+    ops_writers = [
         name
-        for name, job in jobs.items()
+        for name, job in ops_workflow["jobs"].items()
         if (job.get("permissions") or {}).get("issues") == "write"
     ]
-    # #962: the daily jobs that page keep their page-dedup state as issues; #1648 adds
-    # the digest, preview-leak-check and host-hygiene-schedule failure alerts.
-    # #1493 / #1877: audit and scheduled-app-audit record guard and runtime hook verdicts as issues.
-    assert writers == [
+    assert ops_writers == [
         "audit",
         "scheduled-app-audit",
-        "watchdog",
-        "digest",
         "preview-leak-check",
         "host-hygiene-schedule",
         "facet-reconcile",
@@ -137,7 +135,7 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
 
 def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
     """Infra-007.2: host-down alerts bypass the in-band alert bridge."""
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = WATCHDOG_WORKFLOW.read_text(encoding="utf-8")
 
     assert "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE" in text
     assert "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL" in text
@@ -2606,7 +2604,9 @@ def test_the_report_secrets_reach_only_the_run_watchdog_step() -> None:
     cannot read them; inject them only on the watchdog and daily report steps."""
     from common.alerting import INFRA2_REPORTS_ENV
 
-    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["watchdog"]
+    job = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "watchdog"
+    ]
     holders = {
         step.get("name"): sorted(set(INFRA2_REPORTS_ENV) & set(step.get("env") or {}))
         for step in job["steps"]
@@ -2629,7 +2629,7 @@ def test_the_report_secrets_reach_only_the_run_watchdog_step() -> None:
 
 def test_workflow_records_the_watchdog_verdicts_as_issues() -> None:
     """truealpha#876 W4: the watchdog job's last step is the issue trail."""
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    workflow = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["watchdog"]
     names = [step.get("name") for step in job["steps"]]
     trail = job["steps"][-1]
@@ -2666,7 +2666,7 @@ def test_workflow_records_the_watchdog_verdicts_as_issues() -> None:
 
 def test_the_drill_input_reaches_the_tool_only_through_env() -> None:
     """Untrusted dispatch text is never interpolated into a `run:` script."""
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    workflow = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))
     dispatch = workflow["on"]["workflow_dispatch"]["inputs"]
     assert dispatch["peer_liveness_bound_cap_hours"]["default"] == ""
     job = workflow["jobs"]["watchdog"]
@@ -3026,7 +3026,7 @@ def test_digest_workflow_step_runs_weekly_digest_without_separate_stability_step
     None
 ):
     """Verify digest job runs watchdog_weekly_digest without separate stability step."""
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    workflow = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))
     digest_job = workflow["jobs"]["digest"]
     step_names = [step.get("name") for step in digest_job["steps"]]
     assert "Build and send digest" in step_names

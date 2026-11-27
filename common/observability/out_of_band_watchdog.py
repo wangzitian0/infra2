@@ -1273,7 +1273,11 @@ def run_scheduled_job_start_check(
     getter = getter_factory(env.get("GITHUB_TOKEN", "").strip(), timeout=timeout)
     attempts = max(1, max_attempts)
     for attempt in range(1, attempts + 1):
-        verdict = scheduled_job_start.evaluate(getter, now=now or datetime.now(UTC))
+        verdict = scheduled_job_start.evaluate(
+            getter,
+            now=now or datetime.now(UTC),
+            workflow=scheduled_job_start.WORKFLOWS,
+        )
         if verdict.status != scheduled_job_start.UNVERIFIABLE or attempt == attempts:
             break
         if retry_delay_seconds > 0:

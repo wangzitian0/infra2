@@ -14,7 +14,7 @@ from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "common" / "observability" / "digest.py"
-WORKFLOW_PATH = ROOT / ".github/workflows/ops-checks.yml"
+WORKFLOW_PATH = ROOT / ".github/workflows/watchdog.yml"
 
 
 def _load_module():
@@ -111,7 +111,7 @@ def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(
         parsed = urlparse(request.full_url)
         query = parse_qs(parsed.query)
         page = query.get("page", ["1"])[0]
-        if parsed.path.endswith("/actions/workflows/ops-checks.yml/runs"):
+        if parsed.path.endswith("/actions/workflows/watchdog.yml/runs"):
             requested_workflow_pages.append(page)
             return _Response({"workflow_runs": workflow_pages.get(page, [])})
         if "/actions/runs/" in parsed.path and parsed.path.endswith("/jobs"):
@@ -174,7 +174,7 @@ def test_fetch_recent_runs_skips_non_watchdog_schedule_slots_without_fetching_jo
 
     def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
         parsed = urlparse(request.full_url)
-        if parsed.path.endswith("/actions/workflows/ops-checks.yml/runs"):
+        if parsed.path.endswith("/actions/workflows/watchdog.yml/runs"):
             return _Response({"workflow_runs": workflow_runs})
         if "/actions/runs/" in parsed.path and parsed.path.endswith("/jobs"):
             run_id = parsed.path.split("/actions/runs/", 1)[1].split("/", 1)[0]
@@ -832,7 +832,7 @@ def test_fetch_recent_runs_skips_push_and_pr_events_without_fetching_jobs(
 
     def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
         parsed = urlparse(request.full_url)
-        if parsed.path.endswith("/actions/workflows/ops-checks.yml/runs"):
+        if parsed.path.endswith("/actions/workflows/watchdog.yml/runs"):
             return _Response({"workflow_runs": workflow_runs})
         if "/actions/runs/" in parsed.path and parsed.path.endswith("/jobs"):
             run_id = parsed.path.split("/actions/runs/", 1)[1].split("/", 1)[0]
