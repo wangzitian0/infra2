@@ -76,7 +76,7 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         sdk_root,
         {
             "pyproject.toml": f'[project]\nname = "{PKG_HYPHEN}"\nversion = "{VER_LATEST}"\n',
-            "tests/test_readme_claims.py": 'LEFT_THE_PACKAGES = ("ENV_FALLBACK_KEYS", "CanonicalEnv", "CUSTOM_RETIRED_SYMBOL")\n',
+            "tests/wheel_smoke.py": 'LEFT_THE_PACKAGES = ("ENV_FALLBACK_KEYS", "CanonicalEnv", "CUSTOM_RETIRED_SYMBOL")\n',
         },
     )
     _write_files(
@@ -426,7 +426,7 @@ def test_m4_dict_left_the_packages_and_wheel_smoke_removed_names(
     _write_files(
         sdk_root,
         {
-            "tests/test_readme_claims.py": f"""
+            "tests/wheel_smoke.py": f"""
                 LEFT_THE_PACKAGES = {{
                     "{PKG_UNDER}": {{
                         "alpha": ["ProdService"],
@@ -436,8 +436,6 @@ def test_m4_dict_left_the_packages_and_wheel_smoke_removed_names(
                     ("{PKG_UNDER}.alpha", "removed_351_helper"),
                     ("{PKG_UNDER}.alpha", "main"),
                 )
-            """,
-            "tests/wheel_smoke.py": f"""
                 REMOVED_NAMES = (
                     ("{PKG_UNDER}.alpha", "removed_340_helper"),
                     ("{PKG_UNDER}.alpha", "ProdService.from_env"),
@@ -1149,3 +1147,145 @@ def test_m1_ast_rejects_bogus_constant_attr_and_cross_module_name_collision(
         "M1: missing production SDK imports" in f and "totally_bogus_attr" in f
         for f in failures_tuple_bogus
     )
+
+
+def test_m1_canary_only_enforced_unless_allowlisted(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+    tmp_path: Path,
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    canary_dir = tmp_path / "canary_only_repo"
+    _write_files(
+        pkg_root,
+        {
+            "telemetry.py": 'def get_tracer(name: str) -> str:\n    return name\n\ndef canary_unlisted() -> str:\n    return "x"\n',
+            "__init__.py": (
+                f"from {PKG_UNDER}.alpha import used_in_prod, ProdService\n"
+                f"from {PKG_UNDER}.config import runtime_env_contract\n"
+                f"from {PKG_UNDER}.telemetry import get_tracer, canary_unlisted\n\n"
+                '__all__ = ["used_in_prod", "ProdService", "runtime_env_contract", "get_tracer", "canary_unlisted"]\n'
+            ),
+        },
+    )
+    _write_files(
+        canary_dir,
+        {
+            "uv.lock": _make_uv_lock(VER_LATEST),
+            "app.py": (
+                f"from {PKG_UNDER}.telemetry import get_tracer, canary_unlisted\n\n"
+                "def run() -> tuple[str, str]:\n"
+                '    return get_tracer("t"), canary_unlisted()\n\n'
+                'if __name__ == "__main__":\n'
+                "    run()\n"
+            ),
+        },
+    )
+    consumers["canary_todo"] = canary_dir
+    report, failures = _run_and_eval((pkg_root, consumers))
+    m1 = report["metrics"]["M1"]
+    assert m1["canary_only"] == 2
+    assert m1["canary_only_allowlisted"] == [f"{PKG_UNDER}.telemetry.get_tracer"]
+    assert m1["canary_only_unallowlisted"] == [f"{PKG_UNDER}.telemetry.canary_unlisted"]
+    assert any(
+        "canary_only symbols without production consumer or allowlist" in f
+        for f in failures
+    )
+
+    # Remove unallowlisted canary_unlisted -> only allowlisted get_tracer remains canary_only -> passes!
+    _write_files(
+        pkg_root,
+        {
+            "telemetry.py": "def get_tracer(name: str) -> str:\n    return name\n",
+            "__init__.py": (
+                f"from {PKG_UNDER}.alpha import used_in_prod, ProdService\n"
+                f"from {PKG_UNDER}.config import runtime_env_contract\n"
+                f"from {PKG_UNDER}.telemetry import get_tracer\n\n"
+                '__all__ = ["used_in_prod", "ProdService", "runtime_env_contract", "get_tracer"]\n'
+            ),
+        },
+    )
+    _write_files(
+        canary_dir,
+        {
+            "app.py": (
+                f"from {PKG_UNDER}.telemetry import get_tracer\n\n"
+                "def run() -> str:\n"
+                '    return get_tracer("t")\n\n'
+                'if __name__ == "__main__":\n'
+                "    run()\n"
+            ),
+        },
+    )
+    clean_report, clean_failures = _run_and_eval((pkg_root, consumers))
+    assert clean_report["metrics"]["M1"]["canary_only"] == 1
+    assert clean_failures == []
+
+
+def test_m1_credits_privatized_cli_main_call_sites(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write_files(
+        pkg_root,
+        {
+            "cli_tool.py": '__all__ = ()\n\ndef cli_entry_helper() -> str:\n    return "ran"\n\ndef unreferenced_in_main() -> str:\n    return "idle"\n\ndef _main() -> int:\n    cli_entry_helper()\n    return 0\n',
+            "__init__.py": f'from {PKG_UNDER}.alpha import used_in_prod, ProdService\nfrom {PKG_UNDER}.cli_tool import cli_entry_helper, unreferenced_in_main\n\n__all__ = ["used_in_prod", "ProdService", "cli_entry_helper", "unreferenced_in_main"]\n',
+        },
+    )
+    _write_files(
+        consumers["consumer_a"],
+        {
+            ".github/workflows/infra-ci.yml": f"name: cli\njobs:\n  run:\n    runs-on: ubuntu-latest\n    steps:\n      - run: python -m {PKG_UNDER}.cli_tool\n",
+        },
+    )
+    report, _ = _run_and_eval(synthetic_workspace)
+    by_name = {s["name"]: s["reach"] for s in report["metrics"]["M1"]["symbols"]}
+    assert by_name["cli_entry_helper"] == "prod_used"
+    assert by_name["unreferenced_in_main"] == "unused"
+
+
+def test_m1_ast_resolves_alias_mapping_and_inherited_from_dict(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write_files(
+        pkg_root,
+        {
+            "_core.py": "class _BaseManifest:\n    @classmethod\n    def from_dict(cls, raw: dict) -> dict:\n        return raw\n",
+            "alpha.py": (
+                "from collections.abc import Mapping as _Mapping\n"
+                "from types import MappingProxyType as _MappingProxyType\n"
+                f"from {PKG_UNDER}._core import _BaseManifest\n\n"
+                "def _policies() -> tuple[dict[str, object], _Mapping[str, str]]:\n"
+                "    return {}, _MappingProxyType({'a': 'b'})\n\n"
+                "_, ALIAS_MAP = _policies()\n\n"
+                "class ProdService(_BaseManifest):\n"
+                "    def ping(self) -> str:\n"
+                '        return "pong"\n\n'
+                "def used_in_prod() -> str:\n"
+                "    return 'ok'\n"
+            ),
+            "__init__.py": (
+                f"from {PKG_UNDER}.alpha import ALIAS_MAP, ProdService, used_in_prod\n"
+                f"from {PKG_UNDER}.config import runtime_env_contract\n\n"
+                '__all__ = ["used_in_prod", "ProdService", "ALIAS_MAP", "runtime_env_contract"]\n'
+            ),
+        },
+    )
+    _write_files(
+        consumers["consumer_a"],
+        {
+            "app/alias_and_inherited.py": (
+                f"from {PKG_UNDER}.alpha import ALIAS_MAP, ProdService, used_in_prod\n\n"
+                "def run() -> object:\n"
+                "    _ = used_in_prod()\n"
+                "    _ = ProdService.from_dict({})\n"
+                '    return ALIAS_MAP.get("a")\n\n'
+                'if __name__ == "__main__":\n'
+                "    run()\n"
+            ),
+        },
+    )
+    report, failures = _run_and_eval(synthetic_workspace)
+    assert report["metrics"]["M1"]["missing_imports"]["prod"] == []
+    assert failures == []

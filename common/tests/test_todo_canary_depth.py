@@ -85,7 +85,11 @@ def test_todo_declares_a_probe_on_the_internal_canary_status(deploy) -> None:
         "the probes exemption said 'self-proving'; nothing read the status (#991)"
     )
     by_name = {probe.name: probe for probe in attrs.probes}
-    assert set(by_name) == {"todo-canary-status", "todo-v4-11-canary-status"}
+    assert set(by_name) == {
+        "todo-canary-status",
+        "todo-v4-11-canary-status",
+        "todo-v4-13-canary-status",
+    }
     probe = by_name["todo-canary-status"]
     assert probe.kind == "http"
     assert probe.expected == "200"
@@ -100,12 +104,20 @@ def test_probe_renders_into_the_probe_runner_specs() -> None:
     lines = [
         line
         for line in render_probe_spec_text().splitlines()
-        if line.startswith(("todo-canary-status|", "todo-v4-11-canary-status|"))
+        if line.startswith(
+            (
+                "todo-canary-status|",
+                "todo-v4-11-canary-status|",
+                "todo-v4-13-canary-status|",
+            )
+        )
     ]
     assert lines == [
-        "todo-canary-status|http|http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status"
+        "todo-canary-status|http|http://platform-todo-v4-14${ENV_SUFFIX}:8000/api/canary/status"
         "|200|error|15||platform/todo",
         "todo-v4-11-canary-status|http|http://platform-todo-v4-11${ENV_SUFFIX}:8000/api/canary/status"
+        "|200|error|15||platform/todo",
+        "todo-v4-13-canary-status|http|http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status"
         "|200|error|15||platform/todo",
     ]
 
@@ -131,7 +143,7 @@ def test_todo_signal_is_a_debounced_minute_alert() -> None:
 def test_public_router_does_not_name_the_canary_status() -> None:
     """A second guard on the label itself: the public rule must not mention the path."""
     services = compose_services(COMPOSE)
-    for slot_service in ("todo-v4-11", "todo-v4-13"):
+    for slot_service in ("todo-v4-11", "todo-v4-13", "todo-v4-14"):
         labels = services[slot_service]["labels"]
         public_rules = [
             label
@@ -227,8 +239,8 @@ def test_todo_policy_never_reads_the_superuser_secrets() -> None:
 
 def test_compose_runs_a_vault_agent_and_mounts_its_secrets_read_only() -> None:
     services = compose_services(COMPOSE)
-    assert set(services) == {"vault-agent", "todo-v4-11", "todo-v4-13"}
-    for slot_service in ("todo-v4-11", "todo-v4-13"):
+    assert set(services) == {"vault-agent", "todo-v4-11", "todo-v4-13", "todo-v4-14"}
+    for slot_service in ("todo-v4-11", "todo-v4-13", "todo-v4-14"):
         todo = services[slot_service]
         assert "secrets:/secrets:ro" in todo["volumes"]
         assert "vault-agent" in todo["depends_on"]
@@ -255,6 +267,7 @@ def test_secrets_facet_names_the_compose_containers() -> None:
     assert facet.app_containers == (
         services["todo-v4-11"]["container_name"],
         services["todo-v4-13"]["container_name"],
+        services["todo-v4-14"]["container_name"],
     )
 
 
@@ -642,7 +655,7 @@ def test_todo_compose_enables_all_four_app_peer_capabilities() -> None:
     from common.deploy.compose_compile import load_stack
 
     doc = yaml.safe_load(load_stack("platform/30.todo/compose.yaml").compiled)
-    for slot_service in ("todo-v4-11", "todo-v4-13"):
+    for slot_service in ("todo-v4-11", "todo-v4-13", "todo-v4-14"):
         env = doc["services"][slot_service]["environment"]
         for key in (
             "S3_ENDPOINT",
@@ -944,8 +957,9 @@ def test_probe_target_matches_the_compose_container_port_and_app_route() -> None
     }
     services = compose_services(COMPOSE)
     for probe_name, svc_key in (
-        ("todo-canary-status", "todo-v4-13"),
+        ("todo-canary-status", "todo-v4-14"),
         ("todo-v4-11-canary-status", "todo-v4-11"),
+        ("todo-v4-13-canary-status", "todo-v4-13"),
     ):
         probe = by_name[probe_name]
         target = urlsplit(probe.target.replace("${ENV_SUFFIX}", "-staging"))
@@ -965,7 +979,7 @@ def test_probe_target_matches_the_compose_container_port_and_app_route() -> None
 def test_only_the_health_path_is_served_without_sso(domain_suffix, env_suffix) -> None:
     """Resolve the real routing decision for every path the app serves (Traefik rule
     language and priority order, not substring checks)."""
-    service = compose_services(COMPOSE)["todo-v4-13"]
+    service = compose_services(COMPOSE)["todo-v4-14"]
     issued = {
         "ENV_DOMAIN_SUFFIX": domain_suffix,
         "ENV_SUFFIX": env_suffix,

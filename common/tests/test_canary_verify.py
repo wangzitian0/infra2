@@ -380,8 +380,8 @@ def test_remote_queries_filter_on_environment_and_window(environment: str) -> No
 
     assert predicate in traces_sql
     assert predicate in logs_sql
-    assert "'platform-todo-v4-13'" in traces_sql
-    assert "'platform-todo-v4-13'" in logs_sql
+    assert "'platform-todo-v4-14'" in traces_sql
+    assert "'platform-todo-v4-14'" in logs_sql
     assert "INTERVAL 3600 SECOND" in traces_sql
     assert "INTERVAL 3600 SECOND" in logs_sql
     assert traces_sql.startswith("SELECT count(), ")
@@ -483,8 +483,8 @@ def test_alert_bridge_summary_reports_the_real_status() -> None:
 @pytest.mark.parametrize(
     ("environment", "bridge", "todo"),
     [
-        ("production", "platform-alerting", "platform-todo-v4-13"),
-        ("staging", "platform-alerting-staging", "platform-todo-v4-13-staging"),
+        ("production", "platform-alerting", "platform-todo-v4-14"),
+        ("staging", "platform-alerting-staging", "platform-todo-v4-14-staging"),
     ],
 )
 def test_the_ssh_command_asks_the_bridge_of_the_same_environment(
@@ -1924,11 +1924,13 @@ def test_all_slots_cli_verifies_primary_and_secondary_slots() -> None:
         "common.observability.canary_verify.verify_canary", return_value=pass_report
     ) as mock_verify:
         assert main(["--env", "staging", "--deep", "--all-slots"]) == 0
-    assert len(mock_verify.call_args_list) == 2
+    assert len(mock_verify.call_args_list) == 3
     assert mock_verify.call_args_list[0].kwargs["slot"] is None
     assert mock_verify.call_args_list[0].kwargs["require_llm"] is True
     assert mock_verify.call_args_list[1].kwargs["slot"] == "v4-11"
     assert mock_verify.call_args_list[1].kwargs["require_llm"] is False
+    assert mock_verify.call_args_list[2].kwargs["slot"] == "v4-13"
+    assert mock_verify.call_args_list[2].kwargs["require_llm"] is False
 
 
 def test_app_peer_pillar_accepts_versioned_slot_service_name_and_rejects_other_slot() -> (

@@ -182,7 +182,7 @@ def _services(path: str) -> dict:
 
 def test_preview_todo_service_repeats_the_staging_compose_fields():
     # The preview compose is a single-slot copy synced with primary compose slot fields.
-    prod = _services("platform/30.todo/compose.yaml")["todo-v4-13"]
+    prod = _services("platform/30.todo/compose.yaml")["todo-v4-14"]
     slot = _services("platform/30.todo/preview.compose.yaml")["todo"]
     assert "build" not in prod and "build" not in slot
     for field in (

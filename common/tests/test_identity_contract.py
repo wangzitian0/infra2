@@ -595,6 +595,7 @@ def test_the_container_values_exist_for_both_classes() -> None:
         ("platform/alerting", "feishu-alert-bridge"),
         ("platform/todo", "todo-v4-11"),
         ("platform/todo", "todo-v4-13"),
+        ("platform/todo", "todo-v4-14"),
     }
     assert {service_id for service_id, _, _ in APP_VALUES} == {
         "finance_report/app",

@@ -26,6 +26,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import httpx
+from infra2_sdk.service import (
+    HttpClientSettings,
+    create_http_client,
+    request_with_retry,
+)
 
 OWNER = "wangzitian0"
 # The App packages that publish one version set per commit. Small packages
@@ -152,7 +157,9 @@ class Ghcr:
     ):
         self.owner = owner
         self.sleep = sleep
-        self.client = client or httpx.Client(timeout=30)
+        self.client = client or create_http_client(
+            HttpClientSettings(timeout_seconds=30.0), propagate_trace=False
+        )
         self.api_headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
@@ -161,16 +168,15 @@ class Ghcr:
 
     def _get(self, url: str, **kwargs) -> httpx.Response:
         """GET with 3 attempts on a timeout, a connection error or a 5xx. A read changes nothing."""
-        for attempt in range(3):
-            try:
-                reply = self.client.get(url, **kwargs)
-            except (httpx.TimeoutException, httpx.TransportError):
-                if attempt == 2:
-                    raise
-                continue
-            if reply.status_code < 500 or attempt == 2:
-                return reply
-        raise AssertionError("unreachable")
+        return request_with_retry(
+            self.client,
+            "GET",
+            url,
+            max_attempts=3,
+            retry_statuses=(500, 502, 503, 504),
+            backoff_base=0.25,
+            **kwargs,
+        )
 
     def versions(self, package: str, attempts: int = 3) -> list[Version]:
         """List twice and require the same ids. A deletion during a paged list skips a version."""

@@ -11,6 +11,11 @@ import os
 import time
 import httpx
 from dotenv import load_dotenv
+from infra2_sdk.service import (
+    HttpClientSettings,
+    create_http_client,
+    request_with_retry,
+)
 from common.core.environ import normalize_env_name as _common_normalize_env_name
 
 logger = logging.getLogger(__name__)
@@ -92,23 +97,25 @@ class DokployClient:
             **kwargs.pop("headers", {}),
         }
         url = f"{self.base_url}/{endpoint}"
-        retryable = method.upper() == "GET" or idempotent
-        attempt = 0
-        while True:
+        with create_http_client(
+            HttpClientSettings(timeout_seconds=30.0), propagate_trace=False
+        ) as client:
             try:
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.request(method, url, headers=headers, **kwargs)
-                    resp.raise_for_status()
+                resp = request_with_retry(
+                    client,
+                    method,
+                    url,
+                    headers=headers,
+                    max_attempts=_retries + 1,
+                    retry_statuses=self._TRANSIENT_STATUS,
+                    retry_non_idempotent=idempotent,
+                    backoff_base=2.0,
+                    sleep=_sleep,
+                    **kwargs,
+                )
+                resp.raise_for_status()
                 return resp.json() if resp.content else {}
             except httpx.HTTPStatusError as exc:
-                if (
-                    retryable
-                    and exc.response.status_code in self._TRANSIENT_STATUS
-                    and attempt < _retries
-                ):
-                    attempt += 1
-                    _sleep(2**attempt)
-                    continue
                 raise httpx.HTTPStatusError(
                     f"Dokploy API request failed for {method} {url}: "
                     f"status code {exc.response.status_code} {exc.response.reason_phrase}",
@@ -116,10 +123,6 @@ class DokployClient:
                     response=exc.response,
                 ) from exc
             except httpx.RequestError as exc:
-                if retryable and attempt < _retries:
-                    attempt += 1
-                    _sleep(2**attempt)
-                    continue
                 raise httpx.RequestError(
                     f"Error while performing Dokploy API request {method} {url}: {exc}",
                     request=exc.request,

@@ -27,7 +27,7 @@ from typing import Any, Dict, List
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from infra2_sdk.service import CallableCheck, init_service
+from infra2_sdk.service import CallableCheck, init_service, serve
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
@@ -1494,7 +1494,5 @@ _load_state()
 
 
 if __name__ == "__main__":
-    import uvicorn
-
     port = int(os.environ.get("WEBHOOK_PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port, workers=1, timeout_keep_alive=95)
+    serve(app, host="0.0.0.0", port=port, workers=1, timeout_keep_alive=95)
