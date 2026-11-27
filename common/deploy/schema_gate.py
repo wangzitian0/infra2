@@ -189,7 +189,11 @@ try:
                     sys.modules.pop("infra2_sdk.storage", None)
                     try:
                         try:
-                            runpy.run_module("infra2_sdk.storage", run_name="__main__")
+                            runpy.run_module(
+                                "infra2_sdk.storage",
+                                run_name="__main__",
+                                alter_sys=True,
+                            )
                             code = 0
                         except SystemExit as exc:
                             code = (
