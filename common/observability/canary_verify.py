@@ -830,6 +830,7 @@ def _evaluate_app_peer_pillar(
     sections: dict[str, str],
     installed_sdk: str,
     require_app_peer: bool,
+    expected_service_name: str | None = None,
 ) -> PillarResult:
     if "WORKER" not in sections and "SCHEMA_CHECK" not in sections:
         if require_app_peer:
@@ -884,11 +885,14 @@ def _evaluate_app_peer_pillar(
     )
     if not has_worker_log:
         problems.append("worker init_worker log line missing")
+    allowed_services = {"platform/todo", "platform-todo"}
+    if expected_service_name:
+        allowed_services.add(expected_service_name)
     if (
         worker_result is None
         or worker_result.get("ok") is not True
         or worker_result.get("status_code") != 200
-        or worker_result.get("service") not in {"platform/todo", "platform-todo"}
+        or worker_result.get("service") not in allowed_services
     ):
         problems.append("worker health result missing or failed")
 
@@ -1030,10 +1034,20 @@ def verify_canary(
         health_data = {"error": str(err)}
 
     observed_version = health_data.get("version")
+    observed_git_sha = health_data.get("git_sha")
+    if expected_version and health_ok:
+        want = expected_version.strip()
+        ver_matches = (
+            isinstance(observed_version, str) and observed_version.strip() == want
+        )
+        sha_matches = (
+            isinstance(observed_git_sha, str) and observed_git_sha.strip() == want
+        )
+        if not (ver_matches or sha_matches):
+            health_ok = False
+
     telemetry_version: str | None = None
-    if expected_version and _SAFE_VERSION_RE.fullmatch(expected_version.strip()):
-        telemetry_version = expected_version.strip()
-    elif (
+    if (
         health_ok
         and isinstance(observed_version, str)
         and observed_version.strip()
@@ -1041,13 +1055,8 @@ def verify_canary(
         and _SAFE_VERSION_RE.fullmatch(observed_version.strip())
     ):
         telemetry_version = observed_version.strip()
-
-    if expected_version and health_ok:
-        if (
-            not isinstance(observed_version, str)
-            or observed_version.strip() != expected_version.strip()
-        ):
-            health_ok = False
+    elif expected_version and _SAFE_VERSION_RE.fullmatch(expected_version.strip()):
+        telemetry_version = expected_version.strip()
 
     # The same environment, version and window scope the ClickHouse telemetry queries.
     # shlex.quote protects the SQL at the remote shell boundary.
@@ -1323,6 +1332,7 @@ def verify_canary(
         sections=sections,
         installed_sdk=installed_sdk,
         require_app_peer=require_app_peer,
+        expected_service_name=telem_service,
     )
 
     all_ok = (
