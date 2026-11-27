@@ -18,9 +18,9 @@ field. The exit code is 0 for a pass, 1 for a refusal and 4 when it cannot decid
 
 The command lines are ``python -m tools.stage_records list`` and ``... read``.
 
-Fail safe: ``list`` skips an artifact it doubts and writes the reason to stderr. A GitHub rate
-limit is not a doubt about one artifact: it stops the read with ``RuntimeError``. ``read`` never
-passes on a doubt. Standard library only: a step may run it before any dependency is installed.
+Fail safe: ``list`` skips an artifact it doubts and writes the reason to stderr. A read that
+GitHub did not answer (HTTP 403, 429 or 5xx, or a network error) is not a doubt about one
+artifact: it stops ``list`` and the SDK scan with ``RuntimeError``. ``read`` never passes on a doubt. Standard library only: a step may run it before any dependency is installed.
 """
 
 from __future__ import annotations
@@ -39,7 +39,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from common.deploy.github_api import Opener, get_json, github_headers, with_retry
+from common.deploy.github_api import (
+    Opener,
+    get_json,
+    github_headers,
+    is_transient,
+    with_retry,
+)
 
 AGENT = "infra2-stage-records/1.0"
 PREFIX = "stage-"
@@ -190,16 +196,23 @@ def _artifacts(
             return
 
 
-def _is_rate_limit(err: urllib.error.HTTPError) -> bool:
-    """HTTP 429, or HTTP 403 with no request left or with a ``Retry-After`` header."""
-    headers = err.headers or {}
-    return err.code == 429 or (
-        err.code == 403
-        and (
-            headers.get("x-ratelimit-remaining") == "0"
-            or headers.get("retry-after") is not None
-        )
-    )
+def _unread(exc: BaseException) -> bool:
+    """True when GitHub did not answer the read: HTTP 403 or 429 (a refusal or a rate limit),
+    HTTP 5xx or a network error after the bounded repeats. Such a record is unread, not absent."""
+    refused = isinstance(exc, urllib.error.HTTPError) and exc.code in (403, 429)
+    return refused or is_transient(exc)
+
+
+def _listed(repo: str, token: str, opener: Opener, max_pages: int) -> Iterator[dict]:
+    """The artifacts of ``_artifacts``. A listing page that GitHub did not answer is ``RuntimeError``."""
+    try:
+        yield from _artifacts(repo, token, opener, max_pages=max_pages)
+    except Exception as exc:
+        if not _unread(exc):
+            raise
+        raise RuntimeError(
+            f"stage_records: the artifact listing is unread ({type(exc).__name__}: {exc})"
+        ) from exc
 
 
 def _created(artifact: dict) -> datetime:
@@ -222,7 +235,7 @@ def _checked_records(
     allowed_phases = (
         set(phases) if phases is not None else ({phase} if phase else set())
     )
-    for artifact in _artifacts(repo, token, opener, max_pages=max_pages):
+    for artifact in _listed(repo, token, opener, max_pages):
         name = str(artifact.get("name") or "")
         if since and _created(artifact) < since:
             return
@@ -234,17 +247,13 @@ def _checked_records(
             continue
         try:
             checked = _check_artifact(artifact, repo, token, opener)
-        except urllib.error.HTTPError as exc:
-            if _is_rate_limit(exc):
-                # Each later call fails the same way. An unread record is not an absent
-                # record: release v3.2.60 was refused with an empty verified list (#1644).
-                raise RuntimeError(
-                    f"stage_records: GitHub rate limit at {name} (HTTP {exc.code}); "
-                    "the records are unread"
-                ) from exc
-            print(f"stage_records: skip {name} (HTTPError: {exc})", file=sys.stderr)
-            continue
         except Exception as exc:  # noqa: BLE001 - one bad artifact never hides the others
+            if _unread(exc):
+                # An unread record is not an absent record: release v3.2.60 was refused
+                # with an empty verified list while GitHub refused each read (#1644).
+                raise RuntimeError(
+                    f"stage_records: {name} is unread ({type(exc).__name__}: {exc})"
+                ) from exc
             print(
                 f"stage_records: skip {name} ({type(exc).__name__}: {exc})",
                 file=sys.stderr,

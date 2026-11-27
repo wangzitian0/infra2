@@ -65,14 +65,14 @@ def check_pins(
             on_main(tag, "staging", service=svc)
         except ValueError as exc:
             refusals.append(f"{svc}@{tag}: {exc}")
-        except RuntimeError as exc:
-            unread.append(f"{svc}@{tag}: {exc}")
+        except Exception as exc:  # noqa: BLE001 - the compare API did not answer
+            unread.append(f"{svc}@{tag}: {type(exc).__name__}: {exc}")
     try:
         sdk_verified(list(pins.items()), repo_root=root)
     except UnverifiedSdkError as exc:
         refusals.append(f"{exc}. {CANARY_FIRST}")
-    except (ValueError, RuntimeError, OSError) as exc:
-        unread.append(f"infra2-sdk versions: {exc}")
+    except Exception as exc:  # noqa: BLE001 - a lock or the stage records are unread
+        unread.append(f"infra2-sdk versions: {type(exc).__name__}: {exc}")
     return refusals, unread
 
 
