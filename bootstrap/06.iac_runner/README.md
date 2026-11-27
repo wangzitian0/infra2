@@ -139,7 +139,7 @@ authoritative version of all three.
 2. **Cut a release tag** when the change should reach staging:
    ```bash
    # The tool tags the head of origin/main with the next patch version (here v1.2.4).
-   # It prints `wait` while a train runs and in the 30 minutes after the newest tag train.
+   # It prints `wait` in the 30 minutes after the newest release tag was made.
    uv run python tools/release_tag.py --push -m "postgres config"
    ```
    `reconcile-iac-inputs.yml` diffs `v1.2.3..v1.2.4`, fans the changed services out

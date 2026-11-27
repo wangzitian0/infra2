@@ -24,7 +24,7 @@ uv run python -m tools.harness status --fetch --online
 ## 2. Staging train (after each merge)
 
 - Cut a release tag only with `uv run python tools/release_tag.py --push -m "<message>"`. It tags the head of `origin/main`.
-- The tool prints `wait` while a Staging run of the train workflow runs or waits, and in the 30 minutes after the start of the newest tag train.
+- The tool prints `wait` in the 30 minutes after the newest release tag was made. A tag train ends in that time.
 - Push a tag by hand only for a hotfix of a production outage (`docs/ssot/ops.pipeline.md` section 7).
 - On `wait`, do other work and run the tool again. The pull requests that merge in that time ride the next tag.
 - Before `close`, run the tool again. Write a remaining `wait` to the handover notes; the next session cuts the tag.

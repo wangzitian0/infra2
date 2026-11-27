@@ -1,99 +1,65 @@
-"""The release tag tool (#1644 Q3): one tag for each free train, cut on ``origin/main``."""
+"""The release tag tool (#1644 Q3): at most one release tag in 30 minutes, cut on ``origin/main``."""
 
 from __future__ import annotations
 
-import json
 import subprocess
 from datetime import datetime, timezone
 
-from common.deploy import release_tag
+import pytest
 
-NOW = datetime(2026, 11, 27, 8, 17, tzinfo=timezone.utc)
+from common.deploy import release_tag
+from common.deploy.release_tag import Tag
+
 MAIN = "a" * 40
 OLD = "b" * 40
 TAG_OBJECT = "d" * 40
-TAGS = {"v3.2.9": "c" * 40, "v3.2.59": OLD}
-DONE = "2026-11-27T07:00:00Z"
+TAGS = {"v3.2.9": Tag("c" * 40, "c" * 40), "v3.2.59": Tag(TAG_OBJECT, OLD)}
+MADE = datetime(2026, 11, 27, 8, 13, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 27, 8, 17, tzinfo=timezone.utc)
+LATER = datetime(2026, 11, 27, 8, 43, 13, tzinfo=timezone.utc)
 
 
-def _run(
-    tag: str, status: str, started: str, *, event: str = "push", title: str = ""
-) -> dict:
-    return {
-        "id": f"{event}-{tag}-{started}",
-        "event": event,
-        "head_branch": tag,
-        "status": status,
-        "run_started_at": started,
-        "display_title": title or f"Reconcile IaC Inputs (staging {tag})",
-        "html_url": f"https://example.test/{tag}",
-    }
+def _made(name: str) -> datetime:
+    assert name == "v3.2.59"
+    return MADE
 
 
-def test_a_tag_waits_while_a_tag_train_runs() -> None:
-    """Release v3.2.60 was pushed 4 minutes after v3.2.59 and got the verdict of that train."""
-    runs = [_run("v3.2.59", "in_progress", "2026-11-27T08:13:13Z")]
-    decision = release_tag.decide(MAIN, TAGS, runs, NOW)
-    assert decision.action == "wait"
-    assert "the push run of v3.2.59 is in_progress" in decision.reason
-
-
-def test_a_dispatch_run_holds_the_tag_and_a_production_run_does_not() -> None:
-    """Release v3.2.61 was pushed 51 seconds after the start of a dispatch replay of v3.2.60."""
-    train = _run("v3.2.59", "completed", DONE)
-    replay = _run("main", "waiting", "2026-11-27T08:16:00Z", event="workflow_dispatch")
-    decision = release_tag.decide(MAIN, TAGS, [train, replay], NOW)
-    assert decision.action == "wait"
-    assert "the workflow_dispatch run of main is waiting" in decision.reason
-    promotion = replay | {"display_title": "Reconcile IaC Inputs (PROD v3.2.59)"}
-    assert release_tag.decide(MAIN, TAGS, [train, promotion], NOW).action == "cut"
-
-
-def test_a_tag_waits_30_minutes_after_the_start_of_the_newest_train() -> None:
-    runs = [
-        _run("v3.2.58", "completed", "2026-11-27T07:18:39Z"),
-        _run("v3.2.59", "completed", "2026-11-27T08:13:13Z"),
-    ]
-    decision = release_tag.decide(MAIN, TAGS, runs, NOW)
-    assert (decision.action, decision.tag) == ("wait", "")
-    assert "the next tag is free at 2026-11-27T08:43Z" in decision.reason
-    later = datetime(2026, 11, 27, 8, 43, 13, tzinfo=timezone.utc)
-    assert release_tag.decide(MAIN, TAGS, runs, later) == release_tag.Decision(
+def test_a_tag_waits_30_minutes_after_the_newest_tag() -> None:
+    """Release v3.2.60 was made 4 minutes after v3.2.59 and got the verdict of that train."""
+    decision = release_tag.decide(MAIN, TAGS, _made, NOW)
+    assert decision == release_tag.Decision(
+        "wait",
+        "v3.2.59 was made at 2026-11-27T08:13Z; the next tag is free at 2026-11-27T08:43Z",
+    )
+    assert release_tag.decide(MAIN, TAGS, _made, LATER) == release_tag.Decision(
         "cut", "origin/main is ahead of v3.2.59", tag="v3.2.60", sha=MAIN
     )
 
 
-def test_a_tag_waits_when_the_train_of_the_newest_tag_is_not_listed() -> None:
-    for runs in ([], [_run("v3.2.58", "completed", DONE)]):
-        decision = release_tag.decide(MAIN, TAGS, runs, NOW)
-        assert decision.action == "wait"
-        assert decision.reason.startswith("the train of v3.2.59 is not in the run list")
-        assert "after=v3.2.59" in decision.reason
+def test_no_tag_and_no_time_read_when_the_newest_tag_is_the_head_of_main() -> None:
+    def unread(_name: str) -> datetime:
+        raise AssertionError("the tag time is not needed")
 
-
-def test_no_tag_when_the_newest_tag_is_the_head_of_main() -> None:
-    decision = release_tag.decide(OLD, TAGS, [], NOW)
+    decision = release_tag.decide(OLD, TAGS, unread, NOW)
     assert decision == release_tag.Decision(
         "none", "v3.2.59 is the head of origin/main"
     )
 
 
 class _Git:
-    """Answer ``git ls-remote`` and ``gh api``; record each other git command and its cwd."""
+    """Answer the read commands of the tool; record each command that changes a ref."""
 
-    def __init__(self, runs: list[dict], *, fail: str = "") -> None:
-        self.runs, self.fail = runs, fail
+    def __init__(self, *, fail: str = "", tagger: str = "tagger") -> None:
+        self.fail, self.tagger = fail, tagger
+        self.read: list[list[str]] = []
         self.commands: list[list[str]] = []
-        self.queries: list[str] = []
         self.cwds: set[object] = set()
 
     def __call__(self, argv, **kwargs):
-        out, code = "", 0
-        if argv[0] == "git":
-            self.cwds.add(kwargs.get("cwd"))
-            assert kwargs.get("timeout")
-        if argv[:2] == ["git", "ls-remote"]:
-            code = 1 if self.fail == "ls-remote" else 0
+        assert argv[0] == "git" and kwargs.get("timeout")
+        self.cwds.add(kwargs.get("cwd"))
+        out, code = "", 1 if argv[1] == self.fail else 0
+        if argv[1] == "ls-remote":
             # v3.2.59 is an annotated tag: its commit is on the peeled row.
             out = (
                 f"{MAIN}\trefs/heads/main\n"
@@ -101,50 +67,77 @@ class _Git:
                 f"{OLD}\trefs/tags/v3.2.59^{{}}\n"
                 f"{MAIN}\trefs/tags/v4.14.2-canary\n"
             )
-        elif argv[:2] == ["gh", "api"]:
-            self.queries.append(argv[2].split("?", 1)[1])
-            out = json.dumps({"workflow_runs": self.runs})
-            code = 1 if self.fail == "gh" else 0
+        elif argv[1] == "cat-file":
+            out = (
+                f"object {OLD}\ntype commit\ntag v3.2.59\n"
+                f"{self.tagger} t <t@example.com> {int(MADE.timestamp())} +0800\n\nRelease\n"
+            )
+        if (
+            argv[1] in ("ls-remote", "cat-file")
+            or argv[1:3]
+            == [
+                "fetch",
+                "--quiet",
+            ]
+            and argv[-1].startswith("refs/tags/")
+        ):
+            self.read.append(argv)
         else:
             self.commands.append(argv)
-            code = 1 if argv[1] == self.fail else 0
         return subprocess.CompletedProcess(argv, code, out, "refused" if code else "")
 
 
-def _main(git: _Git, tmp_path, *argv: str) -> int:
-    return release_tag.main(list(argv), root=tmp_path, runner=git, now=lambda: NOW)
+def _main(git: _Git, tmp_path, *argv: str, now: datetime = LATER) -> int:
+    return release_tag.main(list(argv), root=tmp_path, runner=git, now=lambda: now)
 
 
-def test_push_tags_the_commit_of_origin_main_and_a_plain_run_changes_nothing(
+def test_the_tool_reads_origin_with_git_and_the_time_of_the_tag_object(
     tmp_path, capsys
 ) -> None:
-    git = _Git([_run("v3.2.59", "completed", DONE)])
+    git = _Git()
     assert _main(git, tmp_path) == 0
+    assert git.read == [
+        ["git", "ls-remote", "origin", "refs/heads/main", "refs/tags/v*"],
+        ["git", "fetch", "--quiet", "origin", "refs/tags/v3.2.59"],
+        ["git", "cat-file", "-p", TAG_OBJECT],
+    ]
     assert git.commands == []
-    assert git.queries == ["per_page=30", "event=push&per_page=20"]
+    assert git.cwds == {tmp_path}
     assert "release tag: cut v3.2.60 at aaaaaaaa" in capsys.readouterr().out
+    assert release_tag.remote_refs(tmp_path, git) == (
+        MAIN,
+        {"v3.2.59": Tag(TAG_OBJECT, OLD)},
+    )
 
-    assert _main(git, tmp_path, "--push") == 0
+
+def test_a_lightweight_tag_uses_the_time_of_its_commit(tmp_path) -> None:
+    git = _Git(tagger="committer")
+    assert release_tag.tag_time("v3.2.59", TAGS["v3.2.59"], tmp_path, git) == MADE
+
+
+def test_push_tags_the_commit_of_origin_main(tmp_path, capsys) -> None:
+    git = _Git()
+    assert _main(git, tmp_path, "--push", "-m", "Release notes") == 0
     assert git.commands == [
         ["git", "fetch", "--quiet", "origin", MAIN],
-        ["git", "tag", "-a", "v3.2.60", "-m", "Release v3.2.60", MAIN],
+        ["git", "tag", "-a", "v3.2.60", "-m", "Release notes", MAIN],
         ["git", "push", "origin", "refs/tags/v3.2.60"],
     ]
     assert git.cwds == {tmp_path}
     assert "release tag: pushed v3.2.60 at aaaaaaaa" in capsys.readouterr().out
 
 
-def test_the_peeled_commit_of_an_annotated_tag_gives_none(tmp_path, capsys) -> None:
-    git = _Git([_run("v3.2.59", "completed", DONE)])
-    main_sha, tags = release_tag.remote_refs(tmp_path, git)
-    assert (main_sha, tags) == (MAIN, {"v3.2.59": OLD})
-    assert release_tag.decide(OLD, tags, [], NOW).action == "none"
+def test_wait_exits_1_and_pushes_nothing(tmp_path, capsys) -> None:
+    git = _Git()
+    assert _main(git, tmp_path, "--push", now=NOW) == 1
+    assert git.commands == []
+    assert "release tag: wait: v3.2.59 was made at" in capsys.readouterr().out
 
 
 def test_a_failed_push_exits_4_and_deletes_the_tag_of_this_run(
     tmp_path, capsys
 ) -> None:
-    git = _Git([_run("v3.2.59", "completed", DONE)], fail="push")
+    git = _Git(fail="push")
     assert _main(git, tmp_path, "--push") == 4
     assert git.commands[-1] == ["git", "tag", "-d", "v3.2.60"]
     out = capsys.readouterr().out
@@ -152,94 +145,33 @@ def test_a_failed_push_exits_4_and_deletes_the_tag_of_this_run(
     assert "pushed" not in out
 
 
-def test_wait_exits_1_and_pushes_nothing(tmp_path, capsys) -> None:
-    git = _Git([_run("v3.2.59", "queued", "2026-11-27T08:13:13Z")])
-    assert _main(git, tmp_path, "--push") == 1
-    assert git.commands == []
-    assert (
-        "release tag: wait: the push run of v3.2.59 is queued"
-        in capsys.readouterr().out
-    )
-
-
-def test_an_unreadable_run_list_exits_4(tmp_path, capsys) -> None:
-    git = _Git([_run("v3.2.59", "completed", "")])
-    assert _main(git, tmp_path, "--push") == 4
-    assert git.commands == []
-    assert "release tag: unreadable: a tag train" in capsys.readouterr().out
-
-
 def test_a_failed_tag_deletes_no_tag(tmp_path, capsys) -> None:
     """The name exists in this checkout: this run made no tag, so it deletes none."""
-    git = _Git([_run("v3.2.59", "completed", DONE)], fail="tag")
+    git = _Git(fail="tag")
     assert _main(git, tmp_path, "--push") == 4
     assert [argv[1] for argv in git.commands] == ["fetch", "tag"]
     assert "release tag: failed v3.2.60: git tag failed" in capsys.readouterr().out
 
 
 def test_an_interrupt_in_the_push_deletes_the_tag_of_this_run(tmp_path) -> None:
-    import pytest
-
     class _Interrupted(_Git):
         def __call__(self, argv, **kwargs):
-            if argv[:2] == ["git", "push"]:
+            if argv[1] == "push":
                 self.commands.append(argv)
                 raise KeyboardInterrupt
             return super().__call__(argv, **kwargs)
 
-    git = _Interrupted([_run("v3.2.59", "completed", DONE)])
+    git = _Interrupted()
     with pytest.raises(KeyboardInterrupt):
         _main(git, tmp_path, "--push")
     assert git.commands[-1] == ["git", "tag", "-d", "v3.2.60"]
 
 
-def test_an_unreadable_source_exits_4_and_pushes_nothing(tmp_path, capsys) -> None:
-    for source in ("gh", "ls-remote"):
-        git = _Git([_run("v3.2.59", "completed", DONE)], fail=source)
-        assert _main(git, tmp_path, "--push") == 4
-        assert git.commands == []
-        assert "release tag: unreadable:" in capsys.readouterr().out
-
-
-def test_none_reads_no_run_list(tmp_path, capsys) -> None:
-    class _Released(_Git):
-        def __call__(self, argv, **kwargs):
-            done = super().__call__(argv, **kwargs)
-            if argv[:2] == ["git", "ls-remote"]:
-                done.stdout = done.stdout.replace(
-                    MAIN + "\trefs/heads", OLD + "\trefs/heads"
-                )
-            return done
-
-    git = _Released([])
-    assert _main(git, tmp_path, "--push") == 0
-    assert (git.queries, git.commands) == ([], [])
-    assert "release tag: none: v3.2.59 is the head" in capsys.readouterr().out
-
-
-def test_a_dispatch_replay_of_the_newest_tag_counts_as_its_train() -> None:
-    replay = _run(
-        "main",
-        "completed",
-        DONE,
-        event="workflow_dispatch",
-        title="Reconcile IaC Inputs (staging v3.2.59)",
-    )
-    assert release_tag.decide(MAIN, TAGS, [replay], NOW).action == "cut"
-
-
-def test_the_production_title_prefix_is_the_run_name_of_the_workflow() -> None:
-    """A production promotion waits for the owner; it must not count as a busy Staging run."""
-    from common.core.constants import REPO_ROOT
-
-    workflow = (
-        REPO_ROOT / ".github/workflows" / release_tag.TRAIN_WORKFLOW
-    ).read_text()
-    run_name = next(
-        line for line in workflow.splitlines() if line.startswith("run-name:")
-    )
-    assert (
-        "Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }} "
-        in run_name
-    )
-    assert release_tag.PROD_TITLE_PREFIX == "Reconcile IaC Inputs (PROD"
+@pytest.mark.parametrize("source", ["ls-remote", "cat-file"])
+def test_an_unreadable_source_exits_4_and_pushes_nothing(
+    tmp_path, capsys, source
+) -> None:
+    git = _Git(fail=source)
+    assert _main(git, tmp_path, "--push") == 4
+    assert git.commands == []
+    assert f"release tag: unreadable: git {source} failed" in capsys.readouterr().out
