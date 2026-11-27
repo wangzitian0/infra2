@@ -144,9 +144,14 @@ class Ghcr:
     """GitHub Packages API (list, delete) and the GHCR registry API (read manifests)."""
 
     def __init__(
-        self, token: str, owner: str = OWNER, client: httpx.Client | None = None
+        self,
+        token: str,
+        owner: str = OWNER,
+        client: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self.owner = owner
+        self.sleep = sleep
         self.client = client or httpx.Client(timeout=30)
         self.api_headers = {
             "Authorization": f"Bearer {token}",
@@ -227,11 +232,13 @@ class Ghcr:
     def delete(self, package: str, version_id: int, attempts: int = 3) -> int:
         """Delete one version. Return the REST calls left in this hour for the shared login.
 
-        A timeout, a connection error or a 5xx gets 3 attempts. The first attempt can delete
+        A timeout, a connection error or a 5xx gets 3 attempts, 10 s and 20 s apart. The first attempt can delete
         the version before its reply is lost, so a 404 after a failed attempt is a success."""
         url = f"https://api.github.com/users/{self.owner}/packages/container/{package}/versions/{version_id}"
         for attempt in range(attempts):
             last = attempt == attempts - 1
+            if attempt:
+                self.sleep(10 * attempt)
             try:
                 reply = self.client.delete(url, headers=self.api_headers)
             except (httpx.TimeoutException, httpx.TransportError):
@@ -272,9 +279,8 @@ def clone(
             sleep(30)
             # A failed clone can leave files in the target; git refuses a non-empty target.
             target = argv[-1]
-            for entry in os.listdir(target):
-                path = os.path.join(target, entry)
-                (shutil.rmtree if os.path.isdir(path) else os.remove)(path)
+            shutil.rmtree(target, ignore_errors=True)
+            os.makedirs(target, exist_ok=True)
 
 
 def recent_commits(

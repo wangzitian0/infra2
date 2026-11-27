@@ -847,7 +847,7 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 | Fail closed | Each list is read twice and must name the same ids. A kept index that GHCR cannot read stops the plan. A manifest that a second list also lacks was replaced during the run and is skipped. No main commit in the window stops the plan. |
 | Call budget | No delete starts when fewer than `RESERVED_CALLS` (2000) REST calls remain for the shared login. The count is read again after each plan. The next run resumes. |
 
-Without `--apply` the tool prints the plan and deletes nothing. A deletion is permanent, so a person confirms the dry-run counts before the first `--apply`.
+Without `--apply` the tool prints the plan and deletes nothing. A deletion is permanent. The owner confirmed the dry-run counts before the first `--apply` (2026-11-25, #2000). A policy change needs a fresh dry run before merge.
 
 | Trigger | Value |
 |---|---|

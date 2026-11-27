@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 
@@ -151,7 +152,11 @@ def row(id_: int) -> dict:
 
 
 def ghcr_with(handler) -> r.Ghcr:
-    return r.Ghcr("t", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return r.Ghcr(
+        "t",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleep=lambda seconds: None,
+    )
 
 
 def test_the_list_reads_every_page() -> None:
@@ -339,7 +344,12 @@ def test_a_failed_clone_is_tried_again_and_a_third_failure_stops_the_plan() -> N
     def runner(argv, **kwargs):
         if argv[1] == "clone":
             calls.append("clone")
+            target = argv[-1]
+            # git refuses a non-empty target, so a leftover file must be gone.
+            assert os.listdir(target) == []
             if len(calls) < 3:
+                with open(os.path.join(target, "partial"), "w") as handle:
+                    handle.write("x")
                 raise subprocess.CalledProcessError(128, argv)
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout="abc1234ff\n", stderr="")
@@ -355,3 +365,17 @@ def test_a_failed_clone_is_tried_again_and_a_third_failure_stops_the_plan() -> N
 
     with pytest.raises(subprocess.CalledProcessError):
         r.recent_commits("truealpha", NOW, runner=broken, sleep=lambda s: None)
+
+
+def test_a_delete_retry_waits_longer_each_time() -> None:
+    naps: list[float] = []
+    replies = iter([503, 503, 204])
+    ghcr = r.Ghcr(
+        "t",
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda req: httpx.Response(next(replies)))
+        ),
+        sleep=naps.append,
+    )
+    ghcr.delete("p", 7)
+    assert naps == [10, 20]
