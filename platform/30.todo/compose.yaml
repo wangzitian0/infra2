@@ -13,7 +13,7 @@ services:
     # Built and published by infra2-sdk release.yml from canary/todo at the same tag, so the
     # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
     # is the one reader of this line.
-    # Staging soak trigger: prove v4.13.0 Canary image before app rollout.
+    # Staging soak trigger: verify Canary v4.13.0 after iac-runner-staging bootstrap fix.
     image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.0@sha256:ec62302213a62f521266089bfb6044a339fb03c6fd4958933c33d768899a63f1
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
