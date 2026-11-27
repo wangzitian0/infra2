@@ -44,7 +44,7 @@ class TodoDeployer(Deployer):
         ProbeFacet(
             name="todo-canary-status",
             kind="http",
-            target="http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status",
+            target="http://platform-todo-v4-14${ENV_SUFFIX}:8000/api/canary/status",
             expected="200",
             severity="error",
             timeout_seconds=15,
@@ -53,6 +53,14 @@ class TodoDeployer(Deployer):
             name="todo-v4-11-canary-status",
             kind="http",
             target="http://platform-todo-v4-11${ENV_SUFFIX}:8000/api/canary/status",
+            expected="200",
+            severity="error",
+            timeout_seconds=15,
+        ),
+        ProbeFacet(
+            name="todo-v4-13-canary-status",
+            kind="http",
+            target="http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status",
             expected="200",
             severity="error",
             timeout_seconds=15,
@@ -73,6 +81,7 @@ class TodoDeployer(Deployer):
             app_containers=(
                 "platform-todo-v4-11${ENV_SUFFIX}",
                 "platform-todo-v4-13${ENV_SUFFIX}",
+                "platform-todo-v4-14${ENV_SUFFIX}",
             ),
             auth_method="approle",
         ),

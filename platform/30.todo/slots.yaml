@@ -1,24 +1,29 @@
-schema_version: 1
 slots:
-  - slot: v4-11
-    version: "4.11.2"
-    digest: "sha256:b5e9a3c547360e7d93d4f0fda873e797d82498ef2f1214042da2127e4cd925eb"
-    compose_service: todo-v4-11
-    container_prefix: platform-todo-v4-11
-    otel_service_name: platform-todo-v4-11
-    database: todo_v4_11
-    pg_role: todo_v4_11_app
-    redis_key_prefix: "canary:v4-11:probe:"
-    s3_key_prefix: "canary/v4-11/"
-    primary: false
-  - slot: v4-13
-    version: "4.13.2"
-    digest: "sha256:6c7d0bf0d8bd4e49bc0b88ea5ecff4713532f23636d8997dc61aec9103178bb3"
-    compose_service: todo-v4-13
-    container_prefix: platform-todo-v4-13
-    otel_service_name: platform-todo-v4-13
-    database: todo_v4_13
-    pg_role: todo_v4_13_app
-    redis_key_prefix: "canary:v4-13:probe:"
-    s3_key_prefix: "canary/v4-13/"
-    primary: true
+- slot: v4-11
+  version: 4.11.2
+  digest: sha256:b5e9a3c547360e7d93d4f0fda873e797d82498ef2f1214042da2127e4cd925eb
+  compose_service: todo-v4-11
+  container_prefix: platform-todo-v4-11
+  otel_service_name: platform-todo-v4-11
+  database: todo_v4_11
+  pg_role: todo_v4_11_app
+  redis_key_prefix: 'canary:v4-11:probe:'
+  s3_key_prefix: canary/v4-11/
+  primary: false
+- slot: v4-13
+  version: 4.13.2
+  digest: sha256:6c7d0bf0d8bd4e49bc0b88ea5ecff4713532f23636d8997dc61aec9103178bb3
+  compose_service: todo-v4-13
+  container_prefix: platform-todo-v4-13
+  otel_service_name: platform-todo-v4-13
+  database: todo_v4_13
+  pg_role: todo_v4_13_app
+  redis_key_prefix: 'canary:v4-13:probe:'
+  s3_key_prefix: canary/v4-13/
+  primary: false
+- slot: v4-14
+  version: 4.14.1
+  digest: sha256:a0d5f800d1a82ae784c15439996db8baeb597fdea747cac6b2564356185ac3f3
+  database: todo_4_14
+  pg_role: todo_4_14_app
+  primary: true
