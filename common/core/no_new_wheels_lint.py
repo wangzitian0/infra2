@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
 
 SIGNALS_YAML = ROOT / "docs/ssot/watchdog-signals.yaml"
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
+WATCHDOG_WORKFLOW = ROOT / ".github/workflows/watchdog.yml"
 PRIMITIVES = (
     "deliver_out_of_band_alert(",
     "deliver_out_of_band_card(",
@@ -328,6 +329,11 @@ def main() -> int:
     errors = (
         lint_python_callsites(signals=signals)
         + lint_scheduled_jobs(signals=signals)
+        + (
+            lint_scheduled_jobs(WATCHDOG_WORKFLOW, signals=signals)
+            if WATCHDOG_WORKFLOW.is_file()
+            else []
+        )
         + lint_workflow_callsites(signals=signals)
     )
     for e in errors:

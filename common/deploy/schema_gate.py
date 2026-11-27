@@ -1,4 +1,4 @@
-"""Pre-deploy schema gate: runs ``python -m infra2_sdk.runtime.schema_check`` inside the
+"""Pre-deploy schema gate: runs ``python -m infra2_sdk.storage check-schema`` inside the
 app's own published image, against the target env's live database (#698, #1824, SSOT
 ``ops.standards.md`` Rule 7 / Infra-022 TODOWRITE:20).
 
@@ -50,7 +50,7 @@ from dataclasses import dataclass
 
 from common.deploy.in_service import container_names
 
-# The SDK schema_check exit codes (infra2_sdk.runtime.schema_check). 2 is argparse's
+# The SDK schema check exit codes (infra2_sdk.storage check-schema). 2 is argparse's
 # usage error. Every code except EXIT_OK blocks the deploy.
 EXIT_OK = 0
 EXIT_BLOCKED = 1

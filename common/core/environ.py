@@ -219,7 +219,7 @@ def get_env(env_name: str | None = None) -> dict[str, str | None]:
     there is no default, and production is chosen like any other environment.
 
     ``env_name`` targets that environment and ignores the process variables. A caller
-    that already knows its target (``common.deploy.promote`` deploys staging and
+    that already knows its target (fixed-env deploy deploys staging and
     production from one process) passes it here. ENV_SUFFIX then follows the name,
     not the process ENV_SUFFIX.
     """

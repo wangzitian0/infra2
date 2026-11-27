@@ -167,6 +167,7 @@ def _generator_inputs() -> list[str]:
     # Not a generator input, but its guard (test_project_lifecycle_governance)
     # also runs only when the classifier sees a non-doc change (#1826).
     paths.append(gen_project_index.PROJECT_DIR / "archive" / "README.md")
+    paths.append(ROOT / ".agents/skills/deploy-evidence/SKILL.md")
     return [str(p.relative_to(ROOT)) for p in paths]
 
 

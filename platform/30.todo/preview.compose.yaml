@@ -1,6 +1,6 @@
 # Preview slot of the Canary Todo (#1647). It reads no Vault. The Preview render gives
 # REDIS_PASSWORD, POSTGRES_ADMIN_PASSWORD, TODO_POSTGRES_PASSWORD, S3_ACCESS_KEY and S3_SECRET_KEY
-# as fresh values for this slot (common.deploy.preview.render_throwaway_secrets).
+# as fresh values for this slot.
 # The slot runs its own Redis, Postgres and S3 on a private network. Nothing is shared
 # with staging or production, and the volumes are deleted with the slot.
 services:
@@ -118,7 +118,7 @@ services:
     # Built and published by infra2-sdk release.yml from canary/todo at the same tag, so the
     # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
     # is the one reader of this line.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.0@sha256:ec62302213a62f521266089bfb6044a339fb03c6fd4958933c33d768899a63f1
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.2@sha256:6c7d0bf0d8bd4e49bc0b88ea5ecff4713532f23636d8997dc61aec9103178bb3
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
     cpu_shares: 512

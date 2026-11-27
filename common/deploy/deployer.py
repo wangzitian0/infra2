@@ -87,7 +87,7 @@ __all__ = [
 ]
 
 
-# infra2#525: like common.deploy.promote.wait_for_rollout, Dokploy deployment records
+# infra2#525: like deploy_v2 rollout polling, Dokploy deployment records
 # carry no caller-supplied correlation id, so a start-timestamp floor (captured just
 # before OUR OWN deploy/redeploy_compose() call) is the only available signal that a
 # "new" record belongs to a DIFFERENT, unrelated trigger rather than to us. Small
@@ -224,7 +224,7 @@ class Deployer:
 
         The process environment wins when it exists: it carries the operator's
         ENV_SUFFIX and DATA_PATH overrides. A caller that names its target, such as
-        ``common.deploy.promote`` (it deploys staging and production from a CI process
+        fixed-env deploy_v2 (it deploys staging and production from a CI process
         that has no INFRA_ENVIRONMENT), then needs no process environment: the named
         target stands in. With neither, ``EnvironmentNotSetError`` rises (#1039).
         """
@@ -297,7 +297,7 @@ class Deployer:
     def compose_env_overrides(
         cls, *, env: str, domain: str, env_suffix: str
     ) -> dict[str, str]:
-        """Extra compose env vars a fixed-app deploy (common.deploy.promote.deploy) should
+        """Extra compose env vars a fixed-app deploy (deploy_v2) should
         merge in beyond its own shared, hardcoded assembly (IMAGE_TAG, INTERNAL_DOMAIN,
         identity.deploy_env(), openpanel_env(), otel_env(), ...). Default: none.
 
@@ -344,8 +344,8 @@ class Deployer:
         common/tests/test_service_facets.py.
 
         ``env`` selects the target environment's Vault store. The deploy path
-        that already knows which env it is deploying — e.g.
-        common.deploy.promote.deploy(), which handles staging THEN prod within
+        that already knows which env it is deploying — e.g. fixed-env
+        deploy_v2(), which handles staging THEN prod within
         one process/CLI invocation — must not depend on os.environ["ENV"]
         happening to match, since nothing sets it for that in-process path
         (unlike the legacy invoke <service>.sync subprocess, which always runs

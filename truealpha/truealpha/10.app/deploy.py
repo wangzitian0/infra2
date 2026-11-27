@@ -173,7 +173,7 @@ class AppDeployer(Deployer):
         hypothetical) builds its Dokploy env push from this method, and REPLACES the
         compose's entire env wholesale (only VAULT_ROLE_ID/VAULT_SECRET_ID survive via
         _preserve_runtime_env) -- omitting APP_HOST here would silently wipe it on the
-        next auto-sync, reproducing truealpha#474's outage. common.deploy.promote.deploy
+        next auto-sync, reproducing truealpha#474's outage. Fixed-env deploy_v2
         (the staging/prod deploy_v2 path) never calls this method at all -- it calls
         compose_env_overrides directly instead (see promote.py) -- so both paths must
         independently end up with APP_HOST; this just forwards to the same formula.
@@ -343,12 +343,12 @@ class AppDeployer(Deployer):
         """Sync-path S3 readiness check.
 
         The iac-runner's sync NEVER calls pre_compose (it builds env straight
-        from compose_env_base), so _ensure_minio_bucket above only runs in the
+        from compose_env_base), so _ensure_s3_bucket above only runs in the
         manual pre-compose/setup tasks — a real deploy would silently ship an
         app with no S3 credentials. This hook IS called by sync; it cannot
         provision (no docker CLI in the runner) but it can refuse to be silent.
 
-        Also called directly by common.deploy.promote.deploy() (truealpha#447):
+        Also called directly by deploy_v2 (truealpha#447):
         that fixed-compose path never ran pre_compose/sync either, so SECRET_KEY
         was never auto-provisioned there and a fresh/rotated Vault environment
         would crash-loop app-web with no self-healing. ``env`` is required by
@@ -535,8 +535,6 @@ class AppDeployer(Deployer):
             warning(
                 f"Could not clear lifecycle rules on '{bucket_name}', verify manually: {result.stderr}"
             )
-
-    _ensure_minio_bucket = _ensure_s3_bucket
 
 
 if shared_tasks:

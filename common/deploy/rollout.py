@@ -3,7 +3,7 @@
 This module provides one poller that replaces duplicate polling implementations:
 
 - common.deploy.dokploy_adapter.wait_for_new_deployment_record
-- common.deploy.promote.wait_for_rollout
+- common.deploy.steps rollout polling
 
 Flags reproduce each caller contract:
 

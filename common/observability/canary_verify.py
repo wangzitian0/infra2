@@ -773,16 +773,6 @@ def _parse_telemetry_pillar(
     return PillarResult(ok=ok, summary=summary, details=details)
 
 
-def _version_at_least(raw_version: str, minimum: tuple[int, ...]) -> bool:
-    """Return True when raw_version parses cleanly and is >= minimum."""
-    parts = [
-        part.strip() for part in str(raw_version or "").strip().lstrip("v").split(".")
-    ]
-    if not parts or any(not part.isdigit() for part in parts):
-        return False
-    return tuple(int(part) for part in parts) >= minimum
-
-
 def _split_exit_section(raw: str) -> tuple[int | None, str]:
     """Extract trailing `__EXIT__=<code>` marker and return `(code, body)`."""
     lines = (raw or "").splitlines()

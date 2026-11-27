@@ -44,7 +44,7 @@ SCHEDULED = {
 #: (workflow, job, alert step, resolve step).
 SPLIT_STEPS = [
     (
-        "ops-checks.yml",
+        "watchdog.yml",
         "digest",
         "Alert on failure",
         "Resolve the digest failure alert",
@@ -363,7 +363,7 @@ def test_the_runner_health_step_goes_red_and_never_pages(monkeypatch, tmp_path) 
             return json.dumps(health).encode()
 
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: Response())
-    script = _script("ops-checks.yml", "watchdog", RUNNER_STEP)
+    script = _script("watchdog.yml", "watchdog", RUNNER_STEP)
 
     assert world.run(script) == 1
     assert world.cards == [] and world.api.open_titles() == []  # no page, no state
@@ -479,7 +479,7 @@ def test_a_reminder_run_runs_only_the_reminder_and_probe_steps(
         name
         for name in DIGEST_STEPS
         if _runs(
-            _step("ops-checks.yml", "digest", name),
+            _step("watchdog.yml", "digest", name),
             ok=True,
             env={},
             event=event,
@@ -489,7 +489,7 @@ def test_a_reminder_run_runs_only_the_reminder_and_probe_steps(
     }
     assert ran == expected
     paged = _runs(
-        _step("ops-checks.yml", "digest", "Alert on failure"),
+        _step("watchdog.yml", "digest", "Alert on failure"),
         ok=False,
         env={},
         event=event,
@@ -502,7 +502,7 @@ def test_a_reminder_run_runs_only_the_reminder_and_probe_steps(
 def test_the_promotion_reminder_task_is_a_dispatch_choice_that_selects_the_digest_job() -> (
     None
 ):
-    workflow = yaml.safe_load((WORKFLOWS / "ops-checks.yml").read_text())
+    workflow = yaml.safe_load((WORKFLOWS / "watchdog.yml").read_text())
     assert (
         "promotion-reminder"
         in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]

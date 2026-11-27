@@ -19,7 +19,7 @@
 #   3. Everything else (vault-agent, llm, web, Traefik labels, healthchecks) mirrors the
 #      staging/prod template so a preview is a faithful, functional copy of the app.
 #
-# Env vars supplied by common.deploy.preview (see common.deploy.promote for the shared set):
+# Env vars supplied by preview deploy (see fixed-env deploy_v2 for the shared set):
 # IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
 # INTERNAL_DOMAIN, CONFIGURATION_SHA256, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID.
 services:
@@ -176,7 +176,7 @@ services:
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3-staging:9000
       # Same telemetry contract as 10.app/compose.yaml: the one shared collector, and the
-      # identity common.deploy.preview issues for this alias (deployment.environment.name =
+      # identity preview deploy issues for this alias (deployment.environment.name =
       # pr-<N> / commit-<sha7> / main). Never defaulted here.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}

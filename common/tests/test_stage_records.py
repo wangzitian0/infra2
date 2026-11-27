@@ -803,7 +803,7 @@ def test_the_card_holds_the_tag_the_record_and_the_command_and_dispatches_nothin
 
 
 def test_the_reminder_job_runs_at_2100_utc_plus_8_and_reads_only() -> None:
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ops-checks.yml").read_text())
+    workflow = yaml.safe_load((ROOT / ".github/workflows/watchdog.yml").read_text())
     assert {"cron": "0 13 * * *"} in workflow["on"]["schedule"]
     digest = workflow["jobs"]["digest"]
     step = next(s for s in digest["steps"] if s["name"].startswith("Remind the owner"))

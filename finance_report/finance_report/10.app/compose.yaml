@@ -20,7 +20,7 @@
 x-infra2:
   # One vault-agent sidecar, container finance_report-app-vault-agent${ENV_SUFFIX}. Its
   # template is rendered from env.manifest.json (common.security.secrets_render). The
-  # deploy stops when the release template differs (common.deploy.promote).
+  # deploy stops when the release template differs (deploy_v2).
   vault:
     name: finance_report-app
 

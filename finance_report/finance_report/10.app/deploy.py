@@ -199,7 +199,7 @@ class AppDeployer(Deployer):
 
         Production takes the compose file's inline defaults; staging carried these three
         distinct values in Vault on 2026-09-07 (#633). Bucket names stay in step with
-        _ensure_minio_bucket, which reads S3_BUCKET from Vault for the same environment.
+        _ensure_s3_bucket, which reads S3_BUCKET from Vault for the same environment.
         """
         if env == "staging":
             return {
@@ -215,7 +215,7 @@ class AppDeployer(Deployer):
 
         Deployer.composing() builds its Dokploy env payload from compose_env_base and
         replaces the compose env wholesale. Forwarding to compose_env_overrides keeps
-        both deploy_v2 (common.deploy.promote) and iac-runner sync aligned on S3_BUCKET,
+        both deploy_v2 and iac-runner sync aligned on S3_BUCKET,
         S3_PUBLIC_BUCKET, and API_RATE_LIMIT_REQUESTS.
         """
         base = super().compose_env_base(env)
@@ -331,8 +331,6 @@ class AppDeployer(Deployer):
         if to_write:
             write_store_keys(secrets, to_write)
             success(f"Vault: stored {sorted(to_write)}")
-
-    _ensure_minio_bucket = _ensure_s3_bucket
 
     _s3_bucket_request = staticmethod(_s3_bucket_request)
 

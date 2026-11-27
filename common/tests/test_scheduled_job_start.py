@@ -180,3 +180,14 @@ def test_units_are_the_job_names_without_run_ids_or_times() -> None:
         "read:unverifiable",
     )
     assert sjs.evaluate(FakeGitHub([], {}), now=NOW).units == ()
+
+
+def test_evaluate_scans_both_ops_checks_and_watchdog_workflows() -> None:
+    gh = FakeGitHub([NEVER_STARTED_RUN], {37426882755: [NEVER_STARTED_JOB]})
+
+    verdict = sjs.evaluate(gh, now=NOW, workflow=sjs.WORKFLOWS)
+
+    assert verdict.status == sjs.NEVER_STARTED
+    listing = [path for path in gh.paths if "/actions/workflows/" in path]
+    assert any("/actions/workflows/ops-checks.yml/runs" in p for p in listing)
+    assert any("/actions/workflows/watchdog.yml/runs" in p for p in listing)

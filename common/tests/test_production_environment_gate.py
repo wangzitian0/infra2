@@ -757,40 +757,40 @@ def test_every_ungated_job_declares_secret_limits() -> None:
 
 
 @pytest.mark.parametrize(
-    ("job_name", "extra_secret"),
+    ("workflow_name", "job_name", "extra_secret"),
     [
-        ("audit", "IAC_WEBHOOK_SECRET"),
-        ("audit", "TA_PASSWORD"),
-        ("audit", "INFRA2_WATCHDOG_SSH_PRIVATE_KEY"),
-        ("scheduled-app-audit", "IAC_WEBHOOK_SECRET"),
-        ("watchdog", "SIGNOZ_API_KEY"),
-        ("digest", "DOKPLOY_API_KEY"),
-        ("preview-leak-check", "INFRA2_WATCHDOG_SSH_PRIVATE_KEY"),
-        ("host-hygiene-schedule", "CF_API_TOKEN"),
-        ("facet-reconcile", "IAC_WEBHOOK_SECRET"),
-        ("vault-self-refresh-audit", "IAC_WEBHOOK_SECRET"),
-        ("secrets-reconcile", "DOKPLOY_API_KEY"),
+        ("ops-checks.yml", "audit", "IAC_WEBHOOK_SECRET"),
+        ("ops-checks.yml", "audit", "TA_PASSWORD"),
+        ("ops-checks.yml", "audit", "INFRA2_WATCHDOG_SSH_PRIVATE_KEY"),
+        ("ops-checks.yml", "scheduled-app-audit", "IAC_WEBHOOK_SECRET"),
+        ("watchdog.yml", "watchdog", "SIGNOZ_API_KEY"),
+        ("watchdog.yml", "digest", "DOKPLOY_API_KEY"),
+        ("ops-checks.yml", "preview-leak-check", "INFRA2_WATCHDOG_SSH_PRIVATE_KEY"),
+        ("ops-checks.yml", "host-hygiene-schedule", "CF_API_TOKEN"),
+        ("ops-checks.yml", "facet-reconcile", "IAC_WEBHOOK_SECRET"),
+        ("ops-checks.yml", "vault-self-refresh-audit", "IAC_WEBHOOK_SECRET"),
+        ("ops-checks.yml", "secrets-reconcile", "DOKPLOY_API_KEY"),
     ],
 )
 def test_ops_checks_ungated_job_fails_when_reading_secret_outside_limit(
-    job_name: str, extra_secret: str
+    workflow_name: str, job_name: str, extra_secret: str
 ) -> None:
-    """Adding an unauthorized secret to any ops-checks.yml ungated job fails closed."""
+    """Adding an unauthorized secret to any ops-checks.yml or watchdog.yml ungated job fails closed."""
     workflows = _load_workflows(WORKFLOWS_DIR)
-    job = yaml.safe_load(yaml.safe_dump(workflows["ops-checks.yml"]["jobs"][job_name]))
+    job = yaml.safe_load(yaml.safe_dump(workflows[workflow_name]["jobs"][job_name]))
     job.setdefault("env", {})["UNEXPECTED_SECRET"] = (
         f"${{{{ secrets.{extra_secret} }}}}"
     )
     mutated = {
         **workflows,
-        "ops-checks.yml": {
-            **workflows["ops-checks.yml"],
-            "jobs": {**workflows["ops-checks.yml"]["jobs"], job_name: job},
+        workflow_name: {
+            **workflows[workflow_name],
+            "jobs": {**workflows[workflow_name]["jobs"], job_name: job},
         },
     }
     errors = contract_errors(mutated, GATED_JOBS, UNGATED_JOBS)
     assert any(
-        f"ops-checks.yml:{job_name} is ungated and reads ['{extra_secret}'] outside its secret limit"
+        f"{workflow_name}:{job_name} is ungated and reads ['{extra_secret}'] outside its secret limit"
         in e
         for e in errors
     ), errors

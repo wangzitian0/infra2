@@ -12,17 +12,13 @@ name: Ops Checks
 
 "on":
   schedule:
-    - cron: "17 2 * * *"
     - cron: "37 2 * * *"
-    - cron: "0 1 * * 1"
-    - cron: "0 2 1 * *" # monthly operational quality & recall summary (#425 T4)
     - cron: "47 * * * *" # hourly Dokploy preview leak detection
     - cron: "27 4 * * *" # daily re-ensure of the VPS host-hygiene Dokploy schedule
     - cron: "17 7 * * *" # daily facet reconcile: compose_id + config-hash + dns drift (#542)
     - cron: "17 8 * * *" # daily Vault self-refresh audit (#531)
     - cron: "27 8 * * *" # daily secrets reconcile + capacity (secrets supply chain, PR-E)
     - cron: "13 5 * * *" # daily e2e_regressions smoke pyramid against live production
-    - cron: "0 13 * * *" # 21:00 UTC+8 daily reminder: a release tag is green in staging and not in production (#1645)
     - cron: "7 6 * * *" # daily report-only check: a hook p95 duration above 70% of its budget (#1823)
   workflow_dispatch:
     inputs:
@@ -36,13 +32,10 @@ name: Ops Checks
           - scheduled-app-audit
           - preview-leak-check
           - host-hygiene-schedule
-          - out-of-band-watchdog
-          - watchdog-weekly-digest
           - facet-reconcile
           - vault-self-refresh-audit
           - secrets-reconcile
           - e2e-regressions-smoke
-          - promotion-reminder
           - hook-duration-report
           - all
       dry_run:
@@ -50,22 +43,8 @@ name: Ops Checks
         required: false
         type: boolean
         default: false
-      ssh_targets_override:
-        description: "Optional newline-separated name|command|expected_text SSH targets for manual diagnostics"
-        required: false
-        type: string
-        default: ""
-      peer_liveness_bound_cap_hours:
-        # truealpha#876 drill: the cap only TIGHTENS the measured bound; `0` forces the
-        # estate scheduler-liveness check red. A run with this set pages and
-        # opens/comments on the issue, and never closes one.
-        description: "Drill (out-of-band-watchdog): cap the estate scheduler-liveness bounds at this many hours (empty = measured bound; 0 = red)"
-        required: false
-        type: string
-        default: ""
 
-# issues: granted per job below (watchdog writes the issue trail and its page state,
-# digest reads issues, facet-reconcile / vault-self-refresh-audit / secrets-reconcile
+# issues: granted per job below (facet-reconcile / vault-self-refresh-audit / secrets-reconcile
 # write their page-dedup state, #962), not here: each job gets only the scopes it
 # uses.
 permissions:
@@ -73,7 +52,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-scheduled-app-audit' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '0 13 * * *' && 'infra2-promotion-reminder' || github.event_name == 'schedule' && github.event.schedule == '7 6 * * *' && 'infra2-hook-duration-report' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-scheduled-app-audit' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '7 6 * * *' && 'infra2-hook-duration-report' || github.event_name == 'schedule' && 'ops-checks-scheduled-fallback' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
   cancel-in-progress: false
 
 env:
@@ -416,314 +395,18 @@ jobs:
           PY
 
   watchdog:
-    # schedule-signal-exempt: delivers the whole github-plane infra2-* signal family (each individually registered in watchdog-signals.yaml)
-    name: Check infra2 host and alert bridge
-    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'out-of-band-watchdog' || inputs.task == 'all')) }}
+    # Moved to .github/workflows/watchdog.yml; zero-secret stub removed once main contract drops entry.
+    if: false
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read
-      # truealpha#876 W4: the issue trail opens, comments on and closes watchdog issues;
-      # the Feishu-failure fallback issue predates it.
-      issues: write
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
-      # truealpha#876 W4: each step appends its verdicts here; the last step reads them.
-      INFRA2_WATCHDOG_VERDICTS_PATH: ${{ github.workspace }}/watchdog-verdicts.jsonl
-      # Manual SSH diagnostics are not the scheduled checks: the issue trail stays off.
-      INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN: ${{ github.event_name == 'workflow_dispatch' && inputs.ssh_targets_override != '' && '1' || '0' }}
-      # truealpha#876 drill knob (validated as a number by the tool, never run as shell).
-      INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs.peer_liveness_bound_cap_hours || '' }}
-      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
-      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
-      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
-      INFRA2_WATCHDOG_HTTP_TARGETS: ${{ vars.INFRA2_WATCHDOG_HTTP_TARGETS }}
-      INFRA2_WATCHDOG_WORKER_STATUS_URL: ${{ vars.INFRA2_WATCHDOG_WORKER_STATUS_URL }}
-      INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS: ${{ vars.INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS }}
-      INFRA2_WATCHDOG_RETRY_DELAY_SECONDS: ${{ vars.INFRA2_WATCHDOG_RETRY_DELAY_SECONDS }}
-      INFRA2_WATCHDOG_ENABLE_FALLBACK_ISSUE: ${{ vars.INFRA2_WATCHDOG_ENABLE_FALLBACK_ISSUE }}
-      INFRA2_WATCHDOG_FALLBACK_ISSUE_LABEL: ${{ vars.INFRA2_WATCHDOG_FALLBACK_ISSUE_LABEL }}
-      INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
-      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
-      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
-      INFRA2_WATCHDOG_SSH_TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs.ssh_targets_override != '' && inputs.ssh_targets_override || vars.INFRA2_WATCHDOG_SSH_TARGETS }}
-      WATCHDOG_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - run: "true"
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Install Python dependencies
-        run: |
-          uv sync --locked --no-dev
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-      - name: Configure SSH key
-        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
-        uses: ./.github/actions/ssh-setup
-        with:
-          key-name: infra2_watchdog
-          private-key: ${{ env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-
-      - name: Run watchdog
-        id: watchdog
-        # #908: failures of checks another layer pages go to the daily report, not the pager.
-        env:
-          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
-          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
-          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
-        run: python tools/out_of_band_watchdog.py
-
-      # #1433: send the report when the watchdog and prior steps succeeded.
-      - name: Build and send daily positive stability report
-        if: ${{ success() }}
-        env:
-          INFRA2_WATCHDOG_OUTCOME: ${{ steps.watchdog.outcome }}
-          INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-          INFRA2_WATCHDOG_OUTAGES_URL: ${{ vars.INFRA2_WATCHDOG_OUTAGES_URL }}
-          INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
-          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
-          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
-          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
-        run: python tools/stability_report.py --daily
-
-      # #625 item 2 / #658 recommendation 8: the runner's /health already carries the
-      # `op whoami` verdict (op_service_account_token); nothing scheduled read it while the
-      # 1Password service account was dead from 09-04 to 09-07. The step goes red the same night.
-      - name: Runner health — 1Password service account and deploy prerequisites
-        if: always()
-        env:
-          IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
-          # #1648: the 60 s probe iac-runner-http pages this condition; this daily step
-          # keeps its check and goes red, and its verdict opens the issue-trail issue.
-        run: |
-          python - <<'PY'
-          import json, os, sys, urllib.request
-          from common.observability.issue_trail import CheckVerdict, record_verdicts
-          from common.observability.watchdog_issue_trail_cli import RUNNER_HEALTH_SOURCE
-          def record(ok, detail):
-              # truealpha#876 W4: recorded before paging, so a failed delivery still leaves a
-              # verdict; a failed write never stops the page (the trail then reports no verdict).
-              path = os.environ.get("INFRA2_WATCHDOG_VERDICTS_PATH")
-              if not path:
-                  return
-              try:
-                  record_verdicts(
-                      path,
-                      source=RUNNER_HEALTH_SOURCE,
-                      checks=[CheckVerdict(RUNNER_HEALTH_SOURCE, ok, detail, "" if ok else "P0", "" if ok else "iac-runner")],
-                  )
-              except OSError as error:
-                  print(f"could not record the verdict for the issue trail: {error}", file=sys.stderr)
-
-          url = os.environ["IAC_RUNNER_URL"].rstrip("/") + "/health"
-          request = urllib.request.Request(url, headers={"User-Agent": "infra2-ops-checks/1.0"})
-          try:
-              with urllib.request.urlopen(request, timeout=20) as response:
-                  health = json.loads(response.read().decode())
-          except Exception as error:  # noqa: BLE001 - any failure to read health is the finding
-              health = {"checks": {}, "error": str(error)[:200]}
-          checks = health.get("checks") or {}
-          required = ("op_service_account_token", "dokploy_api_key", "git_repo_url", "binary:op")
-          failed = [name for name in required if checks.get(name) is not True]
-          if health.get("error"):
-              failed.append(f"health unreadable: {health['error']}")
-          if not failed:
-              record(True, "every deploy prerequisite is true")
-              print("iac-runner health: every deploy prerequisite is true")
-              sys.exit(0)
-          record(False, "iac-runner cannot deploy: " + ", ".join(failed))
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
-          )
-          print(
-              "iac-runner cannot deploy: " + ", ".join(failed) + ".\n"
-              "Every platform deploy and every app companion deploy goes through the runner; "
-              "with a dead 1Password service account they fail with onepassword_auth_failed "
-              "(#625, 2026-09-04..07).\n"
-              f"Health: {url}\nRun: {run_url}"
-          )
-          sys.exit(1)
-          PY
-
-      # #1448: external liveness heartbeat for ops-checks itself; Cloudflare Worker alerts
-      # if this daily ping is missed beyond maxAgeSeconds (93600 s). Restricted to
-      # scheduled runs so manual dispatches neither mask a dead scheduler nor throttle
-      # the next scheduled 02:17 UTC ping.
-      - name: Ping Cloudflare watchdog scheduler heartbeat (#1448)
-        if: ${{ !cancelled() }}
-        env:
-          INFRA2_WATCHDOG_HEARTBEAT_URL: ${{ vars.INFRA2_WATCHDOG_HEARTBEAT_URL }}
-          INFRA2_WATCHDOG_HEARTBEAT_TOKEN: ${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}
-        # The module sends on a scheduled run only and records a verdict for the issue
-        # trail on each run: sent, failed, or skipped on a manual run (#1877).
-        run: python tools/scheduler_heartbeat.py
-
-      # truealpha#876 W4: Feishu alone left no record that the 2026-09-16
-      # cloudflare-worker-status incident (run 35048603264) was seen or that it ended.
-      # One issue per red check (exact title; comment while it stays red), closed by the
-      # next green scheduled run — in addition to Feishu, never instead. A step above
-      # that recorded no verdict is itself red. Mode (schedule / drill / dry run) is
-      # decided by common.observability.issue_trail.issue_trail_mode from the env above.
-      - name: Record the verdicts as GitHub issues
-        if: ${{ !cancelled() }}
-        run: python tools/watchdog_issue_trail.py
-
-  # Watchdog weekly digest jobs
   digest:
-    # signal: monthly-ops-summary
-    name: Build and send weekly digest
-    if: ${{ (github.event_name == 'schedule' && (github.event.schedule == '0 1 * * 1' || github.event.schedule == '0 2 1 * *' || github.event.schedule == '0 13 * * *')) || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'promotion-reminder' || inputs.task == 'all')) }}
+    # Moved to .github/workflows/watchdog.yml; zero-secret stub removed once main contract drops entry.
+    if: false
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      # the ops-checks run list and logs
-      actions: read
-      # the stale-open-issues section; the page-dedup state of the failure alert
-      issues: write
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
-      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
-      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
-      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
-      INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
-      INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
-      INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
-      WATCHDOG_DIGEST_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-      INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-      # #904: the stability report reads the VPS availability ledger over SSH and the
-      # Worker's /outages (same token as /status).
-      INFRA2_WATCHDOG_OUTAGES_URL: ${{ vars.INFRA2_WATCHDOG_OUTAGES_URL }}
-      INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
-      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
-      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
-      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Install Python dependencies
-        run: |
-          uv sync --locked --no-dev
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-
-      - name: Configure SSH key
-        if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
-        uses: ./.github/actions/ssh-setup
-        with:
-          key-name: infra2_stability_report
-          private-key: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-
-      - name: Build and send digest
-        if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
-        run: python tools/watchdog_weekly_digest.py ${{ github.event.schedule == '0 2 1 * *' && '--monthly' || '' }}
-
-      # The reminder reads stage records and sends one card; it dispatches nothing (#1645).
-      # It runs in this job because the job already holds the Feishu secrets and is classified.
-      - name: Remind the owner of a green staging tag
-        if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'promotion-reminder' || inputs.task == 'all' }}
-        env:
-          PROMOTION_REMINDER_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-        run: python tools/promotion_reminder.py
-
-      # Report-only: would a production promotion pass the upstream guard now? It reads stage
-      # records and the git tags, writes nothing and dispatches nothing (#1830). A refusal
-      # prints a warning; the owner decides production, so the step never fails the job.
-      - name: Probe the next production promotion
-        if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'promotion-reminder' || inputs.task == 'all' }}
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          git fetch --quiet --tags --force --depth=2147483647 origin
-          python tools/promotion_probe.py --report-only
-
-      # Two Mondays (08-31, 09-07) the stability report died on the watchdog ledger and
-      # nothing paged: the digest job had no failure path (#658, recommendation 4).
-      - name: Alert on failure
-        if: failure() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python - <<'PY'
-          import os
-          from common.observability.page_dedup import dedup_page, run_url_from_env
-          from tools.out_of_band_watchdog import deliver_out_of_band_alert
-
-          outcome = dedup_page(
-              os.environ,
-              job="weekly-digest",
-              label="每周 watchdog 摘要",
-              findings=[("weekly-digest", "the digest or the stability report was not delivered")],
-              detail="the digest or the stability report was not delivered",
-              page_message=(
-                  "🚨 Weekly watchdog digest / stability report FAILED.\n"
-                  "The week's digest or the positive availability report was not delivered. "
-                  "Broken is one of: the production availability ledger read over SSH "
-                  "(missing, empty or stale), the Worker /outages fetch, or the Feishu "
-                  "delivery -- not necessarily the estate.\n"
-                  f"Run: {run_url_from_env(os.environ)}"
-              ),
-              deliver_page=deliver_out_of_band_alert,
-          )
-          raise SystemExit(outcome.exit_code)
-          PY
-
-      - name: Resolve the digest failure alert
-        if: success() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1' && github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python - <<'PY'
-          import os
-          from common.observability.page_dedup import resolve_page_state
-          from tools.out_of_band_watchdog import deliver_out_of_band_alert
-
-          outcome = resolve_page_state(
-              os.environ,
-              job="weekly-digest",
-              label="每周 watchdog 摘要",
-              deliver_page=deliver_out_of_band_alert,
-          )
-          raise SystemExit(outcome.exit_code)
-          PY
+      - run: "true"
 
   preview-leak-check:
     # signal: preview-leak-check
@@ -1451,13 +1134,6 @@ jobs:
           )
           raise SystemExit(outcome.exit_code)
           PY
-
-  staging-db-hygiene:
-    # Retired in favor of finance_report Prefect flow; stub removed once main contract drops entry.
-    if: false
-    runs-on: ubuntu-latest
-    steps:
-      - run: "true"
 
   e2e-regressions-smoke:
     # signal: e2e-regressions-smoke

@@ -1,6 +1,6 @@
 """Guard that every CI job without infra2-sdk runs only SDK-free modules (#1270).
 
-All current `ops-checks.yml` Python jobs (`audit`, `watchdog`, `digest`,
+All current `ops-checks.yml` and `watchdog.yml` Python jobs (`audit`, `watchdog`, `digest`,
 `preview-leak-check`, `host-hygiene-schedule`, `facet-reconcile`,
 `vault-self-refresh-audit`, `secrets-reconcile`, and `e2e-regressions-smoke`)
 install `infra2-sdk` via `uv sync`.
@@ -20,6 +20,7 @@ from common.tests.test_sdk_contract_adoption import _embedded_python
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
+WATCHDOG_WORKFLOW = ROOT / ".github/workflows/watchdog.yml"
 
 MUST_IMPORT_WITHOUT_SDK = [
     "tools.harness",
@@ -156,14 +157,21 @@ jobs:
 
 
 def test_the_list_covers_every_module_the_sdk_free_ops_checks_jobs_run() -> None:
-    jobs = _sdk_free_job_modules(yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8")))
-    assert set(jobs) == set(), f"unexpected SDK-free jobs: {jobs}"
-    missing = {
-        job: sorted(modules - set(MUST_IMPORT_WITHOUT_SDK))
-        for job, modules in jobs.items()
-        if modules - set(MUST_IMPORT_WITHOUT_SDK)
-    }
-    assert missing == {}, f"add these to MUST_IMPORT_WITHOUT_SDK: {missing}"
+    for workflow_path in (OPS_CHECKS, WATCHDOG_WORKFLOW):
+        jobs = _sdk_free_job_modules(
+            yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        )
+        assert set(jobs) == set(), (
+            f"unexpected SDK-free jobs in {workflow_path.name}: {jobs}"
+        )
+        missing = {
+            job: sorted(modules - set(MUST_IMPORT_WITHOUT_SDK))
+            for job, modules in jobs.items()
+            if modules - set(MUST_IMPORT_WITHOUT_SDK)
+        }
+        assert missing == {}, (
+            f"add these to MUST_IMPORT_WITHOUT_SDK ({workflow_path.name}): {missing}"
+        )
 
 
 def test_a_module_that_genuinely_needs_the_sdk_still_fails() -> None:
