@@ -2,8 +2,8 @@ name: Apply Observability (alerts + dashboard) IaC
 # The approver of the production environment must see the mode and the release tag (#1435).
 run-name: Apply Observability (${{ inputs.mode }} ${{ github.ref_name }})
 
-# GitOps apply for the finance_report SigNoz config-as-code: when the checked-in
-# alert/dashboard definitions change on main, reconcile them into live SigNoz.
+# Manual workflow_dispatch apply for SigNoz alert/dashboard definitions across
+# registered catalogs (finance_report, truealpha, platform/30.todo, standard rules).
 # Idempotent (apply tasks look up by name/title), so re-runs are safe.
 #
 # Required secret: SIGNOZ_API_KEY (a SigNoz ADMIN api key; read by the apply path

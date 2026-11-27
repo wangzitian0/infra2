@@ -17,8 +17,8 @@ ABSENT = "ABSENT"
 DEFAULT_REPO = "wangzitian0/infra2"
 
 QUIET_MINUTES = 12
-# Event policy: after the review of the head (or, for a bot-opened PR, its
-# independent verification comment), not after the push (#1075).
+# Event policy: after the review of the head (or its independent verification comment),
+# not after the push (#1075).
 SETTLE_SECONDS = 60
 COPILOT_BOT_ID = "BOT_kgDOCnlnWA"
 AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})

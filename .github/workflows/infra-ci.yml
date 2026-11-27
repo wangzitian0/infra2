@@ -702,7 +702,7 @@ jobs:
   # docs/ssot/ci-gate-inventory.yaml). always(): a failed job is a red check, not a missing one.
   # Read-only: would a production promotion pass require_upstream_post now? It runs the guard
   # on the real stage records of the next candidate tag. A pull request that does not change
-  # the guard skips in one second (#1830). The schedule runs it in ops-checks.yml, report-only.
+  # the guard skips in one second (#1830). The schedule runs it in watchdog.yml, report-only.
   promotion-probe:
     name: Probe the production promotion guard
     needs: detect-changes

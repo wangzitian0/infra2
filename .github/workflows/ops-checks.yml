@@ -5,10 +5,8 @@ name: Ops Checks
 #     into its image declares it, so a change actually redeploys it.
 #   - Necessity:  the iac-runner is the single deploy trigger (no compose left on
 #     Dokploy-native autoDeploy outside the allowlist).
-#   - Out-of-band watchdog and weekly digest prove alert delivery and recall.
-# Failing deploy guard / watchdog checks deliver Feishu alerts via the
-# shared out-of-band channel. The watchdog job also keeps one GitHub issue per red
-# check, closed by the next green scheduled run (truealpha#876 W4).
+# Failing deploy guard checks deliver Feishu alerts via the shared out-of-band
+# channel. Out-of-band watchdog and weekly digest run in .github/workflows/watchdog.yml.
 
 "on":
   schedule:

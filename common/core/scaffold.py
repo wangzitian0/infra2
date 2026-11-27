@@ -318,7 +318,7 @@ def _generate_env_example(service_name: str, port: int, db: str = "postgres") ->
     ]
     if db == "postgres":
         lines.append(
-            f"DATABASE_URL=postgresql://postgres:postgres@localhost:5432/{svc}"
+            f"DATABASE_URL=postgresql://postgres:postgres@localhost:55432/{svc}"
         )
     return "\n".join(lines) + "\n"
 

@@ -751,7 +751,7 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
     head = f"#{facts.number} @ {facts.head_sha[:7]}"
     if verdict.ready:
         return (
-            f"{head}: mergeable under session authority — checks green "
+            f"{head}: mergeable under standing authority — checks green "
             f"({len(facts.checks)}), threads resolved, settled, "
             f"no path that needs the owner; {lock_status(facts)}"
         )

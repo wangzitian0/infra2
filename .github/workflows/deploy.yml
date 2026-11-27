@@ -2,18 +2,13 @@ name: Deploy (deploy_v2)
 
 # The infra2-owned deploy entrypoint for the finance_report and truealpha apps (Infra-009,
 # finance_report#883: "infra2 owns every deploy"). Wraps `python -m tools.deploy_v2` —
-# the unified (service, type, version_ref, iac_ref) front door — so any scenario (staging /
-# prod / preview-branch|pr) deploys through the SAME mechanism.
+# the unified (service, type, version_ref, iac_ref) front door — for staging and
+# preview deploys (direct prod dispatch is retired; prod promotions use
+# reconcile-iac-inputs.yml promote_prod=true).
 #
 # This replaces the per-env App-repo bash (tools/dokploy_deploy.sh).
 #
-# prod safety: RL-DATA-1 is deny-by-default in deploy_v2 — a prod deploy must pass BOTH
-# staging_validated=true (staging-first) and code_reviewed=true (reviewed code on prod
-# data), or the front door fails closed before any side effect.
-#
 # No pre-deploy App canary (#1477): the Canary Todo (platform/30.todo) is the one Canary.
-# Staging comes first (staging_validated=true, RL-DATA-1), and a prod deploy waits for
-# the owner's approval on the `production` environment.
 
 on:
   workflow_dispatch:
@@ -29,11 +24,11 @@ on:
         type: choice
         options: [staging, preview]
       version_ref:
-        description: "Version surface: pr-<N> or PR# (preview) | main (preview) | tag vX.Y.Z (staging/prod; defaults to harness/repos.yaml for apps or latest infra2 tag for platform)"
+        description: "Version surface: pr-<N> or PR# (preview) | main (preview) | tag vX.Y.Z (staging; defaults to harness/repos.yaml for apps or latest infra2 tag for platform)"
         required: false
         default: ""
       iac_ref:
-        description: "Optional infra2 ref override (defaults to latest release tag on staging/prod, main on preview)"
+        description: "Optional infra2 ref override (defaults to latest release tag on staging, main on preview)"
         required: false
         default: ""
       domain:
@@ -41,7 +36,7 @@ on:
         required: false
         default: ""
       bootstrap:
-        description: "staging/prod app only — allow version_ref not matching harness/repos.yaml"
+        description: "staging app only — allow version_ref not matching harness/repos.yaml"
         required: false
         type: boolean
         default: false
@@ -99,7 +94,7 @@ jobs:
           python-version-file: .python-version
 
       - name: Install runtime dependencies
-        # common/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
+        # common/security/store.py reads secret stores through infra2-sdk; install the wheel uv.lock
         # pins, hash-verified (#649, #1115). The IaC runner image can hold an older SDK
         # until a production rebuild; test_runner_sdk_compat.py guards that gap.
         run: |
@@ -240,5 +235,5 @@ jobs:
           done
 
           rm -f "$body"
-          echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
+          echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, Vault AppRole (VAULT_ROLE_ID/VAULT_SECRET_ID), and iac-runner container health."
           exit 1
