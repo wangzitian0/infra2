@@ -756,7 +756,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=41.0.0" },
     { name = "fastapi", specifier = ">=0.162.0,<1" },
     { name = "httpx", specifier = ">=0.25.0" },
-    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.2/infra2_sdk-4.13.2-py3-none-any.whl" },
+    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.14.1/infra2_sdk-4.14.1-py3-none-any.whl" },
     { name = "invoke", specifier = ">=2.2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.7,<3" },
@@ -784,14 +784,14 @@ e2e = [
 
 [[package]]
 name = "infra2-sdk"
-version = "4.13.2"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.2/infra2_sdk-4.13.2-py3-none-any.whl" }
+version = "4.14.1"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.14.1/infra2_sdk-4.14.1-py3-none-any.whl" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.13.2/infra2_sdk-4.13.2-py3-none-any.whl", hash = "sha256:68764a82b990341e7434d30fdbb678c469c4bb3df59af9dc76ea9b0f01dfc927" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.14.1/infra2_sdk-4.14.1-py3-none-any.whl", hash = "sha256:a78ce1702dea1bbdd8a6555e95964e28b4e4a0a24e77c44f3bc7d43591133ab7" },
 ]
 
 [package.metadata]
@@ -826,6 +826,8 @@ requires-dist = [
     { name = "pydantic-ai-slim", extras = ["zai"], marker = "extra == 'all'", specifier = ">=2.71.0,<3" },
     { name = "pydantic-ai-slim", extras = ["zai"], marker = "extra == 'llm'", specifier = ">=2.71.0,<3" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'all'", specifier = ">=0.28,<1" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'fastapi'", specifier = ">=0.28,<1" },
 ]
 provides-extras = ["telemetry", "http", "fastapi", "postgres", "s3", "llm", "all"]
 

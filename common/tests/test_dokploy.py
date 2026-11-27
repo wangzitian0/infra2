@@ -159,7 +159,7 @@ class TestDokployClient:
         self, monkeypatch, dokploy_env
     ):
         fake = FakeHttpClient(FakeResponse(content=b""))
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         result = client._request("GET", "project.all", headers={"x-extra": "1"})
@@ -181,7 +181,7 @@ class TestDokployClient:
                 )
             )
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         with pytest.raises(
@@ -194,7 +194,7 @@ class TestDokployClient:
         fake = FakeHttpClient(
             request_error=httpx.ConnectTimeout("timeout", request=request)
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         with pytest.raises(
@@ -214,7 +214,7 @@ class TestDokployClient:
                 FakeResponse({"ok": True}),
             ]
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         result = client._request("GET", "compose.one", _sleep=lambda *_: None)
@@ -225,7 +225,7 @@ class TestDokployClient:
         fake = _SequencedHttpClient(
             [FakeResponse(status_error=_status_error(503)) for _ in range(5)]
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         with pytest.raises(httpx.HTTPStatusError, match="status code 503"):
@@ -240,7 +240,7 @@ class TestDokployClient:
                 FakeResponse({"ok": True}),
             ]
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         with pytest.raises(httpx.HTTPStatusError, match="status code 502"):
@@ -259,7 +259,7 @@ class TestDokployClient:
                 FakeResponse({"ok": True}),
             ]
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         result = client._request(
@@ -279,7 +279,7 @@ class TestDokployClient:
                 FakeResponse({"ok": True}),
             ]
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
         with pytest.raises(
@@ -300,7 +300,7 @@ class TestDokployClient:
                 FakeResponse({"composeId": "c1"}),
             ]
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         monkeypatch.setattr(dokploy.time, "sleep", lambda *_: None)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
@@ -321,7 +321,7 @@ class TestDokployClient:
                 FakeResponse({"ok": True}),
             ]
         )
-        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy, "create_http_client", lambda *_a, **_kw: fake)
         monkeypatch.setattr(dokploy.time, "sleep", lambda *_: None)
         client = DokployClient(base_url="https://cloud.example.test/api")
 

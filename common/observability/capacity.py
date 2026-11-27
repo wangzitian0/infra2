@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import threading
-import time
-from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import date
 
@@ -96,58 +93,6 @@ def evaluate(
     return CapacityReport(tuple(items))
 
 
-class RateLimitWindow:
-    """Thread-safe sliding-window request or token budget tracker."""
-
-    def __init__(
-        self,
-        limit: int,
-        window_seconds: float,
-        *,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        if limit <= 0 or window_seconds <= 0:
-            raise ValueError("limit and window_seconds must be positive")
-        self.limit = limit
-        self.window_seconds = float(window_seconds)
-        self._clock = clock
-        self._events: deque[tuple[float, int]] = deque()
-        self._used = 0
-        self._lock = threading.Lock()
-
-    def _evict(self, now: float) -> None:
-        cutoff = now - self.window_seconds
-        while self._events and self._events[0][0] <= cutoff:
-            _, cost = self._events.popleft()
-            self._used -= cost
-
-    def acquire(self, cost: int = 1) -> tuple[bool, float]:
-        """Consume ``cost`` units when within budget; return ``(allowed, retry_after_seconds)``."""
-        if cost <= 0 or cost > self.limit:
-            raise ValueError("cost must be between 1 and limit")
-        with self._lock:
-            now = self._clock()
-            self._evict(now)
-            if self._used + cost <= self.limit:
-                self._events.append((now, cost))
-                self._used += cost
-                return True, 0.0
-            freed = 0
-            wait_until = now + self.window_seconds
-            for ts, entry_cost in self._events:
-                freed += entry_cost
-                if self._used - freed + cost <= self.limit:
-                    wait_until = ts + self.window_seconds
-                    break
-            return False, max(0.0, wait_until - now)
-
-    @property
-    def used(self) -> int:
-        with self._lock:
-            self._evict(self._clock())
-            return self._used
-
-
 CLOUDFLARE_FREE_TIER = (
     _CapacityLimit("cloudflare.kv.write", 1_000),
     _CapacityLimit("cloudflare.kv.delete", 1_000),
@@ -210,7 +155,6 @@ __all__ = [
     "CLOUDFLARE_FREE_TIER",
     "CapacityReading",
     "CapacityReport",
-    "RateLimitWindow",
     "cloudflare_readings",
     "evaluate",
 ]

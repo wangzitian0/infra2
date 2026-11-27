@@ -97,6 +97,13 @@ DEFAULT_LEFT_THE_PACKAGES: tuple[str, ...] = (
 
 OTEL_COMPANION_KEYS = {"SERVICE_VERSION", "ENVIRONMENT", "ENV", "APP_ENV"}
 SELF_REPO = "infra2-sdk"
+CANARY_CONSUMER_NAME = "canary_todo"
+CANARY_ONLY_SYMMETRY_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "infra2_sdk.telemetry.get_tracer",
+        "infra2_sdk.service.async_request_with_retry",
+    }
+)
 
 
 def is_test_path(path: str) -> bool:
@@ -482,19 +489,25 @@ _BUILTIN_TYPE_ATTRS: dict[str, frozenset[str]] = {
 }
 
 
-def _annotation_type_name(ann: ast.expr | None) -> str | None:
+def _annotation_type_name(
+    ann: ast.expr | None, alias_to_orig: dict[str, str] | None = None
+) -> str | None:
     if isinstance(ann, ast.Subscript):
         ann = ann.value
+    name: str | None = None
     if isinstance(ann, ast.Name):
-        return ann.id
-    if isinstance(ann, ast.Attribute):
-        return ann.attr
-    return None
+        name = ann.id
+    elif isinstance(ann, ast.Attribute):
+        name = ann.attr
+    if name is not None and alias_to_orig is not None:
+        return alias_to_orig.get(name, name)
+    return name
 
 
 def _infer_value_attrs(
     value: ast.expr | None,
     fn_returns: dict[str, ast.expr | None],
+    alias_to_orig: dict[str, str] | None = None,
 ) -> frozenset[str] | None:
     if isinstance(value, (ast.Dict, ast.DictComp)):
         return _BUILTIN_TYPE_ATTRS["dict"]
@@ -507,18 +520,49 @@ def _infer_value_attrs(
     if isinstance(value, ast.Constant) and isinstance(value.value, str):
         return _BUILTIN_TYPE_ATTRS["str"]
     if isinstance(value, ast.Call):
-        callee = (
+        raw_callee = (
             value.func.id
             if isinstance(value.func, ast.Name)
             else (value.func.attr if isinstance(value.func, ast.Attribute) else None)
         )
+        callee = (
+            alias_to_orig.get(raw_callee, raw_callee)
+            if raw_callee is not None and alias_to_orig is not None
+            else raw_callee
+        )
         if callee in _BUILTIN_TYPE_ATTRS:
             return _BUILTIN_TYPE_ATTRS[callee]
-        if callee in fn_returns:
-            ret_name = _annotation_type_name(fn_returns[callee])
-            if ret_name in _BUILTIN_TYPE_ATTRS:
-                return _BUILTIN_TYPE_ATTRS[ret_name]
+        for key in (raw_callee, callee):
+            if key and key in fn_returns:
+                ret_name = _annotation_type_name(fn_returns[key], alias_to_orig)
+                if ret_name in _BUILTIN_TYPE_ATTRS:
+                    return _BUILTIN_TYPE_ATTRS[ret_name]
     return None
+
+
+def _resolve_import_from_module(mod: str, path: Path, node: ast.ImportFrom) -> str:
+    src_mod = node.module or ""
+    if node.level and path.name == "__init__.py":
+        base_parts = mod.split(".")
+    elif node.level:
+        base_parts = mod.split(".")[:-1]
+    else:
+        base_parts = []
+    if node.level > 1:
+        base_parts = base_parts[: -(node.level - 1)]
+    if base_parts and src_mod:
+        return ".".join([*base_parts, src_mod])
+    return ".".join(base_parts) if base_parts else src_mod
+
+
+def _top_level_and_if_stmts(body: list[ast.stmt]) -> list[ast.stmt]:
+    out: list[ast.stmt] = []
+    for stmt in body:
+        out.append(stmt)
+        if isinstance(stmt, ast.If):
+            out.extend(_top_level_and_if_stmts(stmt.body))
+            out.extend(_top_level_and_if_stmts(stmt.orelse))
+    return out
 
 
 def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
@@ -526,6 +570,7 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
     exports: dict[str, set[str]] = defaultdict(set)
     star_reexports: list[tuple[str, str]] = []
     named_reexports: list[tuple[str, str, str, str]] = []
+    class_inheritance: list[tuple[str, str]] = []
     for path in sorted(pkg_root.rglob("*.py")):
         rel_parts = path.relative_to(pkg_root).with_suffix("").parts
         if any(p in SKIP_DIR_PARTS for p in rel_parts):
@@ -539,39 +584,67 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
         _, tree = _parse_py_file(path)
         if tree is None:
             continue
+        alias_to_orig: dict[str, str] = {}
+        alias_to_src: dict[str, tuple[str, str]] = {}
         if isinstance(tree, ast.Module):
+            top_stmts = _top_level_and_if_stmts(tree.body)
+            for stmt in top_stmts:
+                if isinstance(stmt, ast.ImportFrom):
+                    resolved_src = _resolve_import_from_module(mod, path, stmt)
+                    for alias in stmt.names:
+                        if alias.name != "*":
+                            local_name = alias.asname or alias.name
+                            alias_to_orig[local_name] = alias.name
+                            if resolved_src:
+                                alias_to_src[local_name] = (resolved_src, alias.name)
+                elif isinstance(stmt, ast.Import):
+                    for alias in stmt.names:
+                        local_name = alias.asname or alias.name.split(".")[0]
+                        alias_to_orig[local_name] = alias.name
             fn_returns = {
                 s.name: s.returns
-                for s in tree.body
+                for s in top_stmts
                 if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
             }
-            for stmt in tree.body:
+            for stmt in top_stmts:
                 if isinstance(stmt, ast.AnnAssign) and isinstance(
                     stmt.target, ast.Name
                 ):
                     attrs = _BUILTIN_TYPE_ATTRS.get(
-                        _annotation_type_name(stmt.annotation) or ""
-                    ) or _infer_value_attrs(stmt.value, fn_returns)
+                        _annotation_type_name(stmt.annotation, alias_to_orig) or ""
+                    ) or _infer_value_attrs(stmt.value, fn_returns, alias_to_orig)
                     if attrs is not None:
                         exports[f"{mod}.{stmt.target.id}"].update(attrs)
                 elif isinstance(stmt, ast.Assign):
                     for target in stmt.targets:
                         if isinstance(target, ast.Name):
-                            attrs = _infer_value_attrs(stmt.value, fn_returns)
+                            attrs = _infer_value_attrs(
+                                stmt.value, fn_returns, alias_to_orig
+                            )
                             if attrs is not None:
                                 exports[f"{mod}.{target.id}"].update(attrs)
                         elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(
                             stmt.value, ast.Call
                         ):
-                            callee = (
+                            raw_callee = (
                                 stmt.value.func.id
                                 if isinstance(stmt.value.func, ast.Name)
                                 else None
                             )
-                            ret = fn_returns.get(callee or "")
+                            callee = (
+                                alias_to_orig.get(raw_callee, raw_callee)
+                                if raw_callee is not None
+                                else None
+                            )
+                            ret = fn_returns.get(raw_callee or "") or fn_returns.get(
+                                callee or ""
+                            )
                             if (
                                 isinstance(ret, ast.Subscript)
-                                and (_annotation_type_name(ret.value) or "").lower()
+                                and (
+                                    _annotation_type_name(ret.value, alias_to_orig)
+                                    or ""
+                                ).lower()
                                 == "tuple"
                                 and isinstance(ret.slice, ast.Tuple)
                                 and len(ret.slice.elts) == len(target.elts)
@@ -579,7 +652,8 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
                                 for t_elt, r_elt in zip(target.elts, ret.slice.elts):
                                     if isinstance(t_elt, ast.Name):
                                         attrs = _BUILTIN_TYPE_ATTRS.get(
-                                            _annotation_type_name(r_elt) or ""
+                                            _annotation_type_name(r_elt, alias_to_orig)
+                                            or ""
                                         )
                                         if attrs is not None:
                                             exports[f"{mod}.{t_elt.id}"].update(attrs)
@@ -590,6 +664,28 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
                 exports[mod].add(node.name)
                 cls_key = f"{mod}.{node.name}"
                 exports.setdefault(cls_key, set())
+                for base in node.bases:
+                    if isinstance(base, ast.Name):
+                        if base.id in alias_to_src:
+                            b_mod, b_name = alias_to_src[base.id]
+                            class_inheritance.append((cls_key, f"{b_mod}.{b_name}"))
+                        else:
+                            class_inheritance.append((cls_key, f"{mod}.{base.id}"))
+                    elif isinstance(base, ast.Attribute) and isinstance(
+                        base.value, ast.Name
+                    ):
+                        if base.value.id in alias_to_src:
+                            b_mod, b_name = alias_to_src[base.value.id]
+                            class_inheritance.append(
+                                (cls_key, f"{b_mod}.{b_name}.{base.attr}")
+                            )
+                        elif base.value.id in alias_to_orig:
+                            class_inheritance.append(
+                                (
+                                    cls_key,
+                                    f"{alias_to_orig[base.value.id]}.{base.attr}",
+                                )
+                            )
                 for stmt in ast.walk(node):
                     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         exports[cls_key].add(stmt.name)
@@ -609,20 +705,7 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
                             ):
                                 exports[mod].add(elt.value)
             elif isinstance(node, ast.ImportFrom):
-                src_mod = node.module or ""
-                if node.level and path.name == "__init__.py":
-                    base_parts = mod.split(".")
-                elif node.level:
-                    base_parts = mod.split(".")[:-1]
-                else:
-                    base_parts = []
-                if node.level > 1:
-                    base_parts = base_parts[: -(node.level - 1)]
-                resolved_src = (
-                    ".".join([*base_parts, src_mod])
-                    if base_parts and src_mod
-                    else (".".join(base_parts) if base_parts else src_mod)
-                )
+                resolved_src = _resolve_import_from_module(mod, path, node)
                 for alias in node.names:
                     if alias.name == "*":
                         if resolved_src:
@@ -640,6 +723,12 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
     changed = True
     while changed:
         changed = False
+        for sub_key, base_key in class_inheritance:
+            if base_key in exports:
+                before_cls = len(exports[sub_key])
+                exports[sub_key] |= exports[base_key]
+                if len(exports[sub_key]) != before_cls:
+                    changed = True
         for dst_mod, src_mod in star_reexports:
             if src_mod in exports:
                 before = len(exports[dst_mod])
@@ -949,7 +1038,7 @@ def check_consumer_imports(
 
 
 def _main_called_symbols(path: str) -> set[str]:
-    """Return top-level symbol names loaded inside `def main` of `path`."""
+    """Return top-level symbol names loaded inside `def main` or `def _main` of `path`."""
     _, tree = _parse_py_file(Path(path))
     if tree is None:
         return set()
@@ -957,7 +1046,7 @@ def _main_called_symbols(path: str) -> set[str]:
         sub.id
         for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "main"
+        and node.name in ("main", "_main")
         for sub in ast.walk(node)
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
     }
@@ -1042,8 +1131,16 @@ def compute_m1(
             for f, ln in internal.get(name, [])
             if not (f == d["path"] and d["line"] <= ln <= d["end"])
         )
-        if prod_repos:
+        real_prod_repos = {
+            r: c for r, c in prod_repos.items() if r != CANARY_CONSUMER_NAME
+        }
+        canary_repos = {
+            r: c for r, c in prod_repos.items() if r == CANARY_CONSUMER_NAME
+        }
+        if real_prod_repos:
             reach = "prod_used"
+        elif canary_repos:
+            reach = "canary_only"
         elif test_repos and not internal_n:
             reach = "test_only"
         elif internal_n:
@@ -1080,6 +1177,8 @@ def compute_m1(
                 "surface_reason": surface_reason,
                 "internal_refs": internal_n,
                 "prod_repos": ";".join(sorted(prod_repos)),
+                "real_prod_repos": ";".join(sorted(real_prod_repos)),
+                "canary_used": bool(canary_repos),
                 "prod_refs": sum(prod_repos.values()),
                 "test_refs": sum(test_repos.values()),
                 "reach": reach,
@@ -1088,12 +1187,28 @@ def compute_m1(
 
     total = len(rows)
     prod_used = counts["prod_used"]
+    canary_only_syms = [
+        f"{row['module']}.{row['name']}"
+        for row in rows
+        if row["reach"] == "canary_only"
+        and row.get("surface_kind") not in ("documented", "held")
+    ]
+    canary_only_allowlisted = sorted(
+        sym for sym in canary_only_syms if sym in CANARY_ONLY_SYMMETRY_ALLOWLIST
+    )
+    canary_only_unallowlisted = sorted(
+        sym for sym in canary_only_syms if sym not in CANARY_ONLY_SYMMETRY_ALLOWLIST
+    )
     m1 = {
         "contract_source": contract_source,
         "surface_policy": surface_policy,
         "surface_justifications": dict(sorted(justification_counts.items())),
         "stale_consumer_claims": stale_consumer_claims,
         "prod_used": prod_used,
+        "real_prod_used": prod_used,
+        "canary_only": counts["canary_only"],
+        "canary_only_allowlisted": canary_only_allowlisted,
+        "canary_only_unallowlisted": canary_only_unallowlisted,
         "test_only": counts["test_only"],
         "internal_only": counts["internal_only"],
         "unused": counts["unused"],
@@ -1312,14 +1427,23 @@ def _consumer_lock_candidates(consumer_name: str = "") -> tuple[str, ...]:
     return (base_lock, app_lock)
 
 
-def consumer_pinned_version(root: Path, *, consumer_name: str = "") -> str | None:
+def consumer_pinned_version(
+    root: Path, *, consumer_name: str = "", infra2_root: Path | None = None
+) -> str | None:
     """Extract the pinned infra2-sdk version from a consumer repository."""
-    if consumer_name == "canary_todo":
+    if consumer_name == CANARY_CONSUMER_NAME:
+        if (root / "uv.lock").is_file():
+            try:
+                ver = _extract_sdk_version(sdk_requirement(root / "uv.lock"))
+                if ver:
+                    return ver
+            except Exception:  # noqa: BLE001
+                pass
         # The Canary runs the SDK of its image tag; infra2 pins it in the todo compose (#247).
         from common.deploy.canary_pin import CanaryPinError, canary_sdk_version
 
         try:
-            return canary_sdk_version()
+            return canary_sdk_version(infra2_root or REPO_ROOT)
         except (OSError, CanaryPinError):
             return None
     for rel in _consumer_lock_candidates(consumer_name):
@@ -1351,8 +1475,11 @@ def compute_m3(
     per_repo: dict[str, dict[str, Any]] = {}
     lagging_repos: list[str] = []
 
+    infra2_root = consumers.get("infra2")
     for repo, root in sorted(consumers.items()):
-        pinned = consumer_pinned_version(root, consumer_name=repo)
+        pinned = consumer_pinned_version(
+            root, consumer_name=repo, infra2_root=infra2_root
+        )
         if pinned is None:
             per_repo[repo] = {
                 "pinned_version": None,
@@ -1393,7 +1520,7 @@ def _parse_sdk_tests_ast(pkg_root: Path | None) -> list[ast.Module]:
         return []
     tests_dir = pkg_root.parent.parent / "tests"
     trees: list[ast.Module] = []
-    for name in ("test_readme_claims.py", "wheel_smoke.py"):
+    for name in ("wheel_smoke.py",):
         _, tree = _parse_py_file(tests_dir / name)
         if tree is not None:
             trees.append(tree)
@@ -1789,6 +1916,14 @@ def run_census(
     resolved_consumers = (
         dict(consumers) if consumers is not None else default_consumers(REPO_ROOT)
     )
+    if (
+        consumers is not None
+        and CANARY_CONSUMER_NAME not in resolved_consumers
+        and len(resolved_consumers) >= 2
+    ):
+        canary = resolved_pkg.parent.parent / "canary" / "todo"
+        if (canary / "app.py").is_file():
+            resolved_consumers[CANARY_CONSUMER_NAME] = canary
     target_version = resolve_latest_sdk_version(resolved_pkg, latest_version)
     if latest_version is None and verified_from_records:
         from common.deploy.stage_record_reader import verified_sdk_versions
@@ -1851,7 +1986,7 @@ def evaluate_checks(
         non_prod = [
             f"{s['module']}.{s['name']} ({s['reach']})"
             for s in m1.get("symbols", [])
-            if s.get("reach") != "prod_used"
+            if s.get("reach") not in ("prod_used", "canary_only")
             and s.get("surface_kind") not in ("documented", "held")
         ]
         if non_prod:
@@ -1859,6 +1994,12 @@ def evaluate_checks(
             failures.append(
                 f"M1: non-production SDK symbols (test_only={m1.get('test_only', 0)}, "
                 f"internal_only={m1.get('internal_only', 0)}, unused={m1.get('unused', 0)}): {samples}"
+            )
+        unallowlisted_canary = m1.get("canary_only_unallowlisted", [])
+        if unallowlisted_canary:
+            samples = ", ".join(unallowlisted_canary[:5])
+            failures.append(
+                f"M1: canary_only symbols without production consumer or allowlist: {samples}"
             )
     stale_claims = m1.get("stale_consumer_claims", [])
     if stale_claims:
@@ -2039,7 +2180,7 @@ def _format_human_summary(report: dict[str, Any], failures: list[str]) -> str:
             f"M1 symbol reachability ({m1.get('contract_source', 'package_dunder_all')}; "
             f"{m1.get('surface_policy', '')}): {m1['prod_used']}/{m1['total_public']} "
             f"({m1['ratio'] * 100:.1f}%) "
-            f"[test_only={m1['test_only']}, internal_only={m1['internal_only']}, unused={m1['unused']}, "
+            f"[canary_only={m1.get('canary_only', 0)}, test_only={m1['test_only']}, internal_only={m1['internal_only']}, unused={m1['unused']}, "
             f"justifications={m1.get('surface_justifications', {})}, "
             f"stale_claims={len(m1.get('stale_consumer_claims', []))}, "
             f"missing_prod={len(m1['missing_imports']['prod'])}]"

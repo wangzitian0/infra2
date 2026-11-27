@@ -1317,8 +1317,9 @@ def test_g1_reads_the_compiled_x_infra2_stack(repo_scan):
         assert o.key in source[o.line - 1] or o.line == origin, (o.key, o.line)
     port = [o for o in writes if o.key == "PORT"]
     assert [source[o.line - 1].strip() for o in port] == [
-        'PORT: "8000"',
-        'PORT: "8000"',
+        "PORT: '8000'",
+        "PORT: '8000'",
+        "PORT: '8000'",
     ]
 
 

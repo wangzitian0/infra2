@@ -124,7 +124,7 @@ State: `stages.yaml` in the SDK has the 16 cells (15 grid cells plus `scheduled_
 3. A caller starts the scheduler. The callers are a git hook (Local), the CI workflow (CI), the infra2 release code (Preview, Staging, Prod) and the clock.
 4. The Canary Todo runs each new scheduler version and each new policy version first (rule 6).
 
-State: `run_cell` in the SDK runs `smoke`, the three gate lists and `scheduled_audit`. Local and CI have no scheduler entry.
+State: `common.deploy.stage_hooks.run_cell` runs `smoke`, the three gate lists and `scheduled_audit`. Local and CI have no scheduler entry.
 
 **Flow control**
 

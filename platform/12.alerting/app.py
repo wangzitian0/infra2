@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from infra2_sdk.service import CallableCheck, init_service
+from infra2_sdk.service import CallableCheck, init_service, serve
 from pydantic import BaseModel, ConfigDict, Field
 
 from common.alerting import (
@@ -263,13 +263,11 @@ app = fastapi_app
 
 
 def main() -> None:
-    import uvicorn
-
     print(
         f"alert bridge starting on {HOST}:{PORT} with FastAPI and infra2_sdk",
         flush=True,
     )
-    uvicorn.run(fastapi_app, host=HOST, port=PORT, log_level="info")
+    serve(fastapi_app, host=HOST, port=PORT, log_level="info")
 
 
 def _delivery_mode() -> str:

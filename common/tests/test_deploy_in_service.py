@@ -1476,7 +1476,7 @@ def test_the_real_todo_containers_set_configuration_sha256() -> None:
         for name, spec in services.items()
         if "CONFIGURATION_SHA256" in (spec.get("environment") or {})
     }
-    assert carriers == {"todo-v4-11", "todo-v4-13", "vault-agent"}
+    assert carriers == {"todo-v4-11", "todo-v4-13", "todo-v4-14", "vault-agent"}
 
 
 # --- #1899 review: a one-off ssh failure is "not settled yet", not a verdict -------

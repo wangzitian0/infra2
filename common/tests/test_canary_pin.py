@@ -112,9 +112,9 @@ def test_canary_slots_and_retirement_guard() -> None:
     from common.deploy.canary_pin import can_retire_canary_slot, load_canary_slots
 
     slots = load_canary_slots(REPO_ROOT)
-    assert [s.slot for s in slots] == ["v4-11", "v4-13"]
-    assert [s.version for s in slots] == ["4.11.2", "4.13.2"]
-    assert [s.primary for s in slots] == [False, True]
+    assert [s.slot for s in slots] == ["v4-11", "v4-13", "v4-14"]
+    assert [s.version for s in slots] == ["4.11.2", "4.13.2", "4.14.1"]
+    assert [s.primary for s in slots] == [False, False, True]
 
     pkg = "infra2" + "-sdk"
     whl_pkg = "infra2" + "_sdk"
@@ -147,10 +147,10 @@ def test_load_canary_slots_rejects_service_version_drift(tmp_path) -> None:
         shutil.copy2(REPO_ROOT / "platform/30.todo" / fname, todo_dir / fname)
     compose = (todo_dir / "compose.yaml").read_text(encoding="utf-8")
     (todo_dir / "compose.yaml").write_text(
-        compose.replace('SERVICE_VERSION="v4.13.2"', 'SERVICE_VERSION="v4.12.9"'),
+        compose.replace('SERVICE_VERSION="v4.14.1"', 'SERVICE_VERSION="v4.12.9"'),
         encoding="utf-8",
     )
-    with pytest.raises(CanaryPinError, match='SERVICE_VERSION="v4.13.2"'):
+    with pytest.raises(CanaryPinError, match='SERVICE_VERSION="v4.14.1"'):
         load_canary_slots(tmp_path)
 
 
@@ -168,20 +168,20 @@ def test_sync_canary_pin_files_patch_and_minor_bump(tmp_path) -> None:
         shutil.copy2(REPO_ROOT / "platform/30.todo" / fname, todo_dir / fname)
 
     patch_digest = "sha256:" + "b" * 64
-    updated_patch = sync_canary_pin_files(tmp_path, "4.13.3", patch_digest)
+    updated_patch = sync_canary_pin_files(tmp_path, "4.14.2", patch_digest)
     assert set(updated_patch) == {
         "platform/30.todo/slots.yaml",
         "platform/30.todo/compose.yaml",
         "platform/30.todo/preview.compose.yaml",
     }
-    assert primary_canary_slot(tmp_path).version == "4.13.3"
+    assert primary_canary_slot(tmp_path).version == "4.14.2"
     assert primary_canary_slot(tmp_path).digest == patch_digest
-    assert 'SERVICE_VERSION="v4.13.3"' in (todo_dir / "compose.yaml").read_text(
+    assert 'SERVICE_VERSION="v4.14.2"' in (todo_dir / "compose.yaml").read_text(
         encoding="utf-8"
     )
 
     minor_digest = "sha256:" + "d" * 64
-    updated_minor = sync_canary_pin_files(tmp_path, "4.14.0", minor_digest)
+    updated_minor = sync_canary_pin_files(tmp_path, "4.15.0", minor_digest)
     assert set(updated_minor) == {
         "platform/30.todo/slots.yaml",
         "platform/30.todo/compose.yaml",
@@ -189,20 +189,20 @@ def test_sync_canary_pin_files_patch_and_minor_bump(tmp_path) -> None:
         "platform/30.todo/deploy.py",
     }
     slots = load_canary_slots(tmp_path)
-    assert [s.slot for s in slots] == ["v4-11", "v4-13", "v4-14"]
-    assert [s.primary for s in slots] == [False, False, True]
-    assert primary_canary_slot(tmp_path).version == "4.14.0"
+    assert [s.slot for s in slots] == ["v4-11", "v4-13", "v4-14", "v4-15"]
+    assert [s.primary for s in slots] == [False, False, False, True]
+    assert primary_canary_slot(tmp_path).version == "4.15.0"
     deploy_text = (todo_dir / "deploy.py").read_text(encoding="utf-8")
-    assert 'name="todo-v4-13-canary-status"' in deploy_text
-    assert (
-        'target="http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status"'
-        in deploy_text
-    )
+    assert 'name="todo-v4-14-canary-status"' in deploy_text
     assert (
         'target="http://platform-todo-v4-14${ENV_SUFFIX}:8000/api/canary/status"'
         in deploy_text
     )
-    assert '"platform-todo-v4-14${ENV_SUFFIX}"' in deploy_text
+    assert (
+        'target="http://platform-todo-v4-15${ENV_SUFFIX}:8000/api/canary/status"'
+        in deploy_text
+    )
+    assert '"platform-todo-v4-15${ENV_SUFFIX}"' in deploy_text
 
 
 def test_a_verified_sdk_outside_the_range_is_still_held(monkeypatch) -> None:
@@ -273,8 +273,8 @@ def test_probe_health_reads_the_pin_format_that_canary_pin_owns() -> None:
         "platform/30.todo/probe_health.py", "probe_health_pin_format"
     )
     real = (REPO_ROOT / "platform/30.todo/compose.yaml").read_text(encoding="utf-8")
-    assert set(probe.CANARY_PIN_RE.findall(real)) == {"4.11.2", "4.13.2"}
-    assert canary_image_from_compose_text(real)[1] == canary_sdk_version() == "4.13.2"
+    assert set(probe.CANARY_PIN_RE.findall(real)) == {"4.11.2", "4.13.2", "4.14.1"}
+    assert canary_image_from_compose_text(real)[1] == canary_sdk_version() == "4.14.1"
     for bad in (
         f"{CANARY_IMAGE_REPOSITORY}:v3.35.0",
         f"{CANARY_IMAGE_REPOSITORY}@{DIGEST}",

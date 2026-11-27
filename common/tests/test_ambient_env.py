@@ -19,7 +19,6 @@ import pytest
 from infra2_sdk.config import (
     EnvironmentTier,
     RuntimeEnvKey,
-    read_runtime_env,
     resolve_tier,
 )
 from infra2_sdk.service import init_service
@@ -108,10 +107,20 @@ def test_a_retired_shell_alias_cannot_change_the_tier_a_test_sets(
     monkeypatch.setenv("ENV", "production")
     monkeypatch.setenv("ENVIRONMENT", "local_test")
 
-    raw_tier = read_runtime_env(
-        RuntimeEnvKey.ENVIRONMENT, {"ENVIRONMENT": "local_test"}
+    assert (
+        resolve_tier(os.environ.get(RuntimeEnvKey.ENVIRONMENT.value))
+        is EnvironmentTier.LOCAL_TEST
     )
-    assert resolve_tier(raw_tier) is EnvironmentTier.LOCAL_TEST
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    init_service(app, "ambient-env-tier-test", strict_otel=False)
+    try:
+        assert {"/livez", "/readyz", "/health"} <= {route.path for route in app.routes}
+    finally:
+        providers = getattr(app.state, "telemetry_providers", None)
+        if providers is not None:
+            providers.shutdown()
 
 
 @pytest.mark.parametrize(
