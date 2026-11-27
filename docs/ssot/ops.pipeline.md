@@ -24,7 +24,7 @@
 | **IaC Input Reconcile & Multi-App Release Train** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`tools/reconcile_iac_inputs.py`](https://github.com/wangzitian0/infra2/blob/main/tools/reconcile_iac_inputs.py) | **Release-tag** 触发(`push: tags: v*.*.*`,staging 班车的唯一入口)、定时同步(`schedule: 0 */2 * * *`,与 `sync_app_releases` dispatch 一样只开/更新同步 PR 后退出,从不部署)与显式晋升(`workflow_dispatch`,`after` 必须是 release tag,#1628):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;对 `harness/repos.yaml` 中变更的 App `release_tag` 或 `10.app/**` 目录按序输出独立 `deploy_v2` 命令（先主服务、再 `companions` 如 `truealpha/data_engine`，并从平台 batch 中剔除避免双部署）。 |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。底层调用 [`common/deploy/`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/) 领域包驱动执行。 |
 | **App Release Contract & Hooks** | [`common/deploy/app_contract.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/app_contract.py) · [`common/deploy/release_markers.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/release_markers.py) | App 契约预检（`verify_app_manifests`）、Vault 模板渲染（`render_release_template`）与 SDK 钩子调度（`execute_app_hook_slot`）。**marker 早于 `MINIMUM_PRODUCTION_MARKER`（`v1.1.59`，release pin #632 首次发布的 tag）时 fail-closed**：更旧的 deployer 会用运维手写进 Vault 的 digest 重建 data engine，而不是被晋升的那个 release（#650）。 |
-| **IaC Runner Bootstrap (L1)** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **随班车自更新 + 手动兜底**:`bootstrap/06.iac_runner/**` 等变更在 `reconcile-iac-inputs.yml` (`promote_prod=true`) 中于 `tools.reconcile_iac_inputs` 之前在 VPS 上先自更新 runner 并通过健康检查(跟被晋升 tag SHA);`deploy.yml` 保留手动 `workflow_dispatch` 入口。 |
+| **IaC Runner Bootstrap (L1)** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **随班车 Wave 0 自更新 + 手动兜底**:按 `runner_input_sha256`（AST + Dockerfile closure）在 staging 班车自更新 `iac-runner-staging`、在 `promote_prod=true`（owner 批准后）自更新 `iac-runner`；`deploy.yml` (`bootstrap` job) 保留手动 `workflow_dispatch` 入口。 |
 | **Observability config apply** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile:**已折进 tag release train** (`reconcile-iac-inputs.yml` `promote_prod=true`),`apply-observability.yml` 保留手动 `workflow_dispatch` (apply / canary / prune-alerts) 入口。 The `prune-alerts` mode runs `apply-alerts --prune` and never applies dashboards (#1435). |
 | **Docs site** | [`docs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs.yml) · [`docs/mkdocs.yml`](../mkdocs.yml) | MkDocs → GitHub Pages。 |
 
@@ -254,7 +254,7 @@ Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `har
 | **app prod** | **显式 promote**(`reconcile-iac-inputs.yml` `promote_prod=true`)或手动 `--bootstrap` | **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | `smoke` -> `prod_gate` (跨服务并发) | 真实 prod 数据 | 长期 |
 | **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | `smoke` -> `staging_gate` (含 `platform/todo`) | — | 长期 |
 | **平台服务**(iac_pinned)**prod** | **显式 promote**(`workflow_dispatch` `promote_prod=true` / `--promote-prod`)——tag 推送**不**自动动 prod | **同一 tag** | 同上 | `smoke` -> `prod_gate` (含 `platform/todo`) | — | 长期 |
-| **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | release tag SHA | 随 `reconcile-iac-inputs.yml` (`promote_prod=true`) 前置 self-update (或 `deploy.yml` 手动 `workflow_dispatch`) | — | — | 随 release train |
+| **L1 Bootstrap**(iac-runner)| `runner_input_sha256`（AST + Dockerfile closure）变更 | release tag SHA | 随 `reconcile-iac-inputs.yml` Wave 0（staging 更新 `iac-runner-staging`，`promote_prod=true` 更新 `iac-runner`；或 `deploy.yml` `bootstrap` 手动 `workflow_dispatch`） | — | — | 随 release train |
 
 Preview success is a two-stage proof, not public reachability alone. The lifecycle
 snapshots Dokploy deployment IDs before its trigger, waits for a new record attributable
@@ -328,7 +328,7 @@ infra2 有天然分层(层级编号沿用 [core.md#层级定义](./core.md#层�
 
 | 层 | 内容 | 部署触发 | 跟什么版本 |
 |----|------|---------|-----------|
-| **L1 Bootstrap** | iac-runner / Vault / Dokploy(部署引擎自己)| **release tag → reconcile (`promote_prod=true`) 前置自更新** + 手动 `workflow_dispatch` (`deploy.yml`) | release tag |
+| **L1 Bootstrap** | iac-runner / Vault / Dokploy(部署引擎自己)| **release tag → reconcile Wave 0（staging `iac-runner-staging`，`promote_prod=true` `iac-runner`）** + 手动 `workflow_dispatch` (`deploy.yml` `bootstrap`) | release tag |
 | **L2 Platform · 服务** | postgres / redis / signoz / alerting / openpanel … | **release tag → reconcile** | release tag |
 | **L2 Platform · 配置** | 告警规则 / 看板 / 探针 spec | **release tag → reconcile (`promote_prod=true`)** + 手动 `workflow_dispatch` (`apply-observability.yml`) | release tag |
 
@@ -452,9 +452,7 @@ App 不再 checkout/执行 infra2，也不再向 infra2 发送 push-based 跨仓
 4. **SDK Hook Slot 调度 (`common.deploy.stage_hooks.STAGE_HOOK_PLANS` & `run_cell`)**：`common/deploy/app_contract.py::execute_app_hook_slot` 与 `reconcile_iac_inputs.py` 读取 App 的 schema v3 `runtime-hooks.manifest.json`（`infra2_sdk.delivery.RuntimeHooksManifest`，检查行按 cell 归入五个槽位）（`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`），运行时向子进程注入 `HOOK_SLOT`、`HOOK_CELL`、`HOOK_POLICY_VERSION`、`HOOK_SCALE`（仅当存在 `accepts_scale: true` 检查时）和 `HOOK_ARTIFACTS_DIR`，并在 `run_post_deploy_app_hooks` 中使用 `ThreadPoolExecutor` 跨服务并发执行每个服务的 `smoke -> staging_gate` / `smoke -> prod_gate` 链（单服务 `smoke` 失败只中断该服务后续槽位，不掩盖兄弟服务结论；#1608, #1602）。Hook env 契约（#1529, #1534）：运行器只满足两组 `required_env` 名字。`HOOK_RUNNER_SECRET_NAMES`（`app_contract.py`）列出 `TA_EMAIL`、`TA_MEMBER_EMAIL`、`TA_PASSWORD`、`TA_MCP_TOKEN`，各取同名 GitHub secret，`reconcile-iac-inputs.yml` 与 `ops-checks.yml` 中每个运行钩子槽位的 step 都据此注入；`HOOK_RUNNER_CONTEXT_ENV` 的名字由部署请求填充。`HOOK_RUNNER_SECRET_NAMES | HOOK_RUNNER_CONTEXT_ENV` 之外的名字不得出现在 `required_env`。火车在第一个部署单元之前以 `audit_app_hooks` 值模式（`operation` 作业首个检查 `hook_env`，因 `pre` 不持有 secret，#1646）按固定 tag 的 manifest 与真实环境值检查阶段槽位，缺失或为空即失败并指明服务、槽位与名字（#1633）；`run_scheduled_app_audits` 同样先检查。`--audit-app-hooks` 校验 `schema_version == 3`、每个槽位的 cell 非空，并对任何槽位中不在 `HOOK_RUNNER_SECRET_NAMES | HOOK_RUNNER_CONTEXT_ENV` 的 `required_env` 直接 fail-closed 报错（不再用占位符掩盖）。告警路由与命名空间隔离（#1590）：`reconcile-iac-inputs.yml` 的同步（`schedule` 与 `sync_app_releases` dispatch）只执行 `--create-pr` 并退出，不触发 Staging 部署或健康巡检；事件驱动发布仅用 `failure_alert_text` 按三态分类（容器部署失败发 `🚨 IaC reconcile FAILED`、部署成功而钩子失败发 `⚠️ Post-deploy hook FAILED`、全通过返回 `None`）。`ops-checks.yml::audit` 统一接入 `common/observability/page_dedup.py`（身份 key 为 `guard:*` 与 `app-hook:<service>:<slot>:<env>`，状态存储在 `ops-checks paged: audit`）。App 钩子失败的记录是所在 job 的 `page_dedup` 状态 issue，每个钩子一个 key `app-hook:<service>:<slot>:<env>`（key 取自 `common/deploy/deploy_guard_audit.py::app_hook_pair`，发布链路读 `alert` 作业合并三个作业 `iac-input-reconcile-result-<job>` 的 `hook_results`）；`alert` 作业的 `Alert on failure` 为每个红钩子登记 key，`Resolve the reconcile failure alert` 在该钩子自己跑绿时才移除对应 key（`sticky_prefix=APP_HOOK_KEY_PREFIX`、`green=`本次绿钩子）：其他钩子仍红时只重写状态为红 key（不发页、不发卡，`incident_since` 不变），全部绿后才发一张 RESOLVED；没跑的钩子保持打开，状态标记不可读时也不销。`scheduled_audit` 另由夜间审计的 `ops-checks paged: audit` 记录；发布链路自身不再开 issue，也不存在 `smoke`/`staging_gate`/`prod_gate` 的每 key `ops-checks watchdog is red: ` issue（#1634）。临时 App 检出默认以 depth-1 拉取单个 commit；仅当槽位 cell 内某个有效检查声明 `checkout_lineage: true`（如 `truealpha` 的 `scheduled_audit`，#1567, #1590）时才追加拉取 `vX.Y.Z` tag 的完整无 blob 提交历史。tag 拉取失败打印 `::warning::` 并继续执行钩子。
 5. **Staging 晋升记录与环境锁守卫**：生产晋升前由 `upstream_post` 与 GitHub `production` environment protection + `production_contract.py` 执行门禁检查。
 
-The workflow `deploy.yml` with `type=prod` also takes a typed `iac_ref` for manual or break-glass dispatches (`bootstrap=true` when overriding `harness/repos.yaml`).
-`deploy_v2` requires `iac_ref` to be a release tag on main. The run waits for the owner in the `production`
-environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the issue.
+Direct prod dispatch via `deploy.yml` (`type=prod`) is retired; prod promotions run through `reconcile-iac-inputs.yml` (`promote_prod=true`), which waits for the owner in the `production` environment and records `production/vX.Y.Z` markers. `deploy.yml` accepts `staging` and `preview` (and `bootstrap/iac-runner` manual fallback).
 
 ### 4.2 Stage records and the stage card (#1645)
 
@@ -467,7 +465,7 @@ production promotion does not upload its `post` record (#2123). A record is a
   only, and it needs every `blocks_merge: true` job of `ci-gate-inventory.yaml`. A cancelled job means no record.
 - **Checks.** `pre`: `contract`, `provenance`, `app_pins` and for a production promotion `upstream_post`. `operation`: `hook_env`, one check for each deploy command with its seconds, one for each `smoke` hook and for a production promotion the check `production_marker` (the record is written after the marker; a rejected or failed marker is a failed `operation` record). `post`: one check for each gate hook, its `detail` starting with `[<version_ref>]`. A failed `operation` runs no `post` and writes no `post` record. A dry run writes no record.
 - **Units.** `app:<service>` and `infra:<service>` come from the deploy plan. `harness:<dir>` comes from changed files outside
-  every service. `sdk:<version>` is the installed infra2-sdk (the wheel that `tools/sdk_requirement.py` reads from `uv.lock`). `uncovered` lists the services that no hook slot checked.
+  every service. For a planned deploy, `sdk:<version>` comes from `canary_sdk_unit()` (pinned `platform/30.todo/compose.yaml` + `slots.yaml`); `infra-ci:record` and un-planned runs read `tools/sdk_requirement.py` from `uv.lock`. `uncovered` lists the services that no hook slot checked.
 - **Upload.** Each record is the artifact `stage-<env>-<phase>-<subject>` (the colon of the subject becomes a hyphen). The
   writer sets `STAGE_RECORD_<PHASE>` in `GITHUB_ENV`, and an upload step with `if: always()` in the job of that phase reads it. Each job also uploads its result file as `iac-input-reconcile-result-<job>`; only the `alert` job reads it.
 - **Reader.** `tools/stage_records.py list` (a thin entry of `common/deploy/stage_record_reader.py`, standard library only) prints the records that pass the provenance checks of
@@ -515,9 +513,8 @@ An `interrupted` answer (the runner restarted while it ran the deploy, #1439) is
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | 健康检查(含 vault / op / dokploy_api_key 功能性 fail-closed)|
-| `/webhook` | POST | GitHub push receiver. **Deploys nothing**: a merge is not a release. staging 由 release tag 经 `reconcile-iac-inputs.yml` 自动晋升，prod 由显式 promote，app 的 PR 走 preview 栈；infra2 自身没有常驻 preview（#1477）。此前它会用未打标的 main HEAD 部署 staging（对每个声明了 `common/**`/`tools/**` 的服务，等于「合并即部署」），该路径已移除。|
-| `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
-| `/deploy/status` | POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果 |
+| `/deploy` | POST | 版本部署 |
+| `/deploy/status/{deployment_id}` · `/deploy/status` | GET · POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果（`/webhook` 已彻底移除） |
 
 ### 5.2 服务映射规则(fan-out)
 
@@ -525,7 +522,7 @@ An `interrupted` answer (the runner restarted while it ran the deploy, #1439) is
 |---------|------|------|
 | `platform/<nn>.<svc>/*` | `<svc>.sync` | 自动同步该平台服务 |
 | `common/*` / `tools/*` | **仅声明依赖的服务** | 由 `deploy-dependencies.yaml` fan-out;纯工具变化不部署 |
-| `bootstrap/06.iac_runner/*` | **带外 bootstrap 更新** | Actions 在 `/deploy` 前重建 runner |
+| `bootstrap/06.iac_runner/*` | **Wave 0 / bootstrap** | `reconcile-iac-inputs.yml` Wave 0 按 `runner_input_sha256` 在 `/deploy` 前独立重建对应环境 runner，或经 `deploy.yml` `bootstrap` job 手动触发 |
 | `bootstrap/*` | **Skipped** | 其余 bootstrap 是首装/灾备依赖,保持手动 |
 | `finance_report/*` · `finance/*` | **Skipped** | 走应用独立 CI |
 
@@ -673,8 +670,7 @@ Tag kind `commit` (`platform/12.alerting`): for an image that copies `common/` o
 - **A production job waits for the owner (#1125, #1035).** Each job that can change production declares
   `environment: production`. The job stops at `waiting` until a required reviewer approves the run.
   - Conditional jobs use `environment: ${{ <production condition> && 'production' || 'staging' }}`.
-    The jobs are `deploy.yml` `deploy` (`inputs.type == 'prod'`) and `reconcile-iac-inputs.yml` `operation`
-    (`inputs.promote_prod`).
+    The active production deploy job is `reconcile-iac-inputs.yml` `operation` (`inputs.promote_prod`; direct `deploy.yml` `type=prod` dispatch is retired).
   - These jobs always use `production`: `deploy.yml` `bootstrap`, `apply-observability.yml` `apply`,
     and `deploy-cloudflare-watchdog.yml` `deploy`.
   - A run that waits holds its concurrency group. A production run therefore has its own group, so a

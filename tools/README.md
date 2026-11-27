@@ -305,7 +305,7 @@ WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
 
 ## watchdog_issue_trail.py
 
-The ops-checks watchdog job's last step (truealpha#876 W4): reads the verdicts the
+The `watchdog.yml` watchdog job's last step (truealpha#876 W4): reads the verdicts the
 earlier steps recorded and keeps one issue per red paging check (and, when every
 step recorded completely, closes issues of checks nobody records any more), titled exactly
 `ops-checks watchdog is red: <check>` — open or comment while red, comment and

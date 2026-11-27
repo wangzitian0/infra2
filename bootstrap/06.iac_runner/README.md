@@ -228,7 +228,7 @@ FileNotFoundError: [Errno 2] No such file or directory: 'op'
 
 **Solution**: Dockerfile now includes op CLI installation:
 ```dockerfile
-# Install 1Password CLI (required by common/common.py::OpSecrets)
+# Install 1Password CLI (required by common/security/store.py::OpSecrets)
 RUN curl -sSfLo op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip && \
     unzip -od /usr/local/bin/ op.zip && \
     rm op.zip && \

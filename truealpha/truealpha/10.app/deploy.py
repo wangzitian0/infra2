@@ -175,7 +175,7 @@ class AppDeployer(Deployer):
         _preserve_runtime_env) -- omitting APP_HOST here would silently wipe it on the
         next auto-sync, reproducing truealpha#474's outage. Fixed-env deploy_v2
         (the staging/prod deploy_v2 path) never calls this method at all -- it calls
-        compose_env_overrides directly instead (see promote.py) -- so both paths must
+        compose_env_overrides directly instead (see `common/deploy/v2.py`) -- so both paths must
         independently end up with APP_HOST; this just forwards to the same formula.
         """
         base = super().compose_env_base(env)

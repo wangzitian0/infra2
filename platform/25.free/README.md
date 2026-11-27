@@ -23,18 +23,10 @@
 ## Quick Start
 
 ```bash
-# Deploy to production (CLI)
-python -m tools.deploy_v2 --service platform/free --type prod --iac-ref vX.Y.Z --domain zitian.party --staging-validated --code-reviewed
+# Promote to production via the release train after staging validation
+gh workflow run reconcile-iac-inputs.yml -f after=vX.Y.Z -f promote_prod=true
 
-# Deploy to production (GitHub Actions workflow_dispatch)
-gh workflow run deploy.yml \
-  -f service=platform/free \
-  -f type=prod \
-  -f iac_ref=vX.Y.Z \
-  -f staging_validated=true \
-  -f code_reviewed=true
-
-# Deploy to staging
+# Deploy to staging (manual CLI / workflow_dispatch)
 python -m tools.deploy_v2 --service platform/free --type staging --iac-ref vX.Y.Z --domain zitian.party
 ```
 
@@ -43,7 +35,7 @@ python -m tools.deploy_v2 --service platform/free --type staging --iac-ref vX.Y.
 When `/data/platform/free/config.json` is absent on the host, `FreeDeployer.verify_still_in_service` blocks the unchanged-config skip and forces a full redeploy that creates a fresh UUID and secret path (#1615).
 
 1. Move the active host config aside on the VPS: `mv /data/platform/free/config.json /data/platform/free/config.json.bak`.
-2. Run `deploy.yml` with `service=platform/free`, `type=prod`, `iac_ref=<latest-tag>`, `staging_validated=true`, and `code_reviewed=true` (after staging validation).
+2. Promote the release tag to production via `reconcile-iac-inputs.yml` (`after=<latest-tag>`, `promote_prod=true`, after staging validation).
 3. Inspect the new client connection details with `FREE_SHOW_SECRETS=1` and remove the `.bak` file once clients switch over.
 
 ## Client Connection Information
@@ -53,4 +45,4 @@ Set `FREE_SHOW_SECRETS=1` (and optionally `FREE_CLIENT_INFO_PATH`) in your envir
 ```bash
 FREE_SHOW_SECRETS=1 FREE_CLIENT_INFO_PATH=/tmp/free-client.md python -m tools.deploy_v2 --service platform/free --type prod ...
 ```
-To inspect the running service without secret exposure, run `invoke free.status`.
+To inspect the running service without secret exposure, run `DEPLOY_ENV=production uv run invoke free.status`.

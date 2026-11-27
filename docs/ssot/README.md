@@ -80,7 +80,7 @@
 |------|----------|----------|
 | [db.overview.md](./db.overview.md) | `db.overview` | 数据库总览、Vault 机制 |
 | [db.vault-integration.md](./db.vault-integration.md) | `db.vault` | Per-App Token、故障排查 |
-| [db.platform_pg.md](./db.platform_pg.md) | `db.platform_pg` | Platform PG (L1) |
+| [db.platform_pg.md](./db.platform_pg.md) | `db.platform_pg` | Platform PG (L2) |
 | [db.redis.md](./db.redis.md) | `db.redis` | Redis 缓存 |
 | [db.clickhouse.md](./db.clickhouse.md) | `db.clickhouse` | ClickHouse (SigNoz Storage) |
 

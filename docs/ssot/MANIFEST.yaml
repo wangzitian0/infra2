@@ -191,7 +191,7 @@ entries:
       - common/tests/test_vault_approle_invariants.py
   db.platform_pg:
     owner: docs/ssot/db.platform_pg.md
-    summary: Platform PG (L1)
+    summary: Platform PG (L2)
     description: Platform PostgreSQL.
     proofs:
       - platform/01.postgres/compose.yaml

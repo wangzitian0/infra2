@@ -11,7 +11,7 @@ Types:
     app_vars   - Vault: what services read at runtime (default)
 
 Nobody types into Vault (docs/ssot/bootstrap.vars_and_secrets.md §1.4): the deploy-time
-supply (common/secrets_supply.py) fills it from the manifest — human values are copied
+supply (`common/security/supply.py`) fills it from the manifest — human values are copied
 from 1Password, runtime values are generated. ``env.set --type=app_vars`` therefore
 refuses unless ``--break-glass`` is given, and the daily reconcile reports the drift.
 """

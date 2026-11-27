@@ -362,7 +362,7 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 
 **三条框架护栏（与业务无关，保持稳定）**：
 1. **type 选策略/配置，不是内嵌值的扁平枚举**：外层只传正交的 `preview` / `staging` / `prod`，由 `resolve_deploy_type_for_ref(type, version_ref)` 在控制面派生 `preview/branch` 或 `preview/pr`。
-2. **公共内核 + per-type 配置**：入口 resolve `type → spec` 一次，并按 `ServiceSpec.artifact_source`（`"infra2"` vs `"app"`，与 `iac_pinned` 解耦）分派；控制面缺省自动推导 `iac_ref`（`staging`/`prod` 取最新 `vX.Y.Z` release tag，`preview` 取 `main`）与 `domain`（`infra_domain()`）。`deploy_v2`、`promote.deploy` 与 `preview.up` 均收敛为 `Options` / `Deps` 参数对象（`<= 6` 参数，拒绝平铺关键字参数）。
+2. **公共内核 + per-type 配置**：入口 resolve `type → spec` 一次，并按 `ServiceSpec.artifact_source`（`"infra2"` vs `"app"`，与 `iac_pinned` 解耦）分派；控制面缺省自动推导 `iac_ref`（`staging`/`prod` 取最新 `vX.Y.Z` release tag，`preview` 取 `main`）与 `domain`（`infra_domain()`）。`deploy_v2`、`steps.app_rollout` 与 `steps.preview_slot` 均收敛为 `Options` / `Deps` 参数对象（`<= 6` 参数，拒绝平铺关键字参数）。
 3. **fail-closed by construction**：未知 type 拒；形态不匹配当场拒；`artifact_source="infra2"` 在 `staging`/`prod` 只接受单个 ref（`version_ref` 与 `iac_ref` 冲突即拒）；绝不让"参数全空"隐式触发未声明的部署类型。
 
 **version 寻址语义（已落地，不再是 TBD）**：`version_ref` 按 `type` 解释——preview/pr 是 PR 号（`resolve_pr` →

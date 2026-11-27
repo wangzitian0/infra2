@@ -105,7 +105,7 @@ services:
 | **Dokploy UI 配置** | UI 友好、快速配置 | 与 labels 冲突、不支持复杂中间件 | 简单服务、无 SSO |
 | **混合模式** | - | 配置分散、难以维护 | ⛔ 禁止 |
 
-Simple public HTTP services such as IaC Runner and Wealthfolio should use
+Simple public HTTP services such as IaC Runner should use
 Dokploy Domains. Compose Traefik labels are reserved for routes that need
 code-owned middleware or non-standard routing behavior.
 

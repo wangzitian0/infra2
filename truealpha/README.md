@@ -22,21 +22,21 @@ truealpha/
 |---------|------------|-------|
 | postgres | vault | Secrets from Vault (AppRole) |
 | app | postgres, vault | `truealpha-llm` + `truealpha-web` containers |
-| data_engine | postgres, vault | Dagster webserver + daemon |
+| data_engine | postgres, vault | Dagster daemon + code-server |
 
 ## Quick Start
 
 ```bash
 # Deploy database layer through deploy_v2
-python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service truealpha/postgres --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # Deploy application through deploy_v2
 python -m tools.deploy_v2 --service truealpha/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # Verify
-invoke ta-postgres.shared.status
-invoke ta-app.shared.status
-invoke ta-data_engine.shared.status
+DEPLOY_ENV=staging uv run invoke ta-postgres.shared.status
+DEPLOY_ENV=staging uv run invoke ta-app.shared.status
+DEPLOY_ENV=staging uv run invoke ta-data_engine.shared.status
 ```
 
 ## Vault Secrets

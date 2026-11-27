@@ -72,9 +72,8 @@ flowchart TB
     Vault -->|app tokens| Apps
 
     %% CI/CD flow
-    GitHub -->|push to main| Actions
+    GitHub -->|push tag vX.Y.Z| Actions
     Actions -->|webhook /deploy| IaCRunner
-    GitHub -->|webhook /webhook| IaCRunner
     IaCRunner -->|invoke sync| Platform
 
     %% Bootstrap provides
