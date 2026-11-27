@@ -1,3 +1,4 @@
+# Rollout trigger: deploy truealpha v0.3.20 with iac-runner sync_pipeline PYTHONPATH fix.
 import json
 import shutil
 import sys

@@ -947,6 +947,10 @@ def run_sync_pipeline_spec(
     if vault_root_token := resolve_vault_token(env_vars):
         env_vars["VAULT_TOKEN"] = vault_root_token
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
+    existing_pp = env_vars.get("PYTHONPATH", "").strip()
+    env_vars["PYTHONPATH"] = (
+        f"{repo_path}:{existing_pp}" if existing_pp else str(repo_path)
+    )
     env_vars.setdefault("COLUMNS", "200")
     try:
         result = subprocess.run(
