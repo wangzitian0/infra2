@@ -1929,3 +1929,73 @@ def test_all_slots_cli_verifies_primary_and_secondary_slots() -> None:
     assert mock_verify.call_args_list[0].kwargs["require_llm"] is True
     assert mock_verify.call_args_list[1].kwargs["slot"] == "v4-11"
     assert mock_verify.call_args_list[1].kwargs["require_llm"] is False
+
+
+def test_app_peer_pillar_accepts_versioned_slot_service_name_and_rejects_other_slot() -> (
+    None
+):
+    """_evaluate_app_peer_pillar accepts the target slot's service name and rejects a mismatched slot."""
+    from common.observability.canary_verify import _evaluate_app_peer_pillar
+
+    worker_v413 = (
+        '{"logger":"platform-todo-worker","service.name":"platform-todo-v4-13"}\n'
+        '{"ok":true,"status_code":200,"service":"platform-todo-v4-13"}\n'
+        "__EXIT__=0"
+    )
+    ok_res = _evaluate_app_peer_pillar(
+        sections={
+            "WORKER": worker_v413,
+            "SCHEMA_CHECK": "ROLLBACK_CLASS: A\n__EXIT__=0",
+        },
+        installed_sdk="4.13.0",
+        require_app_peer=True,
+        expected_service_name="platform-todo-v4-13",
+    )
+    assert ok_res.ok is True, ok_res.summary
+
+    worker_v411 = (
+        '{"logger":"platform-todo-worker","service.name":"platform-todo-v4-11"}\n'
+        '{"ok":true,"status_code":200,"service":"platform-todo-v4-11"}\n'
+        "__EXIT__=0"
+    )
+    bad_res = _evaluate_app_peer_pillar(
+        sections={
+            "WORKER": worker_v411,
+            "SCHEMA_CHECK": "ROLLBACK_CLASS: A\n__EXIT__=0",
+        },
+        installed_sdk="4.13.0",
+        require_app_peer=True,
+        expected_service_name="platform-todo-v4-13",
+    )
+    assert bad_res.ok is False
+    assert "worker health result missing or failed" in bad_res.summary
+
+
+def test_verify_canary_matches_expected_version_against_git_sha_and_queries_observed_service_version() -> (
+    None
+):
+    """verify_canary accepts expected_version matching health git_sha and scopes ClickHouse to observed version."""
+    fresh = FIXED_NOW.strftime("%Y-%m-%d %H:%M:%S")
+    base_ok = _canned_stdout(
+        traces=f"500\t{fresh}",
+        logs=f"100\t{fresh}",
+        environment="staging",
+    )
+    matched, commands = _verify_with_canned_ssh(
+        "staging",
+        base_ok,
+        health_body={"ok": True, "version": "v4.13.0", "git_sha": "397af77f"},
+        expected_version="397af77f",
+    )
+    assert matched.monitoring.ok is True, matched.monitoring.summary
+    assert matched.all_ok is True, matched
+    assert "'v4.13.0'" in commands[0]
+
+    stale, _ = _verify_with_canned_ssh(
+        "staging",
+        base_ok,
+        health_body={"ok": True, "version": "v4.13.0", "git_sha": "oldsha99"},
+        expected_version="397af77f",
+    )
+    assert stale.monitoring.ok is False
+    assert "public_health=fail" in stale.monitoring.summary
