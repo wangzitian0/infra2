@@ -55,8 +55,8 @@ SSO_PROTECTED_STATUSES = frozenset({301, 302, 303, 307, 308, 401, 403})
 # A timestamp may run ahead of the local clock by this much before it counts as skew.
 CLOCK_SKEW_TOLERANCE_SECONDS = 60
 # Startup grace after container State.StartedAt to absorb deploy restart probe ticks (#1720;
-# covers integer-second epoch truncation plus compose.yaml start_period=10s).
-RESTART_GRACE_SECONDS = 15
+# covers compose.yaml start_period plus initial 45s slot stabilization window).
+RESTART_GRACE_SECONDS = 45
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -383,28 +383,68 @@ def _summary_probe_command(container: str, *, stream: bool) -> str:
     )
 
 
-def _parse_canary_sdk_version_from_compose_text(compose_text: str) -> str:
+def _parse_canary_sdk_version_from_compose_text(
+    compose_text: str, slot: str | None = None
+) -> str:
     """SDK version of the Canary image pin (common/deploy/canary_pin.py), or "" (infra2-sdk#247)."""
-    from common.deploy.canary_pin import CanaryPinError, canary_image_from_compose_text
+    from common.deploy.canary_pin import (
+        _PIN_RE,
+        CanaryPinError,
+        canary_image_from_compose_text,
+    )
 
+    if slot:
+        import yaml
+
+        data = yaml.safe_load(compose_text) or {}
+        service = (data.get("services") or {}).get(f"todo-{slot}")
+        if not isinstance(service, dict):
+            return ""
+        match = _PIN_RE.match(str(service.get("image") or ""))
+        return match["version"] if match else ""
     try:
         return canary_image_from_compose_text(compose_text)[1]
     except (CanaryPinError, AttributeError, TypeError):
         return ""
 
 
-def _sdk_version_of_checkout(root: Path) -> str:
-    """The Canary SDK of a checkout: its compose image pin, or "" without one."""
+def _sdk_version_of_checkout(root: Path, slot: str | None = None) -> str:
+    """The Canary SDK of a checkout: its compose or slots image pin, or "" without one."""
+    if slot and (root / "platform/30.todo/slots.yaml").is_file():
+        from common.deploy.canary_pin import load_canary_slots
+
+        for item in load_canary_slots(root):
+            if item.slot == slot:
+                return item.version
     compose = root / "platform/30.todo/compose.yaml"
     if not compose.exists():
         return ""
     return _parse_canary_sdk_version_from_compose_text(
-        compose.read_text(encoding="utf-8")
+        compose.read_text(encoding="utf-8"), slot=slot
     )
 
 
-def _sdk_version_at_ref(root: Path, ref: str, runner) -> tuple[bool, str]:
+def _sdk_version_at_ref(
+    root: Path, ref: str, runner, slot: str | None = None
+) -> tuple[bool, str]:
     """``(found, version)`` of the Canary SDK at ``ref``: the compose image pin."""
+    if slot:
+        slots_blob = runner(
+            ["git", "-C", str(root), "show", f"{ref}:platform/30.todo/slots.yaml"],
+            capture_output=True,
+            text=True,
+        )
+        if slots_blob.returncode == 0:
+            import yaml
+
+            doc = yaml.safe_load(slots_blob.stdout) or {}
+            for entry in doc.get("slots") or ():
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("slot") == slot
+                    and entry.get("version")
+                ):
+                    return True, str(entry["version"])
     compose = runner(
         ["git", "-C", str(root), "show", f"{ref}:platform/30.todo/compose.yaml"],
         capture_output=True,
@@ -412,7 +452,8 @@ def _sdk_version_at_ref(root: Path, ref: str, runner) -> tuple[bool, str]:
     )
     if compose.returncode != 0:
         return False, ""
-    return True, _parse_canary_sdk_version_from_compose_text(compose.stdout)
+    version = _parse_canary_sdk_version_from_compose_text(compose.stdout, slot=slot)
+    return (bool(version) if slot else True), version
 
 
 def _resolve_locked_sdk_version(
@@ -420,11 +461,13 @@ def _resolve_locked_sdk_version(
     environment: str = "production",
     repo_root: Path | None = None,
     runner=subprocess.run,
+    slot: str | None = None,
 ) -> str:
     """The SDK version the deployed Canary must run (#1289, infra2-sdk#247).
 
     It reads the release that the environment serves: the Canary image pin of
-    ``platform/30.todo/compose.yaml``. Every release since #247 pins the image there.
+    ``platform/30.todo/compose.yaml`` (or the selected ``slot`` in
+    ``platform/30.todo/slots.yaml``). Every release since #247 pins the image there.
     """
     root = repo_root or Path(__file__).resolve().parents[2]
     try:
@@ -439,7 +482,9 @@ def _resolve_locked_sdk_version(
             remote_ver = remote_production_marker(repo_root=root, runner=runner)
             if remote_ver:
                 marker_ref = f"{PRODUCTION_MARKER_PREFIX}{remote_ver}"
-                found, version_str = _sdk_version_at_ref(root, marker_ref, runner)
+                found, version_str = _sdk_version_at_ref(
+                    root, marker_ref, runner, slot=slot
+                )
                 if not found:
                     fetched = runner(
                         [
@@ -456,16 +501,18 @@ def _resolve_locked_sdk_version(
                     )
                     if fetched.returncode == 0:
                         found, version_str = _sdk_version_at_ref(
-                            root, marker_ref, runner
+                            root, marker_ref, runner, slot=slot
                         )
                 if not found:
-                    found, version_str = _sdk_version_at_ref(root, remote_ver, runner)
+                    found, version_str = _sdk_version_at_ref(
+                        root, remote_ver, runner, slot=slot
+                    )
                 if found and version_str:
                     return version_str
             ref = production_marker(repo_root=root, runner=runner)
         else:
             ref = newest_release_tag(repo_root=root, runner=runner)
-        found, version_str = _sdk_version_at_ref(root, ref, runner)
+        found, version_str = _sdk_version_at_ref(root, ref, runner, slot=slot)
         if found and version_str:
             return version_str
     except Exception:
@@ -474,7 +521,7 @@ def _resolve_locked_sdk_version(
     # that production serves. An empty expected version fails the SDK check.
     if environment == "production":
         return ""
-    version_str = _sdk_version_of_checkout(root)
+    version_str = _sdk_version_of_checkout(root, slot=slot)
     if version_str:
         return version_str
     try:
@@ -888,6 +935,56 @@ def _evaluate_platform_deps(
     return True, "pass"
 
 
+def _slot_runtime_target(
+    environment: str, slot: str | None, repo_root: Path | None
+) -> tuple[str, str, str, str, str, str]:
+    """Return ``(container, telemetry_service_name, domain, signal_id, pg_role, pg_db)``."""
+    suffix = "" if environment == "production" else "-staging"
+    domain_suffix = "" if environment == "production" else "-staging"
+    root = repo_root or Path(__file__).resolve().parents[2]
+    try:
+        from common.deploy.canary_pin import load_canary_slots, primary_canary_slot
+
+        if (root / "platform/30.todo/slots.yaml").is_file():
+            slots = load_canary_slots(root)
+            selected = (
+                next((s for s in slots if s.slot == slot), None)
+                if slot
+                else primary_canary_slot(root)
+            )
+            if selected is None:
+                raise ValueError(f"Unknown canary slot: {slot!r}")
+            container = f"{selected.container_prefix}{suffix}"
+            telem_service = selected.otel_service_name
+            host_label = "todo" if selected.primary else f"todo-{selected.slot}"
+            domain = f"{host_label}{domain_suffix}.zitian.party"
+            signal_id = (
+                f"{environment}:todo-canary-status"
+                if selected.primary
+                else f"{environment}:todo-{selected.slot}-canary-status"
+            )
+            return (
+                container,
+                telem_service,
+                domain,
+                signal_id,
+                selected.pg_role,
+                selected.database,
+            )
+    except ValueError:
+        raise
+    except Exception:
+        pass
+    return (
+        f"platform-todo{suffix}",
+        TELEMETRY_SERVICE_NAME,
+        f"todo{domain_suffix}.zitian.party",
+        f"{environment}:todo-canary-status",
+        "",
+        "",
+    )
+
+
 def verify_canary(
     environment: str = "production",
     expected_sdk: str | None = None,
@@ -895,25 +992,26 @@ def verify_canary(
     max_age_seconds: int = DEFAULT_WINDOW_SECONDS,
     now: datetime | None = None,
     repo_root: Path | None = None,
-    require_llm: bool = True,
+    require_llm: bool = False,
     require_app_peer: bool = True,
     require_platform_deps: bool = False,
     expected_version: str | None = None,
+    slot: str | None = None,
 ) -> CanaryRealityReport:
     if expected_sdk is None:
         expected_sdk = _resolve_locked_sdk_version(
-            environment=environment, repo_root=repo_root
+            environment=environment, repo_root=repo_root, slot=slot
         )
 
     host, user, key_path, port = _resolve_ssh_credentials()
     suffix = "" if environment == "production" else "-staging"
-    container = f"platform-todo{suffix}"
+    container, telem_service, domain, signal_id, pg_role, pg_db = _slot_runtime_target(
+        environment, slot, repo_root
+    )
     bridge_container = f"platform-alerting{suffix}"
-    domain = f"todo{suffix}.zitian.party"
     ledger_path = (
         f"/var/lib/infra2-availability-ledger{suffix}/availability-ledger.json"
     )
-    signal_id = f"{environment}:todo-canary-status"
 
     # 1. Public Health Check (runs before ClickHouse SQL construction so observed
     # `service.version` can scope telemetry queries when expected_version is omitted).
@@ -955,7 +1053,7 @@ def verify_canary(
     # shlex.quote protects the SQL at the remote shell boundary.
     traces_sql = shlex.quote(
         traces_query(
-            service_name=TELEMETRY_SERVICE_NAME,
+            service_name=telem_service,
             environment=environment,
             window_seconds=max_age_seconds,
             version=telemetry_version,
@@ -963,7 +1061,7 @@ def verify_canary(
     )
     logs_sql = shlex.quote(
         logs_query(
-            service_name=TELEMETRY_SERVICE_NAME,
+            service_name=telem_service,
             environment=environment,
             window_seconds=max_age_seconds,
             version=telemetry_version,
@@ -971,7 +1069,7 @@ def verify_canary(
     )
     canary_metrics_sql = shlex.quote(
         canary_metrics_query(
-            service_name=TELEMETRY_SERVICE_NAME,
+            service_name=telem_service,
             environment=environment,
             window_seconds=max_age_seconds,
             version=telemetry_version,
@@ -979,7 +1077,7 @@ def verify_canary(
     )
     gen_ai_spans_sql = shlex.quote(
         gen_ai_spans_query(
-            service_name=TELEMETRY_SERVICE_NAME,
+            service_name=telem_service,
             environment=environment,
             window_seconds=max_age_seconds,
             version=telemetry_version,
@@ -987,7 +1085,7 @@ def verify_canary(
     )
     gen_ai_metrics_sql = shlex.quote(
         gen_ai_metrics_query(
-            service_name=TELEMETRY_SERVICE_NAME,
+            service_name=telem_service,
             environment=environment,
             window_seconds=max_age_seconds,
             version=telemetry_version,
@@ -995,9 +1093,33 @@ def verify_canary(
     )
 
     # 2. In-container Canary Status & Installed SDK via SSH
-    llm_non_stream_cmd = _summary_probe_command(container, stream=False)
-    llm_stream_cmd = _summary_probe_command(container, stream=True)
     feishu_cmd = _feishu_probe_command(bridge_container)
+    db_rewrite = (
+        f'DATABASE_URL="$(printf "%s" "$DATABASE_URL" | sed "s|://todo_app:|://{pg_role}:|; s|/postgres$|/{pg_db}|")"; '
+        if pg_role and pg_db
+        else ""
+    )
+    llm_block = ""
+    if require_llm:
+        llm_non_stream_cmd = _summary_probe_command(container, stream=False)
+        llm_stream_cmd = _summary_probe_command(container, stream=True)
+        llm_block = (
+            f'echo "=== LLM_SUMMARY ===" && '
+            f"llm_out=$({llm_non_stream_cmd}) && "
+            f'printf "%s\\n" "$llm_out" && '
+            f'echo "=== LLM_SUMMARY_STREAM ===" && '
+            f"{llm_stream_cmd} && "
+            f'echo "=== GEN_AI_SPANS ===" && '
+            f"gen_ai_spans_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_spans_sql}) && "
+            f'case "$llm_out" in *\'"status":"pass"\'*|*\'"status": "pass"\'*) '
+            f'for _i in 1 2 3 4 5; do set -- $gen_ai_spans_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 2; gen_ai_spans_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_spans_sql}); done ;; esac && '
+            f'printf "%s\\n" "$gen_ai_spans_out" && '
+            f'echo "=== GEN_AI_METRICS ===" && '
+            f"gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}) && "
+            f'case "$llm_out" in *\'"status":"pass"\'*|*\'"status": "pass"\'*) '
+            f'for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do set -- $gen_ai_metrics_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 5; gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}); done ;; esac && '
+            f'printf "%s\\n" "$gen_ai_metrics_out" && '
+        )
     remote_script = (
         f'echo "=== STATUS ===" && '
         f"docker exec {container} python3 -c \"import urllib.request, json; print(json.dumps(json.loads(urllib.request.urlopen('http://localhost:8000/api/canary/status').read())))\" && "
@@ -1017,25 +1139,11 @@ def verify_canary(
         f"docker exec {bridge_container} python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\" && "
         f'echo "=== ALERT_BRIDGE_FEISHU ===" && '
         f"{feishu_cmd} && "
-        f'echo "=== LLM_SUMMARY ===" && '
-        f"llm_out=$({llm_non_stream_cmd}) && "
-        f'printf "%s\\n" "$llm_out" && '
-        f'echo "=== LLM_SUMMARY_STREAM ===" && '
-        f"{llm_stream_cmd} && "
-        f'echo "=== GEN_AI_SPANS ===" && '
-        f"gen_ai_spans_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_spans_sql}) && "
-        f'case "$llm_out" in *\'"status":"pass"\'*|*\'"status": "pass"\'*) '
-        f'for _i in 1 2 3 4 5; do set -- $gen_ai_spans_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 2; gen_ai_spans_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_spans_sql}); done ;; esac && '
-        f'printf "%s\\n" "$gen_ai_spans_out" && '
-        f'echo "=== GEN_AI_METRICS ===" && '
-        f"gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}) && "
-        f'case "$llm_out" in *\'"status":"pass"\'*|*\'"status": "pass"\'*) '
-        f'for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do set -- $gen_ai_metrics_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 5; gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}); done ;; esac && '
-        f'printf "%s\\n" "$gen_ai_metrics_out" && '
+        f"{llm_block}"
         f'echo "=== WORKER ===" && '
         f'{{ worker_out=$(docker exec {container} sh -c \'if [ -f /app/worker.py ]; then python3 /app/worker.py --once --health-url http://127.0.0.1:8000/readyz; else printf "{{\\"status\\":\\"unsupported\\"}}\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$worker_out" $?; }} && '
         f'echo "=== SCHEMA_CHECK ===" && '
-        f'{{ schema_out=$(docker exec {container} sh -c \'if [ -f /app/canary_schema.py ]; then [ -f /secrets/.env ] && {{ set -a; . /secrets/.env; set +a; }}; PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}/app" python3 -m infra2_sdk.storage check-schema --metadata canary_schema:METADATA --db-url "$DATABASE_URL" --label platform/todo; else printf "UNSUPPORTED\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$schema_out" $?; }}'
+        f'{{ schema_out=$(docker exec {container} sh -c \'if [ -f /app/canary_schema.py ]; then [ -f /secrets/.env ] && {{ set -a; . /secrets/.env; set +a; }}; {db_rewrite}PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}/app" python3 -m infra2_sdk.storage check-schema --metadata canary_schema:METADATA --db-url "$DATABASE_URL" --label platform/todo; else printf "UNSUPPORTED\\n"; fi\' 2>&1); printf "%s\\n__EXIT__=%d\\n" "$schema_out" $?; }}'
     )
 
     code, stdout, stderr = _ssh_cmd(remote_script, host, user, key_path, port)
@@ -1277,10 +1385,22 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--slot",
+        default=None,
+        help="Canary minor slot id (e.g. v4-11, v4-13; default: primary slot)",
+    )
+    parser.add_argument(
+        "--all-slots",
+        action="store_true",
+        help="Verify primary slot with full flags and secondary active slots with non-LLM fast checks",
+    )
+    parser.add_argument(
         "--require-llm",
+        "--deep",
+        dest="require_llm",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Fail verification if LLM summary is unconfigured or unverified (default: true)",
+        default=False,
+        help="Run metered LLM and SSE stream checks (--deep; default: false fast gate)",
     )
     parser.add_argument(
         "--require-app-peer",
@@ -1302,6 +1422,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
+    def _emit_report(rep: CanaryRealityReport) -> None:
+        if args.json:
+            print(json.dumps(asdict(rep), indent=2))
+            return
+        print(f"=== Canary Todo Reality Verification [{rep.environment}] ===")
+        print(f"Overall Status: {'PASS' if rep.all_ok else 'FAIL'}")
+        print(
+            f"Installed SDK:  {rep.installed_sdk} (expected: {rep.expected_sdk or 'any'})"
+        )
+        print(f"1. SDK:         {'[OK]' if rep.sdk.ok else '[FAIL]'} {rep.sdk.summary}")
+        print(
+            f"2. Tracking:    {'[OK]' if rep.tracking.ok else '[FAIL]'} {rep.tracking.summary}"
+        )
+        print(
+            f"3. Logs:        {'[OK]' if rep.logs.ok else '[FAIL]'} {rep.logs.summary}"
+        )
+        print(
+            f"4. Monitoring:  {'[OK]' if rep.monitoring.ok else '[FAIL]'} {rep.monitoring.summary}"
+        )
+        print(
+            f"5. Alerts:      {'[OK]' if rep.alerts.ok else '[FAIL]'} {rep.alerts.summary}"
+        )
+        print(f"6. LLM:         {'[OK]' if rep.llm.ok else '[FAIL]'} {rep.llm.summary}")
+        print(
+            f"7. App-Peer:    {'[OK]' if rep.app_peer.ok else '[FAIL]'} {rep.app_peer.summary}"
+        )
+
     report = verify_canary(
         args.env,
         expected_sdk=args.expected_sdk,
@@ -1311,39 +1458,38 @@ def main(argv: list[str] | None = None) -> int:
         require_app_peer=args.require_app_peer,
         require_platform_deps=args.require_platform_deps,
         expected_version=args.expected_version,
+        slot=args.slot,
     )
+    all_passed = report.all_ok
+    reports = [report]
 
-    if args.json:
-        print(json.dumps(asdict(report), indent=2))
+    if args.all_slots and args.slot is None:
+        from common.deploy.canary_pin import load_canary_slots
+
+        for item in load_canary_slots():
+            if item.primary:
+                continue
+            slot_report = verify_canary(
+                args.env,
+                expected_sdk=args.expected_sdk,
+                check_sdk=not args.skip_sdk_check,
+                max_age_seconds=args.max_age_seconds,
+                require_llm=False,
+                require_app_peer=args.require_app_peer,
+                require_platform_deps=args.require_platform_deps,
+                expected_version=args.expected_version,
+                slot=item.slot,
+            )
+            reports.append(slot_report)
+            all_passed = all_passed and slot_report.all_ok
+
+    if args.json and len(reports) > 1:
+        print(json.dumps([asdict(r) for r in reports], indent=2))
     else:
-        print(f"=== Canary Todo Reality Verification [{report.environment}] ===")
-        print(f"Overall Status: {'PASS' if report.all_ok else 'FAIL'}")
-        print(
-            f"Installed SDK:  {report.installed_sdk} (expected: {report.expected_sdk or 'any'})"
-        )
-        print(
-            f"1. SDK:         {'[OK]' if report.sdk.ok else '[FAIL]'} {report.sdk.summary}"
-        )
-        print(
-            f"2. Tracking:    {'[OK]' if report.tracking.ok else '[FAIL]'} {report.tracking.summary}"
-        )
-        print(
-            f"3. Logs:        {'[OK]' if report.logs.ok else '[FAIL]'} {report.logs.summary}"
-        )
-        print(
-            f"4. Monitoring:  {'[OK]' if report.monitoring.ok else '[FAIL]'} {report.monitoring.summary}"
-        )
-        print(
-            f"5. Alerts:      {'[OK]' if report.alerts.ok else '[FAIL]'} {report.alerts.summary}"
-        )
-        print(
-            f"6. LLM:         {'[OK]' if report.llm.ok else '[FAIL]'} {report.llm.summary}"
-        )
-        print(
-            f"7. App-Peer:    {'[OK]' if report.app_peer.ok else '[FAIL]'} {report.app_peer.summary}"
-        )
+        for rep in reports:
+            _emit_report(rep)
 
-    return 0 if report.all_ok else 1
+    return 0 if all_passed else 1
 
 
 if __name__ == "__main__":

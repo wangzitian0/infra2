@@ -429,22 +429,24 @@ def _todo_without(source: str, name: str) -> str:
     """The todo source without the one line or capability that sets ``name``."""
     if name == "S3_ENDPOINT":
         old = "      s3: {}\n"
-        assert source.count(old) == 1
+        assert old in source
         return source.replace(old, "")
     if name == "OPENPANEL_API_URL":
         old = "      openpanel:\n        script: true\n"
-        assert source.count(old) == 1
+        assert old in source
         return source.replace(old, "")
     lines = [
         line for line in source.splitlines(True) if line.strip().startswith(f"{name}:")
     ]
-    assert len(lines) == 1, (name, lines)
-    return source.replace(lines[0], "")
+    assert len(lines) >= 1, (name, lines)
+    for line in set(lines):
+        source = source.replace(line, "")
+    return source
 
 
 def test_the_compiled_todo_sets_each_canary_host() -> None:
     """The Canary image has no default hosts (#1822 Slice 2)."""
-    env = yaml.safe_load(_todo_compiled())["services"]["todo"]["environment"]
+    env = yaml.safe_load(_todo_compiled())["services"]["todo-v4-13"]["environment"]
     assert {name: env.get(name) for name in CANARY_HOSTS} == CANARY_HOSTS
     assert "REDIS_URL=" in _todo_template()
 
@@ -452,7 +454,9 @@ def test_the_compiled_todo_sets_each_canary_host() -> None:
 @pytest.mark.parametrize("name", sorted(CANARY_HOSTS))
 def test_a_todo_source_that_drops_a_canary_host_compiles_without_it(name: str) -> None:
     source = _todo_without(_todo_source(), name)
-    env = yaml.safe_load(_todo_compiled(source))["services"]["todo"]["environment"]
+    env = yaml.safe_load(_todo_compiled(source))["services"]["todo-v4-13"][
+        "environment"
+    ]
     assert name not in env
     assert {n: env.get(n) for n in CANARY_HOSTS} != CANARY_HOSTS
 

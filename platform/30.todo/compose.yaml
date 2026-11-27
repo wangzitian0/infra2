@@ -1,50 +1,114 @@
-# Canary Todo on x-infra2 (#1822 Slice 2). common/deploy/compose_compile.py compiles this
-# file with infra2-sdk `compile_compose`, and the deploy uploads the compiled text as
-# Dokploy sourceType=raw. To read the compiled text:
-#   python -m tools.compose_compile print platform/30.todo/compose.yaml
+# Canary Todo on x-infra2 (#1822 Slice 2, multi-slot by SDK minor series).
+# common/deploy/compose_compile.py compiles this file with compile_compose,
+# and the deploy uploads the compiled text as Dokploy sourceType=raw.
+# platform/30.todo/slots.yaml declares active slots and digests.
 x-infra2:
-  # One vault-agent sidecar, container platform-todo-vault-agent${ENV_SUFFIX}. Its template
-  # is rendered from env.manifest.json (common.security.secrets_render) at deploy time.
+  # One shared vault-agent sidecar (128m), container platform-todo-vault-agent${ENV_SUFFIX}.
   vault:
     name: platform-todo
 
 services:
-  todo:
-    # Built and published by infra2-sdk release.yml from canary/todo at the same tag, so the
-    # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
-    # is the one reader of this line.
-    # Staging soak trigger: verify Canary v4.13.0 on v3.2.53 after cold-start workspace clone.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.0@sha256:ec62302213a62f521266089bfb6044a339fb03c6fd4958933c33d768899a63f1
-    container_name: platform-todo${ENV_SUFFIX}
+  todo-v4-11:
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.11.2@sha256:b5e9a3c547360e7d93d4f0fda873e797d82498ef2f1214042da2127e4cd925eb
+    container_name: platform-todo-v4-11${ENV_SUFFIX}
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     mem_limit: 256m
     cpu_shares: 512
-    # x-vault waits for /secrets/.env, loads it, then runs this command. The Redis password,
-    # DATABASE_URL and the S3 canary key come from that file. They are never compose env,
-    # so Dokploy never stores them.
-    command: ["python", "/app/app.py"]
+    # x-vault sources /secrets/.env then runs this command. Rewrite DATABASE_URL to this slot's isolated role & DB.
+    command:
+      - sh
+      - -c
+      - export DATABASE_URL="$(printf '%s' "$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_11_app:|; s|/postgres$|/todo_v4_11|')" && export SERVICE_VERSION="v4.11.2" && exec python /app/app.py
     x-vault: {}
-    # s3: S3_ENDPOINT. otel: OTEL_* from deploy identity. openpanel + browser_otel:
-    # analytics and browser OTLP configuration (#1823).
     x-capabilities:
       s3: {}
-      otel: {}
+      otel:
+        service_name: platform-todo-v4-11
+        service_name_var: OTEL_SERVICE_NAME_V4_11
       openpanel:
         script: true
       browser_otel: {}
     environment:
       PORT: "8000"
+      PYTHONDONTWRITEBYTECODE: "1"
       ENVIRONMENT: ${ENV}
-      # The Canary image has no default hosts: /api/canary/status turns red without REDIS_URL
-      # (from Vault) and each of S3_ENDPOINT, SIGNOZ_OTEL_COLLECTOR, OPENPANEL_HEALTH_URL and
-      # AUTHENTIK_ENDPOINT (common/tests/test_todo_canary_depth.py pins the values).
       S3_BUCKET: platform-canary
+      S3_KEY_PREFIX: "canary/v4-11/"
+      REDIS_KEY_PREFIX: "canary:v4-11:probe:"
+      CANARY_SERVICE_ID: platform/todo
+      CANARY_SERVICE_NAME: platform-todo-v4-11
+      CANARY_DOMAIN: todo-v4-11${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_HEALTH_URL: http://platform-openpanel-api:3000/healthcheck
       AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
-      # The deploy issues the full infra2 SHA as INFRA_IAC_REF. The page shows its first 7 characters.
       GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
-      # infra2-sdk reads the service version only from SERVICE_VERSION (#1823 N1). The deploy
-      # issues INFRA_SERVICE_VERSION, the version that OTEL_RESOURCE_ATTRIBUTES also carries.
+      SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_SMALL_MODEL: ${LLM_SMALL_MODEL:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=8).read()\""]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    x-routes:
+      service: platform-todo-v4-11
+      port: 8000
+      routes:
+        - name: platform-todo-v4-11-public
+          rule: Host(`todo-v4-11${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && Path(`/api/health`)
+          tls: true
+          priority: 100
+        - name: platform-todo-v4-11
+          rule: Host(`todo-v4-11${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)
+          tls: true
+          priority: 10
+          sso: todo-v4-11-auth
+
+  todo-v4-13:
+    # Primary slot serving todo${ENV_DOMAIN_SUFFIX}.zitian.party and todo-v4-13${ENV_DOMAIN_SUFFIX}.zitian.party.
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.0@sha256:ec62302213a62f521266089bfb6044a339fb03c6fd4958933c33d768899a63f1
+    container_name: platform-todo-v4-13${ENV_SUFFIX}
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpu_shares: 512
+    # x-vault sources /secrets/.env then runs this command. Rewrite DATABASE_URL to this slot's isolated role & DB.
+    command:
+      - sh
+      - -c
+      - export DATABASE_URL="$(printf '%s' "$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_13_app:|; s|/postgres$|/todo_v4_13|')" && export SERVICE_VERSION="v4.13.0" && exec python /app/app.py
+    x-vault: {}
+    x-capabilities:
+      s3: {}
+      otel:
+        service_name: platform-todo-v4-13
+        service_name_var: OTEL_SERVICE_NAME_V4_13
+      openpanel:
+        script: true
+      browser_otel: {}
+    environment:
+      PORT: "8000"
+      PYTHONDONTWRITEBYTECODE: "1"
+      ENVIRONMENT: ${ENV}
+      S3_BUCKET: platform-canary
+      S3_KEY_PREFIX: "canary/v4-13/"
+      REDIS_KEY_PREFIX: "canary:v4-13:probe:"
+      CANARY_SERVICE_ID: platform/todo
+      CANARY_SERVICE_NAME: platform-todo-v4-13
+      CANARY_DOMAIN: todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
+      OPENPANEL_HEALTH_URL: http://platform-openpanel-api:3000/healthcheck
+      AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
+      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
       SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
@@ -59,17 +123,14 @@ services:
       service: platform-todo
       port: 8000
       routes:
-        # Public bypass router: unauthenticated access to the health path ONLY.
-        # /api/canary/status is not here: it returns internal hostnames and raw errors and
-        # runs six real probes per request. The probe runner reads it over the Docker
-        # network; people reach it through the SSO router below.
+        # Public bypass router: unauthenticated access to /api/health ONLY.
         - name: platform-todo-public
-          rule: Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && Path(`/api/health`)
+          rule: (Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) || Host(`todo-v4-13${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)) && Path(`/api/health`)
           tls: true
           priority: 100
         # Protected router: UI and interactive APIs behind Authentik ForwardAuth.
         - name: platform-todo
-          rule: Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)
+          rule: Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) || Host(`todo-v4-13${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)
           tls: true
           priority: 10
           sso: todo-auth

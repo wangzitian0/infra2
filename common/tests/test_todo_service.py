@@ -21,7 +21,7 @@ def test_todo_service_registered_in_service_registry() -> None:
     assert meta.service == "todo"
     assert meta.subdomain is None
     assert meta.service_port == 8000
-    assert meta.service_name == "todo"
+    assert meta.service_name == "todo-v4-13"
     assert meta.compose_path == "platform/30.todo/compose.yaml"
     assert meta.data_path == ""
     assert meta.prod_only is False
@@ -66,7 +66,7 @@ def test_todo_traefik_dual_router_auth_contract() -> None:
     # The deployed text: x-routes compiles to these labels (#1822 Slice 2).
     content = yaml.safe_load(load_stack(compose_file).compiled)
 
-    labels = content["services"]["todo"]["labels"]
+    labels = content["services"]["todo-v4-13"]["labels"]
     labels_dict = {}
     for item in labels:
         if "=" in item:

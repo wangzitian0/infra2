@@ -54,16 +54,15 @@ def test_service_is_registry_discovered_and_not_public():
     metadata = service_registry.service_attrs()["truealpha/data_engine"]
     assert metadata.project == "truealpha"
     assert metadata.subdomain is None
-    assert metadata.service_name == "dagster-webserver"
+    assert metadata.service_name == "dagster-daemon"
 
 
 def test_status_health_commands_are_safe_for_remote_single_quote_wrapper():
     module = _load_shared_tasks_module()
 
-    assert "'" not in module.WEBSERVER_HEALTH_COMMAND
+    assert not hasattr(module, "WEBSERVER_HEALTH_COMMAND")
     assert "'" not in module.DAEMON_HEALTH_COMMAND
     assert "'" not in module.CODE_SERVER_HEALTH_COMMAND
-    assert '\\"http://127.0.0.1:\\"' in module.WEBSERVER_HEALTH_COMMAND
     assert "\\$DATABASE_URL" in module.DAEMON_HEALTH_COMMAND
     assert "/var/lib/dagster/code-server.sock" in module.CODE_SERVER_HEALTH_COMMAND
 
@@ -75,7 +74,8 @@ def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
         "ghcr.io/wangzitian0/truealpha-data-engine@"
         "${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
     )
-    for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
+    assert "dagster-webserver" not in services
+    for name in ("dagster-daemon", "dagster-code-server"):
         service = services[name]
         assert service["image"] == expected_image
         assert service["network_mode"] == "host"
@@ -88,16 +88,13 @@ def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     raw = (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
     assert "sha256:" + "0" * 64 not in raw
     assert "release-manifest:" + "0" * 64 not in raw
-    web_command = services["dagster-webserver"]["command"]
-    assert "127.0.0.1" in web_command
-    assert "${DAGSTER_WEBSERVER_PORT}" in web_command
 
 
 def test_webserver_and_daemon_load_the_persistent_code_server_over_grpc_socket():
     # Eliminates the ~68-70s heartbeat-timeout churn each role's own "managed"
     # local code-server subprocess produced under -m data_engine.dagster_defs
     # (dagster._daemon.controller.DAEMON_GRPC_SERVER_HEARTBEAT_TTL = 20) by
-    # pointing both roles at one long-lived dagster-code-server instead.
+    # pointing dagster-daemon at one long-lived dagster-code-server instead.
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
 
@@ -106,14 +103,13 @@ def test_webserver_and_daemon_load_the_persistent_code_server_over_grpc_socket()
     assert "/var/lib/dagster/code-server.sock" in code_server_command
     assert "--heartbeat" not in code_server_command
 
-    for name in ("dagster-webserver", "dagster-daemon"):
-        service = services[name]
-        assert "--grpc-socket" in service["command"]
-        assert "/var/lib/dagster/code-server.sock" in service["command"]
-        assert "-m" not in service["command"]
-        assert service["depends_on"]["dagster-code-server"] == {
-            "condition": "service_healthy"
-        }
+    service = services["dagster-daemon"]
+    assert "--grpc-socket" in service["command"]
+    assert "/var/lib/dagster/code-server.sock" in service["command"]
+    assert "-m" not in service["command"]
+    assert service["depends_on"]["dagster-code-server"] == {
+        "condition": "service_healthy"
+    }
 
 
 def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch):
@@ -132,7 +128,7 @@ def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch
     config = deployer.compose_env_base(environment)
     assert config["DATA_PATH"] == "/data/truealpha/dagster-staging"
     assert config["TA_POSTGRES_PORT"] == "15432"
-    assert config["DAGSTER_WEBSERVER_PORT"] == "13001"
+    assert "DAGSTER_WEBSERVER_PORT" not in config
     assert config["IMAGE_DIGEST"] == values["IMAGE_DIGEST"]
     assert len(config["CONFIGURATION_SHA256"]) == 64
 
@@ -158,7 +154,7 @@ def test_moomoo_origin_flags_are_on_in_staging_and_production_only():
         assert other[flag] == "false", flag
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
-    for name in ("dagster-code-server", "dagster-daemon", "dagster-webserver"):
+    for name in ("dagster-code-server", "dagster-daemon"):
         environment = services[name]["environment"]
         for flag in ("MOOMOO_KLINE_ORIGIN_ENABLED", "MOOMOO_FINANCIALS_ORIGIN_ENABLED"):
             assert environment.get(flag) == "${" + flag + ":-false}", (name, flag)
@@ -183,7 +179,7 @@ def test_source_identity_is_release_recomputable_without_vault(monkeypatch):
 
     assert source["TA_POSTGRES_PORT"] == "15433"
     assert source["TA_MINIO_S3_PORT"] == "19001"
-    assert source["DAGSTER_WEBSERVER_PORT"] == "13002"
+    assert "DAGSTER_WEBSERVER_PORT" not in source
     assert deployer.runtime_only_config_keys
     assert not deployer.runtime_only_config_keys.intersection(source)
 
@@ -272,7 +268,7 @@ def test_vault_agent_forwards_every_template_env():
     assert "vault-agent" not in source["services"]
 
 
-DAGSTER_SERVICES = ("dagster-code-server", "dagster-webserver", "dagster-daemon")
+DAGSTER_SERVICES = ("dagster-code-server", "dagster-daemon")
 IMAGE_ENTRYPOINT = "/app/dagster-entrypoint.sh"
 
 
@@ -619,8 +615,8 @@ def test_verify_runtime_applied_passes_timeout_to_inspect(monkeypatch):
 
     # inspect calls must pass timeout=15
     inspect_calls = [c for c in calls if "docker inspect" in c[0]]
-    assert len(inspect_calls) == 6, (
-        f"expected 6 inspect calls (3 image + 3 health), got {len(inspect_calls)}"
+    assert len(inspect_calls) == 4, (
+        f"expected 4 inspect calls (2 image + 2 health), got {len(inspect_calls)}"
     )
     for cmd, timeout in inspect_calls:
         assert timeout == 15, (
@@ -677,7 +673,7 @@ def test_compose_leaves_the_vault_mount_to_the_image_entrypoint():
     compose = yaml.safe_load(compose_text)
 
     assert "SECRETS_ENV_FILE" not in compose_text
-    for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
+    for name in ("dagster-daemon", "dagster-code-server"):
         service = compose["services"][name]
         assert "secrets:/secrets:ro" in service["volumes"]
         # The manifest path is relative. It resolves against the image WORKDIR (/app).
@@ -747,7 +743,7 @@ def test_data_engine_exports_otel_over_host_loopback_matching_signoz_collector()
     assert collector_ports == ["127.0.0.1:14318:4318"]
 
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
-    for role in ("dagster-code-server", "dagster-webserver", "dagster-daemon"):
+    for role in ("dagster-code-server", "dagster-daemon"):
         env = compose["services"][role]["environment"]
         assert env.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "http://127.0.0.1:14318", role
         assert env.get("OTEL_SERVICE_NAME") == "${OTEL_SERVICE_NAME:-}", role
@@ -763,7 +759,7 @@ def test_compose_injects_canonical_release_variable_names_without_legacy_aliases
     """#1781: truealpha v0.2.114+ reads canonical RELEASE_ID, IMAGE_DIGEST, and
     CONFIGURATION_SHA256; the legacy TRUEALPHA_* compose aliases are retired."""
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
-    for role in ("dagster-code-server", "dagster-webserver", "dagster-daemon"):
+    for role in ("dagster-code-server", "dagster-daemon"):
         env = compose["services"][role]["environment"]
         assert "RELEASE_ID" in env
         assert "IMAGE_DIGEST" in env
@@ -844,7 +840,7 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
             SERVICE_DIR / "env.manifest.json",
             SERVICE_DIR / "compose.yaml",
             compiled_vault_template(SERVICE_DIR),
-            ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
+            ("dagster-code-server", "dagster-daemon"),
         ),
         (
             ROOT / "truealpha/truealpha/10.app/env.manifest.json",
@@ -887,19 +883,19 @@ def test_missing_injected_contract_variable_in_compose_is_detected():
     del code_server_env["RELEASE_ID"]
     compose_data["services"]["dagster-code-server"]["environment"] = code_server_env
 
-    webserver_env = dict(compose_data["services"]["dagster-webserver"]["environment"])
-    webserver_env["RELEASE_ID"] = ""
-    compose_data["services"]["dagster-webserver"]["environment"] = webserver_env
+    daemon_env = dict(compose_data["services"]["dagster-daemon"]["environment"])
+    daemon_env["RELEASE_ID"] = ""
+    compose_data["services"]["dagster-daemon"]["environment"] = daemon_env
 
     missing = _missing_injected_contract_vars(
         contract_data,
         compose_data,
-        ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
+        ("dagster-code-server", "dagster-daemon"),
         compiled_vault_template(SERVICE_DIR),
     )
     assert missing == {
         "dagster-code-server": ["RELEASE_ID"],
-        "dagster-webserver": ["RELEASE_ID"],
+        "dagster-daemon": ["RELEASE_ID"],
     }
 
 
@@ -920,7 +916,7 @@ def test_store_backed_injected_variable_missing_from_the_template_is_detected():
     stale = "\n".join(
         line for line in template.splitlines() if "SEC_USER_AGENT" not in line
     )
-    roles = ("dagster-code-server", "dagster-webserver", "dagster-daemon")
+    roles = ("dagster-code-server", "dagster-daemon")
     assert (
         _missing_injected_contract_vars(contract_data, compose_data, roles, template)
         == {}

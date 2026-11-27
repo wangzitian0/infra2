@@ -85,7 +85,7 @@ def test_todo_declares_a_probe_on_the_internal_canary_status(deploy) -> None:
         "the probes exemption said 'self-proving'; nothing read the status (#991)"
     )
     by_name = {probe.name: probe for probe in attrs.probes}
-    assert set(by_name) == {"todo-canary-status"}
+    assert set(by_name) == {"todo-canary-status", "todo-v4-11-canary-status"}
     probe = by_name["todo-canary-status"]
     assert probe.kind == "http"
     assert probe.expected == "200"
@@ -100,11 +100,13 @@ def test_probe_renders_into_the_probe_runner_specs() -> None:
     lines = [
         line
         for line in render_probe_spec_text().splitlines()
-        if line.startswith("todo-canary-status|")
+        if line.startswith(("todo-canary-status|", "todo-v4-11-canary-status|"))
     ]
     assert lines == [
-        "todo-canary-status|http|http://platform-todo${ENV_SUFFIX}:8000/api/canary/status"
-        "|200|error|15||platform/todo"
+        "todo-canary-status|http|http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status"
+        "|200|error|15||platform/todo",
+        "todo-v4-11-canary-status|http|http://platform-todo-v4-11${ENV_SUFFIX}:8000/api/canary/status"
+        "|200|error|15||platform/todo",
     ]
 
 
@@ -128,14 +130,16 @@ def test_todo_signal_is_a_debounced_minute_alert() -> None:
 
 def test_public_router_does_not_name_the_canary_status() -> None:
     """A second guard on the label itself: the public rule must not mention the path."""
-    labels = compose_services(COMPOSE)["todo"]["labels"]
-    public_rules = [
-        label
-        for label in labels
-        if "-public" in label and label.split("=", 1)[0].endswith(".rule")
-    ]
-    assert len(public_rules) == 1
-    assert "canary" not in public_rules[0]
+    services = compose_services(COMPOSE)
+    for slot_service in ("todo-v4-11", "todo-v4-13"):
+        labels = services[slot_service]["labels"]
+        public_rules = [
+            label
+            for label in labels
+            if "-public" in label and label.split("=", 1)[0].endswith(".rule")
+        ]
+        assert len(public_rules) == 1
+        assert "canary" not in public_rules[0]
 
 
 def test_todo_is_registered_with_the_secret_registry_and_templates_are_generated() -> (
@@ -223,16 +227,17 @@ def test_todo_policy_never_reads_the_superuser_secrets() -> None:
 
 def test_compose_runs_a_vault_agent_and_mounts_its_secrets_read_only() -> None:
     services = compose_services(COMPOSE)
-    assert set(services) == {"vault-agent", "todo"}
-    todo = services["todo"]
-    assert "secrets:/secrets:ro" in todo["volumes"]
-    assert "vault-agent" in todo["depends_on"]
-    assert "REDIS_PASSWORD" not in todo["environment"], (
-        "the password comes from the rendered file, never from compose env"
-    )
-    entrypoint = " ".join(todo["entrypoint"])
-    assert ". /secrets/.env" in entrypoint and 'exec "$$@"' in entrypoint
-    assert todo["command"] == ["python", "/app/app.py"]
+    assert set(services) == {"vault-agent", "todo-v4-11", "todo-v4-13"}
+    for slot_service in ("todo-v4-11", "todo-v4-13"):
+        todo = services[slot_service]
+        assert "secrets:/secrets:ro" in todo["volumes"]
+        assert "vault-agent" in todo["depends_on"]
+        assert "REDIS_PASSWORD" not in todo["environment"], (
+            "the password comes from the rendered file, never from compose env"
+        )
+        entrypoint = " ".join(todo["entrypoint"])
+        assert ". /secrets/.env" in entrypoint and 'exec "$$@"' in entrypoint
+        assert "exec python /app/app.py" in " ".join(todo["command"])
     agent = services["vault-agent"]
     assert agent["container_name"] == "platform-todo-vault-agent${ENV_SUFFIX}"
     assert agent.get("mem_limit"), "a new container may not add resource-limit debt"
@@ -247,7 +252,10 @@ def test_secrets_facet_names_the_compose_containers() -> None:
     services = compose_services(COMPOSE)
     assert facet.auth_method == "approle"
     assert facet.vault_agent_container == services["vault-agent"]["container_name"]
-    assert facet.app_containers == (services["todo"]["container_name"],)
+    assert facet.app_containers == (
+        services["todo-v4-11"]["container_name"],
+        services["todo-v4-13"]["container_name"],
+    )
 
 
 def test_todo_role_name_is_one_fact_across_deployer_and_database_url(deploy) -> None:
@@ -272,7 +280,7 @@ def test_the_canary_ro_login_is_gone_and_the_prune_removes_its_vault_key(
         "_ensure_canary_" + "postgres_role",
     ):
         assert not hasattr(deployer, name), name
-    env = compose_services(COMPOSE)["todo"]["environment"]
+    env = compose_services(COMPOSE)["todo-v4-13"]["environment"]
     assert [name for name in env if "POSTGRES" in name] == []
     template = _todo_template()
     assert "CANARY_POSTGRES_PASSWORD" not in template
@@ -599,6 +607,18 @@ def test_todos_storage_sql_provisions_todo_app_role_and_table(deploy) -> None:
             f"ALTER TYPE canary_todo_capability ADD VALUE IF NOT EXISTS '{label}'"
             in normalized
         )
+    for role in ("todo_v4_11_app", "todo_v4_13_app"):
+        assert f"CREATE ROLE {role} LOGIN NOSUPERUSER" in normalized
+        assert (
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO {role}"
+            in normalized
+        )
+    for db, role in (
+        ("todo_v4_11", "todo_v4_11_app"),
+        ("todo_v4_13", "todo_v4_13_app"),
+    ):
+        assert f"CREATE DATABASE {db} OWNER {role}" in normalized
+        assert f"\\connect {db}" in sql
     assert "SUPERUSER" not in normalized.replace("NOSUPERUSER", "")
     assert "default_transaction_read_only" not in normalized
 
@@ -622,20 +642,21 @@ def test_todo_compose_enables_all_four_app_peer_capabilities() -> None:
     from common.deploy.compose_compile import load_stack
 
     doc = yaml.safe_load(load_stack("platform/30.todo/compose.yaml").compiled)
-    env = doc["services"]["todo"]["environment"]
-    for key in (
-        "S3_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OPENPANEL_HEALTH_URL",
-        "OPENPANEL_CLIENT_ID",
-        "OPENPANEL_API_URL",
-        "OPENPANEL_ENVIRONMENT",
-        "OPENPANEL_SCRIPT_URL",
-        "NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT",
-        "NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT",
-        "NEXT_PUBLIC_GIT_SHA",
-    ):
-        assert key in env, key
+    for slot_service in ("todo-v4-11", "todo-v4-13"):
+        env = doc["services"][slot_service]["environment"]
+        for key in (
+            "S3_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OPENPANEL_HEALTH_URL",
+            "OPENPANEL_CLIENT_ID",
+            "OPENPANEL_API_URL",
+            "OPENPANEL_ENVIRONMENT",
+            "OPENPANEL_SCRIPT_URL",
+            "NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT",
+            "NEXT_PUBLIC_GIT_SHA",
+        ):
+            assert key in env, key
 
 
 def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:
@@ -918,16 +939,24 @@ def test_the_probe_timeout_is_the_fifteen_seconds_the_canary_deadline_assumes() 
 
 
 def test_probe_target_matches_the_compose_container_port_and_app_route() -> None:
-    probe = reg.service_attrs()["platform/todo"].probes[0]
-    target = urlsplit(probe.target.replace("${ENV_SUFFIX}", "-staging"))
-    service = compose_services(COMPOSE)["todo"]
-    assert target.scheme == "http", "the probe stays on the Docker network"
-    assert target.hostname == service["container_name"].replace(
-        "${ENV_SUFFIX}", "-staging"
-    )
-    assert target.port == int(resolve(service["environment"]["PORT"], {}))
-    assert target.path == "/api/canary/status"
-    assert target.path in SERVED_PATHS
+    by_name = {
+        probe.name: probe for probe in reg.service_attrs()["platform/todo"].probes
+    }
+    services = compose_services(COMPOSE)
+    for probe_name, svc_key in (
+        ("todo-canary-status", "todo-v4-13"),
+        ("todo-v4-11-canary-status", "todo-v4-11"),
+    ):
+        probe = by_name[probe_name]
+        target = urlsplit(probe.target.replace("${ENV_SUFFIX}", "-staging"))
+        service = services[svc_key]
+        assert target.scheme == "http", "the probe stays on the Docker network"
+        assert target.hostname == service["container_name"].replace(
+            "${ENV_SUFFIX}", "-staging"
+        )
+        assert target.port == int(resolve(service["environment"]["PORT"], {}))
+        assert target.path == "/api/canary/status"
+        assert target.path in SERVED_PATHS
 
 
 @pytest.mark.parametrize(
@@ -936,7 +965,7 @@ def test_probe_target_matches_the_compose_container_port_and_app_route() -> None
 def test_only_the_health_path_is_served_without_sso(domain_suffix, env_suffix) -> None:
     """Resolve the real routing decision for every path the app serves (Traefik rule
     language and priority order, not substring checks)."""
-    service = compose_services(COMPOSE)["todo"]
+    service = compose_services(COMPOSE)["todo-v4-13"]
     issued = {
         "ENV_DOMAIN_SUFFIX": domain_suffix,
         "ENV_SUFFIX": env_suffix,

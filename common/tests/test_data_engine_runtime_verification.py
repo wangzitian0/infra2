@@ -59,14 +59,14 @@ class _Context:
             answers = self.images[min(self._image_round, len(self.images) - 1)]
             answer = answers[self._image_index]
             self._image_index += 1
-            if self._image_index == 3:
+            if self._image_index == 2:
                 self._image_index, self._image_round = 0, self._image_round + 1
             return _Result(answer)
         if ".State.Health" in command:
             answers = self.health[min(self._health_round, len(self.health) - 1)]
             answer = answers[self._health_index]
             self._health_index += 1
-            if self._health_index == 3:
+            if self._health_index == 2:
                 self._health_index, self._health_round = 0, self._health_round + 1
             return _Result(answer)
         raise AssertionError(command)
@@ -95,8 +95,8 @@ def test_the_promoted_digest_is_pulled_before_the_containers_are_inspected(
 ) -> None:
     context = _Context(
         pull=_Result(DIGEST),
-        images=[[OLD, OLD, OLD], [IMAGE, IMAGE, IMAGE]],
-        health=[["healthy", "healthy", "starting"], ["healthy", "healthy", "healthy"]],
+        images=[[OLD, OLD], [IMAGE, IMAGE]],
+        health=[["healthy", "starting"], ["healthy", "healthy"]],
     )
     assert deployer.verify_runtime_applied(context, {"IMAGE_DIGEST": DIGEST}) is None
     first, timeout = context.calls[0]
@@ -107,7 +107,7 @@ def test_the_promoted_digest_is_pulled_before_the_containers_are_inspected(
     names = [c for c, _ in context.calls if ".Config.Image" in c]
     assert any("truealpha-dagster-code-server-staging" in c for c in names)
     # the old digest on the first round was waited out, not reported
-    assert sum(".State.Health" in c for c, _ in context.calls) == 6
+    assert sum(".State.Health" in c for c, _ in context.calls) == 4
 
 
 def test_a_pull_that_does_not_finish_names_the_digest_and_the_deadline(
@@ -117,8 +117,8 @@ def test_a_pull_that_does_not_finish_names_the_digest_and_the_deadline(
         pull=_Result(
             "", ok=False, stderr="Error response from daemon: manifest unknown"
         ),
-        images=[[IMAGE, IMAGE, IMAGE]],
-        health=[["healthy"] * 3],
+        images=[[IMAGE, IMAGE]],
+        health=[["healthy"] * 2],
     )
     error = deployer.verify_runtime_applied(context, {"IMAGE_DIGEST": DIGEST})
     assert error and "could not be pulled" in error and "manifest unknown" in error
@@ -128,19 +128,19 @@ def test_a_pull_that_does_not_finish_names_the_digest_and_the_deadline(
 
 def test_containers_that_never_switch_still_fail_with_the_stale_image(deployer) -> None:
     context = _Context(
-        pull=_Result(DIGEST), images=[[OLD, IMAGE, IMAGE]], health=[["healthy"] * 3]
+        pull=_Result(DIGEST), images=[[OLD, IMAGE]], health=[["healthy"] * 2]
     )
     error = deployer.verify_runtime_applied(context, {"IMAGE_DIGEST": DIGEST})
     assert error and error.startswith("promoted image digest was not applied")
-    assert "truealpha-dagster-webserver-staging=" + OLD in error
+    assert "truealpha-dagster-daemon-staging=" + OLD in error
     assert not any(".State.Health" in c for c, _ in context.calls)
 
 
 def test_a_running_but_unhealthy_promoted_build_is_not_applied(deployer) -> None:
     context = _Context(
         pull=_Result(DIGEST),
-        images=[[IMAGE, IMAGE, IMAGE]],
-        health=[["healthy", "unhealthy", "healthy"]],
+        images=[[IMAGE, IMAGE]],
+        health=[["unhealthy", "healthy"]],
     )
     error = deployer.verify_runtime_applied(context, {"IMAGE_DIGEST": DIGEST})
     assert error and "running but not healthy" in error
@@ -152,8 +152,8 @@ def test_a_container_without_a_healthcheck_counts_as_healthy_when_running(
 ) -> None:
     context = _Context(
         pull=_Result(DIGEST),
-        images=[[IMAGE] * 3],
-        health=[["running", "healthy", "healthy"]],
+        images=[[IMAGE] * 2],
+        health=[["running", "healthy"]],
     )
     assert deployer.verify_runtime_applied(context, {"IMAGE_DIGEST": DIGEST}) is None
 

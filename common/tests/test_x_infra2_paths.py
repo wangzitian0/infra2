@@ -44,7 +44,7 @@ def _todo_with_preview() -> str:
     """The x-infra2 todo with an ephemeral preview database (an ``x-preview`` block)."""
     doc = yaml.safe_load(_todo_source())
     doc["x-infra2"]["preview"] = {"db_container": "todo-preview-db${ENV_SUFFIX}"}
-    doc["services"]["todo"]["x-preview"] = {"database_url": "postgresql"}
+    doc["services"]["todo-v4-13"]["x-preview"] = {"database_url": "postgresql"}
     return yaml.safe_dump(doc, sort_keys=False, width=10**6)
 
 
