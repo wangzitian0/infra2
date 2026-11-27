@@ -60,16 +60,15 @@ def env_without_environment(text: str) -> list[str]:
 
 def test_scope_is_not_empty() -> None:
     files = _compose_files()
-    # Measured 2026-11-26, after platform/12.alerting moved to x-infra2 (#1822 step B):
-    # 26 files, 13 of them x-infra2 sources.
-    assert len(files) >= 26, [str(p.relative_to(ROOT)) for p in files]
+    # Measured 2026-11-27, after deleting handwritten app preview composes (#1822):
+    # 24 files, 13 of them x-infra2 sources.
+    assert len(files) >= 24, [str(p.relative_to(ROOT)) for p in files]
     x_infra2 = [p for p in files if has_x_infra2(p.read_text(encoding="utf-8"))]
     assert len(x_infra2) >= 13, [str(p.relative_to(ROOT)) for p in x_infra2]
     with_env = [p for p in files if "ENV: ${ENV" in _deployed_text(p)]
     # The platform sidecars set ENVIRONMENT only, as the compiled sidecar does (#1822
-    # step A), so fewer files set ENV. 6 deployed files still set it, 2 of them compiled
-    # (platform/10.authentik and platform/12.alerting).
-    assert len(with_env) >= 6, [str(p.relative_to(ROOT)) for p in with_env]
+    # step A), and preview stacks moved into x-infra2, so 4 deployed files still set ENV.
+    assert len(with_env) >= 4, [str(p.relative_to(ROOT)) for p in with_env]
     assert {"platform/10.authentik", "platform/12.alerting"} <= {
         p.parent.relative_to(ROOT).as_posix() for p in with_env if p in x_infra2
     }

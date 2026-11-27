@@ -224,9 +224,6 @@ def test_write_copies_rewrites_the_copy_and_the_vault_files_of_each_reader(
     assert changed == [
         "finance_report/finance_report/10.app/env.manifest.json",
         "finance_report/finance_report/10.app/vault-policy.hcl",
-        "finance_report/finance_report/preview/secrets.ctmpl",
-        "finance_report/finance_report/preview/vault-agent.hcl",
-        "finance_report/finance_report/preview/vault-policy.hcl",
     ]
     copy = tmp_path / "finance_report/finance_report/10.app/env.manifest.json"
     assert copy.read_text(encoding="utf-8") == sync.render(
@@ -240,9 +237,8 @@ def test_write_copies_rewrites_the_copy_and_the_vault_files_of_each_reader(
     preview = secrets_render.render(
         service_for_id("finance_report/app", preview=True), root=tmp_path
     )
-    assert (tmp_path / "finance_report/finance_report/preview/secrets.ctmpl").read_text(
-        encoding="utf-8"
-    ) == preview["secrets.ctmpl"]
+    assert "DATABASE_URL=" not in preview["secrets.ctmpl"]
+    assert '"staging"' in preview["secrets.ctmpl"]
     # A second run finds nothing to change.
     assert (
         sync.write_copies({"finance_report/app": FR_SHA}, root=tmp_path, fetcher=fetch)

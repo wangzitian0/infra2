@@ -7,6 +7,7 @@ Agent template and policy (tools/secrets_render.py), the secret supply on deploy
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,9 @@ class Service:
     policy: bool = True
     # Store keys mirrored back to 1Password when generated at runtime (owned by infra2).
     mirror_to_1password_keys: tuple[str, ...] = ()
+    # Ephemeral preview overrides on the canonical 10.app stack (mode="preview").
+    preview_source_env: str | None = None
+    preview_exclude_envs: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:
@@ -154,14 +158,8 @@ SERVICES: tuple[Service, ...] = (
         # _ensure_s3_bucket reads the bucket name back to decide whether the scoped
         # user already exists; the compose supplies the same name to the container.
         store_only_keys=("S3_BUCKET",),
-    ),
-    Service(
-        "finance_report/finance_report/preview",
-        "finance_report",
-        "app",
-        ("finance_report/finance_report/10.app/env.manifest.json",),
-        source_env="staging",
-        exclude_envs=("DATABASE_URL", "REDIS_URL", "PREVIEW_DATABASE_URL"),
+        preview_source_env="staging",
+        preview_exclude_envs=("DATABASE_URL", "REDIS_URL", "PREVIEW_DATABASE_URL"),
     ),
     Service(
         "truealpha/truealpha/10.app",
@@ -171,14 +169,8 @@ SERVICES: tuple[Service, ...] = (
         # same bucket-provisioning read as finance_report/app
         store_only_keys=("S3_BUCKET",),
         mirror_to_1password_keys=("MCP_BEARER_TOKEN",),
-    ),
-    Service(
-        "truealpha/truealpha/preview",
-        "truealpha",
-        "app",
-        ("truealpha/truealpha/10.app/env.manifest.json",),
-        source_env="staging",
-        exclude_envs=(
+        preview_source_env="staging",
+        preview_exclude_envs=(
             "DATABASE_URL",
             "MIGRATIONS_DATABASE_URL",
             "PREVIEW_DATABASE_URL",
@@ -212,7 +204,9 @@ def load_manifest(path: str, *, root: Path = ROOT) -> EnvironmentManifest:
     )
 
 
-def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManifest:
+def merged_manifest(
+    service: Service, *, root: Path = ROOT, preview: bool = False
+) -> EnvironmentManifest:
     """Union of a service's manifests (``common.security.manifest_merge``).
 
     Two apps in one stack may declare the same variable (both truealpha apps read
@@ -221,22 +215,31 @@ def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManife
     """
     from common.security.manifest_merge import merge_manifests
 
+    exclude = (
+        service.preview_exclude_envs
+        if (preview and service.preview_exclude_envs)
+        else service.exclude_envs
+    )
     return merge_manifests(
         [(path, load_manifest(path, root=root)) for path in service.manifests],
         source=service.id,
-        exclude=service.exclude_envs,
+        exclude=exclude,
     )
 
 
 def lookup(project: str, service: str, *, preview: bool = False) -> Service | None:
     """The registered service for a Deployer (fixed environments) or a preview stack."""
     for candidate in SERVICES:
-        if (
-            candidate.project == project
-            and candidate.service == service
-            and candidate.preview == preview
-        ):
+        if candidate.project != project or candidate.service != service:
+            continue
+        if candidate.preview == preview:
             return candidate
+        if preview and candidate.preview_source_env is not None:
+            return dataclasses.replace(
+                candidate,
+                source_env=candidate.preview_source_env,
+                exclude_envs=candidate.preview_exclude_envs,
+            )
     return None
 
 

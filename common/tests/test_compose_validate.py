@@ -39,9 +39,9 @@ def test_every_plain_file_keeps_the_source_command(tmp_path):
         for p in _tracked_compose_files()
         if not has_x_infra2((ROOT / p).read_text(encoding="utf-8"))
     ]
-    # 10 plain files on 2026-11-26 (measured), after platform/12.alerting moved to
-    # x-infra2 (#1822).
-    assert len(plain) >= 10
+    # 8 plain files on 2026-11-27 (measured), after moving platform/12.alerting and
+    # app preview stacks to x-infra2 (#1822).
+    assert len(plain) >= 8
     for rel in plain:
         assert config_command(rel, tmp_path) == [
             "docker",

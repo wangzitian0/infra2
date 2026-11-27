@@ -46,9 +46,9 @@ def test_gate_selects_files_by_a_marker_the_fleet_still_carries():
     assert '"vault-agent:"' in runner and "compiles_a_vault_sidecar" in runner, (
         "ci_runner.run_vault must check both hand-written and compiled vault sidecars"
     )
-    # 17 sidecars on 2026-11-25: 10 hand-written (the shell gate) and 7 compiled (#1822).
+    # 15 sidecars on 2026-11-27: 8 hand-written (the shell gate) and 7 compiled (#1822).
     sidecars = VAULT_AGENT_COMPOSE_FILES + _x_infra2_vault_composes()
-    assert len(sidecars) >= 17, sidecars
+    assert len(sidecars) >= 15, sidecars
     data_engine = "truealpha/truealpha/20.data_engine/compose.yaml"
     assert data_engine in _x_infra2_vault_composes()
     assert data_engine not in VAULT_AGENT_COMPOSE_FILES

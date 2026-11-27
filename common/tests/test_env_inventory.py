@@ -1278,7 +1278,7 @@ def repo_scan():
 
 def test_g1_service_compose_and_ctmpl_keys_are_in_manifest(repo_scan):
     _inv, _keys, rows, _docs_only = repo_scan
-    assert len(rows) == len(envinv.load_services()) >= 17
+    assert len(rows) == len(envinv.load_services()) >= 15
     assert g1_violations(rows) == {}
 
 
@@ -1317,7 +1317,6 @@ def test_g1_reads_the_compiled_x_infra2_stack(repo_scan):
         assert o.key in source[o.line - 1] or o.line == origin, (o.key, o.line)
     port = [o for o in writes if o.key == "PORT"]
     assert [source[o.line - 1].strip() for o in port] == [
-        "PORT: '8000'",
         "PORT: '8000'",
         "PORT: '8000'",
     ]

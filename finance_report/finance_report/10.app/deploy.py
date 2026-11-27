@@ -184,7 +184,7 @@ class AppDeployer(Deployer):
         ),
         SecretsFacet(
             service_id="finance_report/preview",
-            compose_path="finance_report/finance_report/preview/compose.yaml",
+            compose_path="finance_report/finance_report/10.app/compose.yaml",
             vault_agent_container="finance_report-app-vault-agent${ENV_SUFFIX}",
             app_containers=("finance_report-backend${ENV_SUFFIX}",),
             auth_method="approle",

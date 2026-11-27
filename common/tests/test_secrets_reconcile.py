@@ -11,7 +11,7 @@ import yaml
 from common.observability.capacity import CapacityReading
 from common.security.backends import SecretsError, WriteResult, op_item, vault_path
 
-from common.security.registry import SERVICES, Service
+from common.security.registry import SERVICES, Service, lookup
 from common.security import secrets_reconcile
 from tools import secrets_reconcile_check
 
@@ -112,7 +112,7 @@ def test_previews_are_skipped_and_bootstrap_is_production_only(
 ) -> None:
     runner = next(s for s in SERVICES if s.id == "bootstrap/iac_runner")
     assert runner.environments == ("production",)
-    preview = next(s for s in SERVICES if s.preview)
+    preview = lookup("finance_report", "app", preview=True)
     monkeypatch.setattr(secrets_reconcile, "resolver_for", _resolver_for_root(tmp_path))
     rows = secrets_reconcile.reconcile_stores(
         services=(preview,), store=MemoryBackend(), human=MemoryBackend()

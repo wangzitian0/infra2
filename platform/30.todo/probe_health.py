@@ -8,7 +8,6 @@ import calendar
 import json
 import re
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -32,37 +31,21 @@ _SLOT_VERSION_RE = re.compile(r'version:\s*["\']?(\d+\.\d+\.\d+)["\']?')
 
 
 def pinned_canary_sdk(ref: str, runner=subprocess.run) -> str:
-    """SDK version of the primary Canary image pin at ``ref``, or "" for a release before #247."""
+    """SDK version of the primary Canary image pin in ``slots.yaml`` at ``ref``."""
     slots = runner(
         ["git", "show", f"{ref}:platform/30.todo/slots.yaml"],
         capture_output=True,
         text=True,
     )
-    if slots.returncode == 0 and slots.stdout.strip():
-        blocks = re.split(r"(?m)^\s*-\s+slot:", slots.stdout)
-        for block in blocks[1:]:
-            if _SLOT_PRIMARY_RE.search(block):
-                ver = _SLOT_VERSION_RE.search(block)
-                if ver:
-                    return ver.group(1)
-    shown = runner(
-        ["git", "show", f"{ref}:platform/30.todo/compose.yaml"],
-        capture_output=True,
-        text=True,
-    )
-    if shown.returncode != 0:
-        print(
-            f"notice: no Canary compose at {ref}; SDK pin check skipped",
-            file=sys.stderr,
-        )
+    if slots.returncode != 0 or not slots.stdout.strip():
         return ""
-    found = CANARY_PIN_RE.findall(shown.stdout)
-    if not found:
-        print(
-            f"notice: no Canary image pin at {ref}; SDK pin check skipped",
-            file=sys.stderr,
-        )
-    return found[-1] if found else ""
+    blocks = re.split(r"(?m)^\s*-\s+slot:", slots.stdout)
+    for block in blocks[1:]:
+        if _SLOT_PRIMARY_RE.search(block):
+            ver = _SLOT_VERSION_RE.search(block)
+            if ver:
+                return ver.group(1)
+    return ""
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):

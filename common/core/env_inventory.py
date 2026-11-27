@@ -3392,12 +3392,7 @@ def load_services():
 
 CODE_UNITS = {
     "finance_report/app": [("finance_report", "apps/backend")],
-    "finance_report/preview": [("finance_report", "apps/backend")],
     "truealpha/app": [("truealpha", "apps/app-web"), ("truealpha", "apps/llm-service")],
-    "truealpha/preview": [
-        ("truealpha", "apps/app-web"),
-        ("truealpha", "apps/llm-service"),
-    ],
     "truealpha/data_engine": [
         ("truealpha", "apps/data-engine"),
         ("truealpha", "common"),

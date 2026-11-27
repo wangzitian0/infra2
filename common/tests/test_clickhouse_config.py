@@ -103,16 +103,6 @@ def test_openpanel_and_finance_report_resource_bounds() -> None:
         == "30s"
     )
 
-    fr_preview_path = ROOT / "finance_report/finance_report/preview/compose.yaml"
-    assert fr_preview_path.exists()
-    fr_preview_data = yaml.safe_load(fr_preview_path.read_text(encoding="utf-8")) or {}
-    fr_preview_services = fr_preview_data.get("services", {})
-
-    assert (
-        fr_preview_services.get("backend", {}).get("healthcheck", {}).get("interval")
-        == "30s"
-    )
-
     tasks_text = (ROOT / "bootstrap/01.dokploy_install/tasks.py").read_text(
         encoding="utf-8"
     )

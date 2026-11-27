@@ -848,14 +848,6 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
             compiled_vault_template(ROOT / "truealpha/truealpha/10.app"),
             ("llm", "web"),
         ),
-        (
-            ROOT / "truealpha/truealpha/10.app/env.manifest.json",
-            ROOT / "truealpha/truealpha/preview/compose.yaml",
-            (ROOT / "truealpha/truealpha/preview/secrets.ctmpl").read_text(
-                encoding="utf-8"
-            ),
-            ("llm", "web"),
-        ),
     )
     for contract_path, compose_path, template_text, roles in checks:
         contract_data = json.loads(contract_path.read_text(encoding="utf-8"))

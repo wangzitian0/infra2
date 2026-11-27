@@ -54,13 +54,9 @@ def service_key_from_path(file_path: str) -> str | None:
     if parts[0] == "finance_report" and len(parts) >= 3:
         if "." in parts[2]:
             return f"finance_report/{parts[2].split('.', 1)[1]}"
-        if parts[2] == "preview":
-            return "finance_report/preview"
     if parts[0] == "truealpha" and len(parts) >= 3:
         if "." in parts[2]:
             return f"truealpha/{parts[2].split('.', 1)[1]}"
-        if parts[2] == "preview":
-            return "truealpha/preview"
     if parts[0] == "bootstrap" and len(parts) >= 2:
         if "." in parts[1]:
             return f"bootstrap/{parts[1].split('.', 1)[1].replace('_', '-')}"

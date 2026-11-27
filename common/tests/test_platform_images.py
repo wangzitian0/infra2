@@ -164,14 +164,10 @@ def test_the_check_command_exits_1_on_a_problem(tmp_path: Path, monkeypatch) -> 
 
 
 def test_no_stack_compose_builds_a_published_dockerfile() -> None:
-    """A stack `compose.yaml` that builds a published Dockerfile cannot deploy raw.
-
-    Scope: each stack `compose.yaml`. A preview file (`preview.compose.yaml`) has a
-    checkout (`sourceType=github`), so its `build:` does not block a raw deploy.
-    """
+    """No platform compose (including preview.compose.yaml) builds a published Dockerfile."""
     published = {(ROOT / i.dockerfile).resolve() for i in pi.PLATFORM_IMAGES.values()}
     found = []
-    for compose in sorted(ROOT.glob("platform/*/compose.yaml")):
+    for compose in sorted(ROOT.glob("platform/*/*compose.yaml")):
         services = yaml.safe_load(compose.read_text()).get("services") or {}
         for name, spec in services.items():
             build = spec.get("build") if isinstance(spec, dict) else None

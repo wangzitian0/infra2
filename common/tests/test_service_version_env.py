@@ -56,15 +56,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def manifest_declares_service_version(compose_path: str) -> bool:
-    """True when no manifest is next to ``compose_path``, or when that manifest declares it.
-
-    A preview stack uses the manifest of the App stack with the same App: ``preview/``
-    reads ``10.app/env.manifest.json``.
-    """
+    """True when no manifest is next to ``compose_path``, or when that manifest declares it."""
     directory = (ROOT / compose_path).parent
     manifest = directory / "env.manifest.json"
-    if not manifest.is_file() and directory.name == "preview":
-        manifest = directory.parent / "10.app" / "env.manifest.json"
     if not manifest.is_file():
         return True
     fields = json.loads(manifest.read_text(encoding="utf-8")).get("fields", [])
@@ -81,7 +75,7 @@ def test_scope_is_not_empty() -> None:
         for path, text in _compiled().items()
         for name in identity_services(text)
     }
-    assert len(services) >= 11, sorted(services)
+    assert len(services) >= 9, sorted(services)
 
 
 @pytest.mark.parametrize("path", tracked_compose_files())
@@ -96,7 +90,6 @@ def test_every_identity_service_sets_service_version(path: str) -> None:
     [
         ("platform/30.todo/compose.yaml", True),
         ("finance_report/finance_report/10.app/compose.yaml", False),
-        ("finance_report/finance_report/preview/compose.yaml", False),
         ("truealpha/truealpha/20.data_engine/compose.yaml", False),
     ],
 )

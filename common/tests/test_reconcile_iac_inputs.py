@@ -5265,9 +5265,13 @@ def test_sync_sdk_pins_never_moves_the_pin_down_and_skips_an_unpublished_image(
     import shutil
     import urllib.error
 
-    from common.deploy.canary_pin import CANARY_COMPOSE_RELS, canary_sdk_version
+    from common.deploy.canary_pin import (
+        CANARY_COMPOSE_RELS,
+        CANARY_SLOTS_REL,
+        canary_sdk_version,
+    )
 
-    for rel in CANARY_COMPOSE_RELS:
+    for rel in (CANARY_SLOTS_REL, *CANARY_COMPOSE_RELS):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, tmp_path / rel)
     current = canary_sdk_version(tmp_path)
@@ -5343,9 +5347,13 @@ def test_sync_sdk_pins_skips_scan_when_bumping_and_passes_wanted_when_current(
     """When verified_versions is None: bumping skips verified_sdk_versions; matching passes wanted={target_sdk}."""
     import shutil
 
-    from common.deploy.canary_pin import CANARY_COMPOSE_RELS, canary_sdk_version
+    from common.deploy.canary_pin import (
+        CANARY_COMPOSE_RELS,
+        CANARY_SLOTS_REL,
+        canary_sdk_version,
+    )
 
-    for rel in CANARY_COMPOSE_RELS:
+    for rel in (CANARY_SLOTS_REL, *CANARY_COMPOSE_RELS):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, tmp_path / rel)
     current = canary_sdk_version(tmp_path)
@@ -5413,9 +5421,13 @@ def test_sync_sdk_pins_holds_app_prs_until_canary_verified(
     """#1639, #1823: the Canary image pin moves first; Apps wait until staging verifies it."""
     import shutil
 
-    from common.deploy.canary_pin import CANARY_COMPOSE_RELS, canary_sdk_version
+    from common.deploy.canary_pin import (
+        CANARY_COMPOSE_RELS,
+        CANARY_SLOTS_REL,
+        canary_sdk_version,
+    )
 
-    for rel in CANARY_COMPOSE_RELS:
+    for rel in (CANARY_SLOTS_REL, *CANARY_COMPOSE_RELS):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, tmp_path / rel)
     current = canary_sdk_version(tmp_path)
@@ -6160,7 +6172,7 @@ def test_app_pins_scan_the_sdk_stage_records_once_for_all_apps(
         "fetch_hooks_manifest",
         lambda service, *_a, **_kw: _hooks_v3(service),
     )
-    locked = {"finance_report/app": "4.6.0", "truealpha/app": "4.5.0"}
+    locked = {"finance_report/app": "4.11.0", "truealpha/app": "4.10.0"}
     monkeypatch.setattr(
         reconcile,
         "locked_sdk_version_for_app_ref",
@@ -6170,7 +6182,7 @@ def test_app_pins_scan_the_sdk_stage_records_once_for_all_apps(
     monkeypatch.setattr(
         reconcile,
         "verified_sdk_versions",
-        lambda **kw: scans.append(set(kw.get("wanted") or ())) or {"4.6.0", "4.5.0"},
+        lambda **kw: scans.append(set(kw.get("wanted") or ())) or {"4.11.0", "4.10.0"},
     )
     checked: list[tuple[str, frozenset[str]]] = []
     real_assert = reconcile.assert_app_sdk_version_verified
@@ -6202,10 +6214,10 @@ def test_app_pins_scan_the_sdk_stage_records_once_for_all_apps(
             ]
         )
     assert isinstance(raised.value, _StopAfterPre), raised.value
-    assert scans == [{"4.6.0", "4.5.0"}]
+    assert scans == [{"4.11.0", "4.10.0"}]
     assert sorted(checked) == [
-        ("finance_report/app", frozenset({"4.6.0", "4.5.0"})),
-        ("truealpha/app", frozenset({"4.6.0", "4.5.0"})),
+        ("finance_report/app", frozenset({"4.11.0", "4.10.0"})),
+        ("truealpha/app", frozenset({"4.11.0", "4.10.0"})),
     ]
 
 
@@ -6213,7 +6225,7 @@ def test_app_sdk_pins_reject_an_unverified_locked_version_after_one_scan(
     monkeypatch,
 ) -> None:
     """One App pin with an unverified SDK fails closed. The scan ran one time for both pins."""
-    locked = {"finance_report/app": "4.6.0", "truealpha/app": "4.7.0"}
+    locked = {"finance_report/app": "4.11.0", "truealpha/app": "4.12.0"}
     monkeypatch.setattr(
         reconcile,
         "locked_sdk_version_for_app_ref",
@@ -6224,7 +6236,7 @@ def test_app_sdk_pins_reject_an_unverified_locked_version_after_one_scan(
     monkeypatch.setattr(
         reconcile,
         "verified_sdk_versions",
-        lambda **kw: scans.append(set(kw["wanted"])) or {"4.6.0"},
+        lambda **kw: scans.append(set(kw["wanted"])) or {"4.11.0"},
     )
     with pytest.raises(reconcile.UnverifiedSdkError, match="truealpha/app@v2 pins"):
         reconcile.assert_app_sdk_versions_verified(
@@ -6234,9 +6246,9 @@ def test_app_sdk_pins_reject_an_unverified_locked_version_after_one_scan(
                 ("finance_report/app", "v1"),
             ]
         )
-    assert scans == [{"4.6.0", "4.7.0"}]
+    assert scans == [{"4.11.0", "4.12.0"}]
     assert reconcile.assert_app_sdk_versions_verified([]) == {}
-    assert scans == [{"4.6.0", "4.7.0"}]
+    assert scans == [{"4.11.0", "4.12.0"}]
 
 
 def test_run_scheduled_app_audits_isolates_setup_failure_and_persists_hook_artifacts(

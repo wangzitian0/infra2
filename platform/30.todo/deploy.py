@@ -7,14 +7,21 @@ import re
 import sys
 import time
 
+from pathlib import Path
+
 from invoke import task
 from invoke.exceptions import Exit
 from common.deploy.routing import CANARY_SLOT
 
 from common.console import error, header, info, run_with_status, success
-from common.deploy.canary_pin import CanarySlot, load_canary_slots, primary_canary_slot
+from common.deploy.canary_pin import (
+    CanarySlot,
+    canary_todo_facets,
+    load_canary_slots,
+    primary_canary_slot,
+)
 from common.deploy.deployer import Deployer, make_tasks
-from common.core.facets import ProbeFacet, SecretsFacet, SignalFacet
+from common.core.facets import SignalFacet
 
 shared_tasks = sys.modules.get("platform.30.todo.shared")
 
@@ -30,7 +37,6 @@ class TodoDeployer(Deployer):
 
     subdomain = None
     service_port = 8000
-    service_name = "todo-v4-13"
     canary_slot = CANARY_SLOT
     redeploy_on_ref_change = True
     secret_key = ""
@@ -40,50 +46,12 @@ class TodoDeployer(Deployer):
     # Each slot emits OTEL_SERVICE_NAME=platform-todo-<slot> and SERVICE_VERSION=vX.Y.Z.
     telemetry_service_name = "platform-todo"
 
-    probes = (
-        ProbeFacet(
-            name="todo-canary-status",
-            kind="http",
-            target="http://platform-todo-v4-14${ENV_SUFFIX}:8000/api/canary/status",
-            expected="200",
-            severity="error",
-            timeout_seconds=15,
-        ),
-        ProbeFacet(
-            name="todo-v4-11-canary-status",
-            kind="http",
-            target="http://platform-todo-v4-11${ENV_SUFFIX}:8000/api/canary/status",
-            expected="200",
-            severity="error",
-            timeout_seconds=15,
-        ),
-        ProbeFacet(
-            name="todo-v4-13-canary-status",
-            kind="http",
-            target="http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status",
-            expected="200",
-            severity="error",
-            timeout_seconds=15,
-        ),
-    )
     signals = (
         SignalFacet(
             tier="minute",
             type="alert",
             consecutive_failures=3,
             renotify_window_sec=0,
-        ),
-    )
-
-    secrets = (
-        SecretsFacet(
-            vault_agent_container="platform-todo-vault-agent${ENV_SUFFIX}",
-            app_containers=(
-                "platform-todo-v4-11${ENV_SUFFIX}",
-                "platform-todo-v4-13${ENV_SUFFIX}",
-                "platform-todo-v4-14${ENV_SUFFIX}",
-            ),
-            auth_method="approle",
         ),
     )
 
@@ -259,6 +227,11 @@ class TodoDeployer(Deployer):
         if not super().apply_secret_supply(c, env=env):
             return False
         return cls._ensure_todo_postgres_role(c, env=env)
+
+
+TodoDeployer.service_name, TodoDeployer.probes, TodoDeployer.secrets = (
+    canary_todo_facets(Path(__file__).resolve().parents[2])
+)
 
 
 @task

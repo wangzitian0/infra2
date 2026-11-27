@@ -60,6 +60,7 @@ services:
       - common/**
       - tools/**
       - platform/*/deploy.py
+      - platform/30.todo/slots.yaml
       - finance_report/finance_report/*/deploy.py
       - truealpha/truealpha/*/deploy.py
       - uv.lock

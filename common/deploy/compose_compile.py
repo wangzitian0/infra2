@@ -142,21 +142,29 @@ def vault_manifest_paths(compose_path: str | Path, text: str) -> tuple[str, ...]
 
 
 def vault_template_for(
-    compose_path: str | Path, text: str, *, manifest_root: Path | None = None
+    compose_path: str | Path,
+    text: str,
+    *,
+    manifest_root: Path | None = None,
+    mode: str = "deploy",
 ) -> str | None:
     """The rendered Vault Agent template for an ``x-infra2`` stack with ``vault``.
 
     The template comes from the stack manifest through ``common.security.secrets_render``,
     the same renderer that writes ``secrets.ctmpl`` today. ``manifest_root`` holds the
     manifests (default: the checkout); the config-drift check passes the manifests of a
-    release ref. A plain file or a stack without ``x-infra2.vault`` returns ``None``.
+    release ref. ``mode="preview"`` uses preview Vault overrides on the canonical stack
+    (for example staging Vault secret paths). A plain file or a stack without
+    ``x-infra2.vault`` returns ``None``.
     """
     if not has_x_infra2(text) or not _needs_vault_template(text):
         return None
     from common.security.secrets_render import render
 
     service = _registry_service(compose_path)
-    return render(service, root=manifest_root)["secrets.ctmpl"]
+    return render(service, root=manifest_root, preview=(mode == "preview"))[
+        "secrets.ctmpl"
+    ]
 
 
 # The compiled vault-agent sidecar (infra2_sdk.rules.compose, `x-vault`) writes its
@@ -281,7 +289,9 @@ def stack_from_text(
 ) -> StackCompose:
     """The deploy view of compose ``text`` read from ``compose_path``."""
     compiled = compile_stack(
-        text, vault_template=vault_template_for(compose_path, text), mode=mode
+        text,
+        vault_template=vault_template_for(compose_path, text, mode=mode),
+        mode=mode,
     )
     return StackCompose(source=text, compiled=compiled, x_infra2=has_x_infra2(text))
 

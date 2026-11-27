@@ -128,20 +128,10 @@ def _parse_int_tuple(raw: str, expected_len: int) -> list[int]:
 
 
 def _parse_stream_summary(raw: str) -> dict[str, Any]:
-    """Parse ``POST /api/todos/summary`` stream output as JSON or SSE."""
+    """Parse SSE output from ``POST /api/todos/summary``."""
     text = raw.strip()
     if not text:
         return {}
-    try:
-        parsed = json.loads(text)
-    except ValueError:
-        parsed = None
-    if parsed is not None:
-        return (
-            parsed
-            if isinstance(parsed, dict)
-            else {"raw": text, "error": "non-object JSON"}
-        )
 
     events: list[tuple[str, dict[str, Any]]] = []
     current_event = ""

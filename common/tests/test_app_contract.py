@@ -101,10 +101,8 @@ def _infra2_checkout(
                 target.write_bytes(content)
             for policy_path, text in (
                 ("truealpha/truealpha/10.app/vault-policy.hcl", policy),
-                ("truealpha/truealpha/preview/vault-policy.hcl", policy),
                 ("truealpha/truealpha/20.data_engine/vault-policy.hcl", policy),
                 ("finance_report/finance_report/10.app/vault-policy.hcl", FR_POLICY),
-                ("finance_report/finance_report/preview/vault-policy.hcl", FR_POLICY),
             ):
                 target = root / policy_path
                 target.parent.mkdir(parents=True, exist_ok=True)

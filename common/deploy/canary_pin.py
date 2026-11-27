@@ -21,11 +21,10 @@ CANARY_COMPOSE_REL = "platform/30.todo/compose.yaml"
 CANARY_SLOTS_REL = "platform/30.todo/slots.yaml"
 CANARY_IMAGE_REPOSITORY = "ghcr.io/wangzitian0/infra2-canary-todo"
 CANARY_SERVICE = "todo"
-PRIMARY_CANARY_SLOT = "v4-13"
 
-# Lower bound: the oldest SDK an app runs in staging or production (4.5.0).
+# Lower bound: the oldest SDK an app runs in staging or production (4.9.0).
 # Upper bound: the next major after 4.x.
-APP_SDK_RANGE: tuple[str, str] = ("4.5.0", "5.0.0")
+APP_SDK_RANGE: tuple[str, str] = ("4.9.0", "5.0.0")
 
 _PIN_RE = re.compile(
     rf"^{re.escape(CANARY_IMAGE_REPOSITORY)}:v(?P<version>\d+\.\d+\.\d+)"
@@ -161,6 +160,47 @@ def primary_canary_slot(repo_root: Path = REPO_ROOT) -> CanarySlot:
     return next(s for s in load_canary_slots(repo_root) if s.primary)
 
 
+def canary_todo_facets(repo_root: Path = REPO_ROOT):
+    """Derive ``(service_name, probes, secrets)`` for TodoDeployer from ``slots.yaml``."""
+    from common.core.facets import ProbeFacet, SecretsFacet
+
+    slots = load_canary_slots(repo_root)
+    primary = next(s for s in slots if s.primary)
+    probes = [
+        ProbeFacet(
+            name="todo-canary-status",
+            kind="http",
+            target=f"http://{primary.container_prefix}${{ENV_SUFFIX}}:8000/api/canary/status",
+            expected="200",
+            severity="error",
+            timeout_seconds=15,
+        )
+    ]
+    for slot in slots:
+        if slot.primary:
+            continue
+        probes.append(
+            ProbeFacet(
+                name=f"todo-{slot.slot}-canary-status",
+                kind="http",
+                target=f"http://{slot.container_prefix}${{ENV_SUFFIX}}:8000/api/canary/status",
+                expected="200",
+                severity="error",
+                timeout_seconds=15,
+            )
+        )
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-todo-vault-agent${ENV_SUFFIX}",
+            app_containers=tuple(
+                f"{slot.container_prefix}${{ENV_SUFFIX}}" for slot in slots
+            ),
+            auth_method="approle",
+        ),
+    )
+    return primary.compose_service, tuple(probes), secrets
+
+
 def canary_image_from_compose_text(text: str) -> tuple[str, str, str]:
     """Return ``(image_ref, sdk_version, digest)`` of the primary todo service, or raise."""
     data = safe_load_text(yaml, text) or {}
@@ -209,11 +249,7 @@ def canary_image_from_compose_text(text: str) -> tuple[str, str, str]:
 
 def canary_sdk_version(repo_root: Path = REPO_ROOT) -> str:
     """The primary SDK version that the Canary stack of this checkout proves."""
-    slots_path = repo_root / CANARY_SLOTS_REL
-    if slots_path.is_file():
-        return primary_canary_slot(repo_root).version
-    text = (repo_root / CANARY_COMPOSE_REL).read_text(encoding="utf-8")
-    return canary_image_from_compose_text(text)[1]
+    return primary_canary_slot(repo_root).version
 
 
 def canary_sdk_unit(repo_root: Path = REPO_ROOT) -> str:
@@ -446,49 +482,6 @@ def _promote_minor_compose_slot(
     )
 
 
-def _add_minor_deploy_facets(
-    deploy_path: Path, *, old_primary: CanarySlot, version: str
-) -> None:
-    """Register ProbeFacet and SecretsFacet container for a newly promoted minor slot."""
-    if not deploy_path.is_file():
-        return
-    major, minor, _ = version.split(".")
-    new_slot = f"v{major}-{minor}"
-    text = deploy_path.read_text(encoding="utf-8")
-    old_target = (
-        f"http://platform-todo-{old_primary.slot}${{ENV_SUFFIX}}:8000/api/canary/status"
-    )
-    new_target = (
-        f"http://platform-todo-{new_slot}${{ENV_SUFFIX}}:8000/api/canary/status"
-    )
-    if old_target in text:
-        text = text.replace(old_target, new_target, 1)
-    secondary_probe = (
-        "        ProbeFacet(\n"
-        f'            name="todo-{old_primary.slot}-canary-status",\n'
-        '            kind="http",\n'
-        f'            target="{old_target}",\n'
-        '            expected="200",\n'
-        '            severity="error",\n'
-        "            timeout_seconds=15,\n"
-        "        ),\n"
-    )
-    if f'name="todo-{old_primary.slot}-canary-status"' not in text:
-        anchor = "    signals = ("
-        idx = text.find(anchor)
-        if idx != -1:
-            close_idx = text.rfind("    )", 0, idx)
-            if close_idx != -1:
-                text = text[:close_idx] + secondary_probe + text[close_idx:]
-    new_container = f'"platform-todo-{new_slot}${{ENV_SUFFIX}}"'
-    old_container = f'"platform-todo-{old_primary.slot}${{ENV_SUFFIX}}"'
-    if new_container not in text and old_container in text:
-        text = text.replace(
-            old_container, f"{old_container},\n                {new_container}", 1
-        )
-    deploy_path.write_text(text, encoding="utf-8")
-
-
 def sync_canary_pin_files(repo_root: Path, version: str, digest: str) -> list[str]:
     """Update Canary pin files across compose, preview compose, and ``slots.yaml``.
 
@@ -501,15 +494,6 @@ def sync_canary_pin_files(repo_root: Path, version: str, digest: str) -> list[st
         raise CanaryPinError(f"invalid pin v{version}@{digest}")
 
     slots_path = repo_root / CANARY_SLOTS_REL
-    if not slots_path.is_file():
-        for rel in CANARY_COMPOSE_RELS:
-            path = repo_root / rel
-            path.write_text(
-                rewrite_canary_pin(path.read_text(encoding="utf-8"), version, digest),
-                encoding="utf-8",
-            )
-        return list(CANARY_COMPOSE_RELS)
-
     slots = load_canary_slots(repo_root)
     major, minor, _ = version.split(".")
     slot_id = f"v{major}-{minor}"
@@ -555,13 +539,6 @@ def sync_canary_pin_files(repo_root: Path, version: str, digest: str) -> list[st
                 encoding="utf-8",
             )
             updated_paths.append(preview_rel)
-        deploy_rel = "platform/30.todo/deploy.py"
-        deploy_path = repo_root / deploy_rel
-        if deploy_path.is_file():
-            _add_minor_deploy_facets(
-                deploy_path, old_primary=old_primary, version=version
-            )
-            updated_paths.append(deploy_rel)
 
     load_canary_slots(repo_root)
     return updated_paths

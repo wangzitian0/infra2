@@ -13,9 +13,7 @@ MIN_KEEPALIVE_SECONDS = 95
 
 UVICORN_COMPOSE_TARGETS = (
     ("finance_report/finance_report/10.app/compose.yaml", "backend"),
-    ("finance_report/finance_report/preview/compose.yaml", "backend"),
     ("truealpha/truealpha/10.app/compose.yaml", "llm"),
-    ("truealpha/truealpha/preview/compose.yaml", "llm"),
     ("bootstrap/06.iac_runner/compose.yaml", "iac-runner"),
 )
 

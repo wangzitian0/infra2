@@ -123,7 +123,6 @@ def test_rendered_collector_config_applies_env_suffix():
 # --------------------------------------------------------------------------- #
 COMPOSE_FILES = [
     ROOT / "finance_report/finance_report/10.app/compose.yaml",
-    ROOT / "finance_report/finance_report/preview/compose.yaml",
 ]
 
 

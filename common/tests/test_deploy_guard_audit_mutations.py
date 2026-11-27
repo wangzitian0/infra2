@@ -262,9 +262,6 @@ def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_f
     canary_hits = deploy_guard_audit.dockerfile_canary_violations(
         composes, root=tmp_path
     )
-    assert (
-        "platform/30.todo: has Dockerfile but config hash reads 0 inputs" in canary_hits
-    )
     # Alerting has no `build:`: the hash reads the inputs of its CI-built image (#1822).
     assert not any(h.startswith("platform/12.alerting:") for h in canary_hits)
     assert (
@@ -304,12 +301,12 @@ def test_audit_cli_includes_vault_agent_template_and_prints_per_root_breakdown(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Case 7: `find_service_composes()` includes `bootstrap/templates/vault-agent.compose.yaml`
-    and `preview/compose.yaml`, and `main()` exits 0 while printing each service root's counts."""
+    and `30.todo/preview.compose.yaml`, and `main()` exits 0 while printing each service root's counts."""
     composes = deploy_guard_audit.find_service_composes()
     rels = {c.relative_to(deploy_guard_audit.ROOT).as_posix() for c in composes}
     assert "bootstrap/templates/vault-agent.compose.yaml" in rels
-    assert "finance_report/finance_report/preview/compose.yaml" in rels
-    assert "truealpha/truealpha/preview/compose.yaml" in rels
+    assert "finance_report/finance_report/10.app/compose.yaml" in rels
+    assert "truealpha/truealpha/10.app/compose.yaml" in rels
     assert deploy_guard_audit.find_unmapped_composes() == []
 
     assert deploy_guard_audit.main() == 0

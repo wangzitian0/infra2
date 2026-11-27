@@ -53,12 +53,11 @@ _COMPOSE_GLOB = "*compose*.y*ml"
 # `_SERVICE_ROOTS` is truncated, or bind mounts/contexts are rewritten to bare `${VAR}`.
 _SERVICE_ROOT_FLOORS: dict[str, tuple[int, int]] = {
     "platform": (13, 350),
-    # finance_report and truealpha read fewer inputs since #1822 Slice 3: an x-infra2
-    # stack has no mounted secrets.ctmpl or vault-agent.hcl (data stores, then 10.app).
-    # truealpha 20.data_engine mounts no dagster-entrypoint.sh since v0.2.144
-    # (truealpha#1866), and no secrets.ctmpl or vault-agent.hcl since it is x-infra2.
-    "finance_report": (4, 2),
-    "truealpha": (4, 2),
+    # finance_report and truealpha use x-infra2 + prebuilt GHCR images across all
+    # stacks (including mode="preview" off 10.app/compose.yaml), leaving 3 compose
+    # files per root and 0 local Dockerfile/template bind-mount inputs.
+    "finance_report": (3, 0),
+    "truealpha": (3, 0),
     "bootstrap": (4, 12),
 }
 
@@ -210,7 +209,7 @@ def floor_violations(
     non_positive_floors = [
         sr
         for sr, (min_c, min_i) in _SERVICE_ROOT_FLOORS.items()
-        if min_c < 1 or min_i < 1
+        if min_c < 1 or min_i < 0
     ]
     if non_positive_floors:
         violations.append(

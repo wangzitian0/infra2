@@ -477,8 +477,8 @@ def test_promql_selectors_reach_series_the_app_exports() -> None:
                 assert len(pattern) == 1, alert_name
                 if alert_name.startswith("CanaryTodo"):
                     assert re.fullmatch(pattern[0], "platform-todo")
-                    assert re.fullmatch(pattern[0], "platform-todo-v4-11")
                     assert re.fullmatch(pattern[0], "platform-todo-v4-13")
+                    assert re.fullmatch(pattern[0], "platform-todo-v4-14")
                 else:
                     matched = {
                         name
@@ -889,8 +889,8 @@ SERVICE_METRICS = {
     "truealpha-data-engine": set(),
     "platform-alerting": _NEW_HTTP | {"http.server.active_requests"},
     "platform-todo": _TODO_METRICS,
-    "platform-todo-v4-11": _TODO_METRICS,
     "platform-todo-v4-13": _TODO_METRICS,
+    "platform-todo-v4-14": _TODO_METRICS,
 }
 KNOWN_SERVICES = SERVICE_METRICS.keys() | _FINANCE_REPORT_SERVICES
 
