@@ -99,6 +99,8 @@ def _sdk_free_job_modules(workflow: dict) -> dict[str, set[str]]:
                 modules.add(match["path"].replace("/", "."))
             for snippet in _embedded_python(run):
                 modules.update(m["module"] for m in _IMPORTS_MODULE.finditer(snippet))
+        if job.get("if") is False and not modules:
+            continue
         jobs[name] = modules
     return jobs
 
@@ -121,6 +123,14 @@ jobs:
           import tools.epsilon
           import json
           PY
+  disabled_noop:
+    if: false
+    steps:
+      - run: "true"
+  disabled_with_python:
+    if: false
+    steps:
+      - run: python -m tools.theta
   with_the_sdk:
     steps:
       - run: |
@@ -140,7 +150,8 @@ jobs:
             "tasks",
             "common.gamma.delta",
             "tools.epsilon",
-        }
+        },
+        "disabled_with_python": {"tools.theta"},
     }
 
 

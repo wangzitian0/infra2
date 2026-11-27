@@ -770,7 +770,6 @@ def test_every_ungated_job_declares_secret_limits() -> None:
         ("facet-reconcile", "IAC_WEBHOOK_SECRET"),
         ("vault-self-refresh-audit", "IAC_WEBHOOK_SECRET"),
         ("secrets-reconcile", "DOKPLOY_API_KEY"),
-        ("staging-db-hygiene", "DOKPLOY_API_KEY"),
     ],
 )
 def test_ops_checks_ungated_job_fails_when_reading_secret_outside_limit(

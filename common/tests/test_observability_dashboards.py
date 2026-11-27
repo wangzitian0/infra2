@@ -264,7 +264,6 @@ _EXPECTED_RULES = {
     ),
     "PlatformAlertingErrorLogs": ("threshold_rule", "error", 5, "4", "15m0s", ""),
     "PlatformTodoErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
-    "CanaryTodoProbeFailures": ("promql_rule", "error", 0.0, "1", "5m0s", "count"),
     "CanaryTodoTelemetryAbsent": ("promql_rule", "error", 0.0, "1", "5m0s", ""),
 }
 # Every rule has a staging twin named `<rule>Staging` (#1649).

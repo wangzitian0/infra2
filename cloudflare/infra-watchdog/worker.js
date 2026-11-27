@@ -15,45 +15,10 @@
 // state document when something transitioned, otherwise the last-run record),
 // the Healthchecks.io ping, and on an alert run one Feishu delivery.
 
-const DEFAULT_TARGETS = [
-  ["production", "dokploy-public-route", "bootstrap/dokploy", "https://cloud.zitian.party", [200, 302]],
-  ["production", "finance-report-web-public-route", "finance_report/app", "https://report.zitian.party/", [200, 302, 307, 308]],
-  ["production", "truealpha-web-public-route", "truealpha/app", "https://truealpha.club/", [200, 302, 307, 308]],
-].map(([environment, name, service_id, url, statuses]) => ({
-  environment,
-  name,
-  service_id,
-  url,
-  statuses,
-  severity: "critical",
-}));
-
-const DEFAULT_HEARTBEATS = [
-  {
-    environment: "production",
-    name: "platform-alerting-probes",
-    service_id: "platform/alerting",
-    maxAgeSeconds: 5400,
-    severity: "critical",
-  },
-  {
-    environment: "production",
-    name: "ops-checks-scheduler",
-    service_id: "infra/github",
-    maxAgeSeconds: 93600,
-    minWriteIntervalSeconds: 43200,
-    statusChangeWritesPerDay: 2,
-    failureClass: "ops-scheduler",
-    severity: "critical",
-  },
-  {
-    environment: "staging",
-    name: "platform-alerting-probes-staging",
-    service_id: "platform/alerting",
-    maxAgeSeconds: 5400,
-    severity: "warning",
-  },
-];
+// Fail-closed: WATCHDOG_TARGETS_JSON and WATCHDOG_HEARTBEATS_JSON come solely
+// from wrangler.toml / Worker env (synced by tools/watchdog_wrangler_sync.py).
+const DEFAULT_TARGETS = [];
+const DEFAULT_HEARTBEATS = [];
 
 // Only this environment pages. Everything else is recorded for /status.
 const PAGED_ENVIRONMENT = "production";

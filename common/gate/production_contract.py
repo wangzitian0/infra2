@@ -37,6 +37,8 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
     ("ops-checks.yml", "audit"): "scheduled read-only audit",
     ("ops-checks.yml", "watchdog"): "scheduled read-only probe",
     ("ops-checks.yml", "digest"): "scheduled read-only report",
+    ("watchdog.yml", "watchdog"): "scheduled read-only probe",
+    ("watchdog.yml", "digest"): "scheduled read-only report",
     (
         "ops-checks.yml",
         "preview-leak-check",
@@ -51,10 +53,6 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
         "ops-checks.yml",
         "facet-reconcile",
     ): "scheduled read-only drift report (#1127)",
-    (
-        "ops-checks.yml",
-        "staging-db-hygiene",
-    ): "scheduled staging-only finance_report test-tenant and trace_records purge (#1624 AC2)",
     (
         "ops-checks.yml",
         "scheduled-app-audit",
@@ -145,8 +143,23 @@ UNGATED_SECRET_LIMITS: dict[tuple[str, str], frozenset[str]] = {
     ("ops-checks.yml", "vault-self-refresh-audit"): (
         frozenset({"DOKPLOY_API_KEY"}) | _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS
     ),
+    ("watchdog.yml", "watchdog"): (
+        frozenset(
+            {
+                "DOKPLOY_API_KEY",
+                "INFRA2_WATCHDOG_HEARTBEAT_TOKEN",
+                "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN",
+            }
+        )
+        | _ALERT_SECRETS
+        | _WATCHDOG_SSH_SECRETS
+    ),
+    ("watchdog.yml", "digest"): (
+        frozenset({"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN"})
+        | _ALERT_SECRETS
+        | _WATCHDOG_SSH_SECRETS
+    ),
     ("ops-checks.yml", "secrets-reconcile"): _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS,
-    ("ops-checks.yml", "staging-db-hygiene"): _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS,
 }
 
 # Retired workflow files removed in #1500. Kept as an empty set so callers importing

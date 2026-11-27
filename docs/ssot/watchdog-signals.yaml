@@ -136,6 +136,7 @@ conditions:
 # run); until then production has two pagers for canary-todo.
 signoz_conditions:
   PlatformTodoProbeFailures: canary-todo
+  CanaryTodoProbeFailures: canary-todo
 
 # Paging signals still in the wrong layer. Each entry names the #901 phase
 # issue that moves or retires it; the audit fails once an entry stops being a
@@ -478,6 +479,8 @@ signals:
     severity: critical
     cadence: 1d
     stale_threshold: 26h
+    min_write_interval_seconds: 43200
+    status_change_writes_per_day: 2
     tier: hour
     type: alert
     consecutive_failures: 1 # stale_threshold (93600s) is the debounce
@@ -812,18 +815,6 @@ signals:
     environment: global
     component: iac
     signal: e2e-regressions-smoke
-    primary_owner: self
-    failure_class: service-health
-    layer: github
-    severity: warning
-    cadence: 1d
-    tier: day
-    type: report
-
-  - signal_id: global.infra2.staging-db-hygiene
-    environment: global
-    component: iac
-    signal: staging-db-hygiene
     primary_owner: self
     failure_class: service-health
     layer: github
