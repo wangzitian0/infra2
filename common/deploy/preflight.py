@@ -1,8 +1,7 @@
 """Deployment preflight guards and credential checks.
 
-Consolidates duplicate token and AppRole verification from common.deploy.deployer
-and common.deploy.promote onto infra2_sdk.secrets, plus GitHub ref reachability
-and registry image dependency checks.
+Consolidates token and AppRole verification from common.deploy.deployer onto
+infra2_sdk.storage, plus GitHub ref reachability and registry image dependency checks.
 """
 
 from __future__ import annotations

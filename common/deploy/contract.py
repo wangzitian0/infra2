@@ -145,9 +145,8 @@ def worker_telemetry_env(
     }
 
 
-# finance_report and truealpha/app have a BESPOKE deploy_v2 backend (fixed-compose
-# promote path via common.deploy.promote; both support the preview lifecycle via
-# common.deploy.preview). EVERY OTHER service is ``iac_pinned`` and routes to the
+# finance_report and truealpha/app use fixed-compose deploy_v2 + ephemeral preview slots.
+# EVERY OTHER service is ``iac_pinned`` and routes to the
 # iac_runner /deploy webhook — and its facts (subdomain, prod_only) are DERIVED from its
 # deploy.py Deployer class via common.core.registry, the single source of truth
 # (Infra-013: never hand-copy service facts into a parallel list).
@@ -168,8 +167,7 @@ SERVICES: dict[str, ServiceSpec] = {
         artifact_source="app",
     ),
     # #500: version-pinned staging promotion (finance_report's fixed-compose path,
-    # generalized). #522: preview/canary wired via common.deploy.preview (generalized
-    # off a per-service registry — deploy_env_config.preview_service_config; truealpha's
+    # generalized). #522: preview/canary wired via env_config.preview_service_config; truealpha's
     # own ephemeral-DB template is truealpha/truealpha/preview/compose.yaml). Production
     # went live 2026-07-19 (AppRole + secrets + MinIO bucket provisioned, postgres + app
     # deployed, health-checked at https://truealpha.zitian.party — compose_id registered

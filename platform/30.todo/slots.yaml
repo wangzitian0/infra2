@@ -12,8 +12,8 @@ slots:
     s3_key_prefix: "canary/v4-11/"
     primary: false
   - slot: v4-13
-    version: "4.13.0"
-    digest: "sha256:ec62302213a62f521266089bfb6044a339fb03c6fd4958933c33d768899a63f1"
+    version: "4.13.2"
+    digest: "sha256:6c7d0bf0d8bd4e49bc0b88ea5ecff4713532f23636d8997dc61aec9103178bb3"
     compose_service: todo-v4-13
     container_prefix: platform-todo-v4-13
     otel_service_name: platform-todo-v4-13

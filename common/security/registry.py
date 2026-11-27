@@ -151,7 +151,7 @@ SERVICES: tuple[Service, ...] = (
         "finance_report",
         "app",
         ("finance_report/finance_report/10.app/env.manifest.json",),
-        # _ensure_minio_bucket reads the bucket name back to decide whether the scoped
+        # _ensure_s3_bucket reads the bucket name back to decide whether the scoped
         # user already exists; the compose supplies the same name to the container.
         store_only_keys=("S3_BUCKET",),
     ),

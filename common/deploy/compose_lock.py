@@ -22,9 +22,8 @@ therefore:
 
 1. Lose an update — whichever POST lands last silently wins, discarding the other
    caller's env write (see ``DokployClient.update_compose_env``).
-2. Cross-contaminate rollout polling — ``common.deploy.promote.wait_for_rollout`` /
-   ``common.deploy.deployer.Deployer._wait_for_new_deployment_record`` can pick up a
-   deployment record triggered by the OTHER sequence and report its outcome as this
+2. Cross-contaminate rollout polling — ``common.deploy.deployer.Deployer._wait_for_new_deployment_record``
+   can pick up a deployment record triggered by the OTHER sequence and report its outcome as this
    caller's own.
 
 ## What this closes, and what it deliberately does not
@@ -40,7 +39,7 @@ module exists so the PRIMITIVE ITSELF is not silently unsafe for any future or d
 caller that bypasses that workflow (an operator running the CLI twice, a script that
 fans out `deploy()` calls), rather than relying entirely on caller discipline.
 
-Reentrant (``RLock``) so ``common.deploy.promote.deploy()`` can hold the lock across its
+Reentrant (``RLock``) so fixed-env deploy can hold the lock across its
 whole read-modify-write-deploy-wait-verify sequence AND re-enter it inside
 ``DokployClient.update_compose_env()`` (called from within that sequence) without
 deadlocking, while a call to ``update_compose_env()`` made directly by some OTHER

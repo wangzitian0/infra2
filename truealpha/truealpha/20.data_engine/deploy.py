@@ -255,7 +255,7 @@ class DataEngineDeployer(Deployer):
         compiled = cls._compiled_compose()
         # The compiled sidecar embeds its template and ignores VAULT_SECRETS_TEMPLATE
         # (#1822 Slice 3). A release template that is not the compiled one stops here,
-        # as common.deploy.promote does for the app stacks; an equal one adds nothing.
+        # matching app stacks; an equal one adds nothing.
         vault_template = (env if env is not None else cls.env()).get(
             "VAULT_SECRETS_TEMPLATE", ""
         )

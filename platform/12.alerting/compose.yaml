@@ -48,8 +48,6 @@ services:
     environment:
       PORT: "8080"
       # The SDK reads the environment tier from ENVIRONMENT when it configures telemetry.
-      # ENV stays until the SDK retires its ENV alias (infra2#1823 N1).
-      ENV: ${ENV}
       ENVIRONMENT: ${ENV}
       # The deploy issues the full infra2 SHA as INFRA_IAC_REF.
       GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}

@@ -20,11 +20,11 @@ def load_deployer_class(
 ) -> type[Deployer] | None:
     """Dynamically import `service_id`'s deploy.py and return its Deployer subclass.
 
-    Every OTHER consumer of a service's facts (service_registry, promote.py's
-    assert_approle_creds_present) deliberately reads deploy.py via AST, never
+    Every OTHER consumer of a service's facts (service_registry, preflight)
+    deliberately reads deploy.py via AST, never
     importing it — importing runs the module's own top-level code. This is the
     one place that import is actually needed: a fixed-compose deploy
-    (common.deploy.promote) that wants to call a real Deployer classmethod (e.g.
+    that wants to call a real Deployer classmethod (e.g.
     ensure_runtime_secrets, truealpha#447) rather than re-derive its logic.
     Safe to do here because a deploy.py's only load-time side effect
     (make_tasks -> invoke task registration) is gated on its own

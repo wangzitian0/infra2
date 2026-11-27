@@ -4313,7 +4313,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--run-hook-slot",
         default="",
-        help="optional verification hook slot to execute via infra2_sdk.manifests",
+        help="optional verification hook slot to execute via infra2_sdk.delivery",
     )
     parser.add_argument(
         "--hooks-manifest",

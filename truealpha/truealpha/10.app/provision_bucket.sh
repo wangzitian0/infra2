@@ -2,7 +2,7 @@
 # Provision the truealpha raw-archive bucket + app-scoped S3 credentials.
 #
 # RUN ON THE VPS HOST (needs the docker CLI — the iac-runner deploys through
-# the Dokploy API and has no docker socket, so deploy.py's _ensure_minio_bucket
+# the Dokploy API and has no docker socket, so deploy.py's _ensure_s3_bucket
 # cannot do this itself; it points here instead).
 #
 # Semantics match platform/03.minio create_app_bucket with lifecycle_days=0:
