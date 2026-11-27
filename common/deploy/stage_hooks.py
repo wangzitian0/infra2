@@ -236,6 +236,29 @@ def build_hook_env(
     return clean
 
 
+_WARNING_LINE_MARKERS = (
+    "DeprecationWarning:",
+    "PytestDeprecationWarning:",
+    "PendingDeprecationWarning:",
+    "UserWarning:",
+    "FutureWarning:",
+    "warnings.warn(",
+)
+
+
+def _first_diagnostic_line(
+    stderr: str | bytes | None, stdout: str | bytes | None, fallback: str
+) -> str:
+    """Return first non-warning diagnostic line for CheckVerdict.detail."""
+    raw = _strip_stream(stderr) or _strip_stream(stdout) or fallback
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    for line in lines:
+        if any(marker in line for marker in _WARNING_LINE_MARKERS):
+            continue
+        return line
+    return lines[0] if lines else fallback
+
+
 def _strip_stream(v: str | bytes | None) -> str:
     return (
         ""
@@ -363,10 +386,10 @@ def _run_step(
     if proc.returncode != 0:
         msg = f"{step_name} exited with code {proc.returncode}"
         tail = _format_hook_output_tail(proc.stdout, proc.stderr, msg)
-        first = (proc.stderr or "").strip() or (proc.stdout or "").strip() or msg
+        diag = _first_diagnostic_line(proc.stderr, proc.stdout, msg)
         bad(
             check_id,
-            redact_text(first.splitlines()[0], clean_env, _SECRET_ENV_NAME),
+            redact_text(diag, clean_env, _SECRET_ENV_NAME),
             t0,
         )
         return False, proc.returncode, step_name, tail, dur

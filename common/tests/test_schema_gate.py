@@ -628,6 +628,41 @@ def test_launcher_prefers_storage_check_schema_on_v410_sdk(tmp_path):
     ]
 
 
+def test_launcher_falls_back_to_storage_runpy_and_runtime_schema_check(tmp_path):
+    """Older images (4.10..4.14.1 storage package CLI and 4.9 runtime.schema_check) still evaluate."""
+    pkg = tmp_path / "runpy_stub" / "infra2_sdk" / "storage"
+    pkg.mkdir(parents=True)
+    (tmp_path / "runpy_stub" / "infra2_sdk" / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "__main__.py").write_text(
+        "import json, sys\nprint(json.dumps({'rollback_class': 'A', 'migrations_pending': False, 'label': 'finance_report/app', 'argv': sys.argv[1:]}))\n"
+    )
+    res_pkg = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x", "--label", "finance_report/app"],
+        "postgresql://h/db\n",
+        tmp_path / "runpy_stub",
+    )
+    assert res_pkg.returncode == 0, res_pkg.stderr
+    assert "[finance_report/app] ROLLBACK_CLASS: A pending=False" in res_pkg.stdout
+
+    rt = tmp_path / "rt_stub" / "infra2_sdk" / "runtime"
+    rt.mkdir(parents=True)
+    (tmp_path / "rt_stub" / "infra2_sdk" / "__init__.py").write_text("")
+    (rt / "__init__.py").write_text("")
+    (rt / "schema_check.py").write_text(
+        "def main(argv):\n    print('ROLLBACK_CLASS: A')\n    return 0\n"
+    )
+    res_rt = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x"],
+        "postgresql://h/db\n",
+        tmp_path / "rt_stub",
+    )
+    assert res_rt.returncode == 0, res_rt.stderr
+    assert "ROLLBACK_CLASS: A" in res_rt.stdout
+
+
 def test_launcher_storage_emits_rollback_class_and_diff_details_on_blocked(tmp_path):
     """On blocked exit, _LAUNCHER prints ROLLBACK_CLASS to stdout and SCHEMA_DIFF JSON to stderr."""
     payload = {

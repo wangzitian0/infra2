@@ -38,7 +38,7 @@ def test_scanner_finds_planted_names_and_ignores_lookalikes(tmp_path: Path) -> N
     _write(tmp_path, "platform/q/tests/test_x.py", "APP_ENV = 1\n")
     _write(tmp_path, "platform/z/README.md", "APP_ENV\n")
     _write(tmp_path, "common/core/facets.py", "T = 'http://platform-minio:9000'\n")
-    _write(tmp_path, "common/core/sdk_usage_census.py", "KEYS = {'APP_ENV'}\n")
+    _write(tmp_path, "common/core/harness_cli.py", "KEYS = {'APP_ENV'}\n")
 
     assert scan(tmp_path) == {
         "common/core/facets.py": ["platform-minio"],

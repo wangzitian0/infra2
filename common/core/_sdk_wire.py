@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -185,6 +186,43 @@ def field_rendered(field: Any) -> bool:
     return field.store_backed or bool(field.provided_by) or bool(field.composed_from)
 
 
+def _locked_sdk_package(text: str, *, label: str = "uv.lock") -> dict[str, Any]:
+    packages = [
+        pkg
+        for pkg in tomllib.loads(text).get("package", [])
+        if isinstance(pkg, Mapping) and pkg.get("name") == "infra2-sdk"
+    ]
+    if len(packages) != 1:
+        raise ValueError(
+            f"{label}: expected one infra2-sdk package, found {len(packages)}"
+        )
+    return dict(packages[0])
+
+
+def sdk_version_from_lock_text(text: str, *, label: str = "uv.lock") -> str:
+    """Extract the pinned ``infra2-sdk`` version string from ``uv.lock`` content."""
+    ver = str(_locked_sdk_package(text, label=label).get("version") or "").strip()
+    if not ver:
+        raise ValueError(f"{label}: infra2-sdk has no version")
+    return ver
+
+
+def sdk_requirement_from_lock_text(text: str, *, label: str = "uv.lock") -> str:
+    """Extract ``infra2-sdk @ <url>#sha256=<digest>`` from ``uv.lock`` content."""
+    pkg = _locked_sdk_package(text, label=label)
+    url = str((pkg.get("source") or {}).get("url") or "")
+    wheels = pkg.get("wheels") or []
+    wheel_hash = str(wheels[0].get("hash") or "") if len(wheels) == 1 else ""
+    if not url or not wheel_hash.startswith("sha256:"):
+        raise ValueError(f"{label}: infra2-sdk wheel entry in uv.lock is malformed")
+    return f"infra2-sdk @ {url}#{wheel_hash.replace(':', '=', 1)}"
+
+
+def read_locked_sdk_version(lock: Path) -> str:
+    """Read the pinned ``infra2-sdk`` version from a ``uv.lock`` file path."""
+    return sdk_version_from_lock_text(lock.read_text(encoding="utf-8"), label=str(lock))
+
+
 __all__ = [
     "CheckVerdict",
     "_is_loopback_host",
@@ -198,9 +236,12 @@ __all__ = [
     "parse_env_manifest_dict",
     "parse_iso_utc",
     "parse_string",
+    "read_locked_sdk_version",
     "record_verdicts",
     "redact_text",
     "reject_unknown",
     "require_contract_version",
+    "sdk_requirement_from_lock_text",
+    "sdk_version_from_lock_text",
     "validate_http_url",
 ]

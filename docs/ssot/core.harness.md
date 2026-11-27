@@ -108,7 +108,7 @@ This section is the one definition of the code layers of `infra2` and `infra2-sd
 
 | Layer | Definition | Rule | Check |
 |---|---|---|---|
-| `infra2-sdk` | Code that 2 or more repositories use. Its internal layers are defined in its own `init.md` and `README.md`. | Each public name has a consumer (SDK P3). | SDK `tests/test_architecture_guards.py`; `common/core/sdk_usage_census.py` |
+| `infra2-sdk` | Code that 2 or more repositories use. Its internal layers are defined in its own `init.md` and `README.md`. | Each public name has a consumer (SDK P3). | SDK `tests/test_architecture_guards.py` |
 | `common/` | The importable logic of one repository, unit-tested in `common/tests`. A module can expose `main()` for `python -m`. | Code moves to the SDK when a second repository needs it. `common/` imports no `tools`, `platform` or `bootstrap` code. | `common/tests/test_import_boundaries.py` (import edges only) |
 | `tools/` | Thin entry points: argv parsing, environment wiring, exit code. | Logic moves to `common/`. | `common/tests/test_tools_thin.py`: no top-level class, at most 200 lines of top-level statements; no tool is exempt |
 | App `common/` | The app defines it (§4, App autonomy). | The app decides (§4). An app PR, under the app's own rules, may replace its glue with a released SDK contract. | The app's own checks |
@@ -220,7 +220,6 @@ uv run pytest -q common/tests/test_sdk_contract_adoption.py
 - 所有 `external-application` 必须是 `autonomous`，且不能进入 focus。
 - authority 与 preference 路径可读且不能逃逸 workspace root。
 - 现有 SDK 采用测试继续证明消费者使用发布 artifact，而不是 submodule 源码。
-- `tools.sdk_usage_census` 的 `M1` 以包级契约（`infra2_sdk/__init__.py` 六大模块导出）作为「公开符号（public symbol）」的唯一定义，对照 AST 实际导入核验消费者使用情况。
 - `status --online` reads the release from the `version` field, else `git_sha`. It reports `unreachable` and `unknown` instead of a guess. Without `--online`, `status` and `check` open no socket (`common/tests/test_harness_status.py`).
 - Each `health:` URL is an https URL. It equals the public health route of the same App in the service registry (`common/tests/test_harness_manifest.py`).
 - `sweep` 对未 resolved review thread、红色 check、未知值与失败的 probe 从不报告

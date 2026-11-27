@@ -142,8 +142,16 @@ def calls(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(dv2, "_preview_up", fake_up)
-    monkeypatch.setattr(dv2, "_deploy_fixed", fake_deploy)
+    monkeypatch.setattr(
+        dv2.SyncPipeline,
+        "run_preview_up",
+        classmethod(lambda cls, *a, **kw: fake_up(*a, **kw)),
+    )
+    monkeypatch.setattr(
+        dv2.SyncPipeline,
+        "run_fixed",
+        classmethod(lambda cls, *a, **kw: fake_deploy(*a, **kw)),
+    )
     monkeypatch.setattr(dv2, "_wait_for_image_dependencies", fake_wait)
     monkeypatch.setattr(dv2, "resolve_image_ref", _fake_resolve_image_ref)
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
@@ -636,7 +644,11 @@ def test_deploy_v2_carries_rollback_class_into_detail(monkeypatch, calls):
             rollback_class="C",
         )
 
-    monkeypatch.setattr(dv2, "_deploy_fixed", fake_deploy_with_rollback_class)
+    monkeypatch.setattr(
+        dv2.SyncPipeline,
+        "run_fixed",
+        classmethod(lambda cls, *a, **kw: fake_deploy_with_rollback_class(*a, **kw)),
+    )
     res = _deploy(deploy_type="staging", version_ref="v1.2.3")
     assert res.detail["rollback_class"] == "C"
 
@@ -1244,10 +1256,12 @@ def test_cli_down_exits_nonzero_when_slot_containers_survive(monkeypatch, capsys
     monkeypatch.delenv("IAC_WEBHOOK_SECRET", raising=False)
     monkeypatch.setattr(dk, "get_dokploy", lambda host: "client")
     monkeypatch.setattr(
-        dv2,
-        "_preview_down",
-        lambda kind, value, *, domain, client, service: _fake_down_result(
-            kind, value, domain=domain, client=client, cleared=False
+        dv2.SyncPipeline,
+        "run_preview_down",
+        classmethod(
+            lambda cls, kind, value, *, domain, client, service: _fake_down_result(
+                kind, value, domain=domain, client=client, cleared=False
+            )
         ),
     )
     argv = ["--type", "preview/pr", "--version-ref", "5", "--iac-ref", "main"]
@@ -1341,7 +1355,11 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     import common.deploy.dokploy_client as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: f"client@{host}")
-    monkeypatch.setattr(dv2, "_preview_down", fake_down)
+    monkeypatch.setattr(
+        dv2.SyncPipeline,
+        "run_preview_down",
+        classmethod(lambda cls, *a, **kw: fake_down(*a, **kw)),
+    )
     # deploy_v2 must NOT be called on the teardown path.
     monkeypatch.setattr(
         dv2,

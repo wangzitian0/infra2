@@ -54,8 +54,7 @@ from common.deploy.env_config import (  # noqa: E402
 
 # No preview alias is permanently exempt from leak detection (#1500).
 ALWAYS_KEEP_ALIASES: frozenset[str] = frozenset()
-# `branch-main` is an ephemeral post-merge preview gate slot (`verify_and_cut_app_preview_tag`,
-# #1554), never a long-lived branch preview. Any surviving `branch-main` compose past the
+# `branch-main` is an ephemeral branch preview slot (#1554), never a long-lived branch preview.
 # bounded run window is a missed `--down` leak even though `main` stays an active branch.
 EPHEMERAL_BRANCH_ALIASES: frozenset[str] = frozenset({"branch-main"})
 DEFAULT_EPHEMERAL_BRANCH_MAX_AGE_SECONDS = 7200

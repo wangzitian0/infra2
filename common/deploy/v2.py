@@ -221,11 +221,6 @@ class DeployV2Result:
     detail: dict
 
 
-_deploy_fixed = SyncPipeline.run_fixed
-_preview_up = SyncPipeline.run_preview_up
-_preview_down = SyncPipeline.run_preview_down
-
-
 def _should_route_via_runner(dep: DeployDeps | None) -> bool:
     return (
         dep is not None
@@ -349,7 +344,7 @@ def _deploy_platform_preview(
         from common.deploy.dokploy_client import get_dokploy
 
         effective_client = get_dokploy(host=f"cloud.{infra_domain()}")
-    result = _preview_up(
+    result = SyncPipeline.run_preview_up(
         spec.alias_kind,
         alias_value,
         code=iac_sha,
@@ -805,7 +800,7 @@ def _deploy_preview_v2(
         os.environ["VAULT_SECRETS_TEMPLATE"] = encoded
         injected_template = True
     try:
-        result = _preview_up(
+        result = SyncPipeline.run_preview_up(
             spec.alias_kind,
             alias_value,
             code=resolved.sha,
@@ -944,7 +939,7 @@ def _deploy_fixed_v2(
         injected_template = True
     try:
         promote_started = time.monotonic()
-        plan = _deploy_fixed(
+        plan = SyncPipeline.run_fixed(
             target.env,
             resolved.sha,
             options=AppRolloutOptions(
@@ -1369,7 +1364,7 @@ def _handle_teardown(args: argparse.Namespace) -> int:
 
     from common.deploy.dokploy_client import get_dokploy
 
-    down_result = _preview_down(
+    down_result = SyncPipeline.run_preview_down(
         spec.alias_kind,
         alias_value,
         domain=domain,

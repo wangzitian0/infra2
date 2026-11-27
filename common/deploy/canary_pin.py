@@ -103,12 +103,9 @@ def _parse_slot_mapping(raw: object) -> CanarySlot:
     )
 
 
-def load_canary_slots(repo_root: Path = REPO_ROOT) -> tuple[CanarySlot, ...]:
-    """Load and validate ``platform/30.todo/slots.yaml`` against ``compose.yaml``."""
-    slots_path = repo_root / CANARY_SLOTS_REL
-    if not slots_path.is_file():
-        raise CanaryPinError(f"missing {CANARY_SLOTS_REL}")
-    data = safe_load_text(yaml, slots_path.read_text(encoding="utf-8")) or {}
+def slots_from_yaml_text(text: str) -> tuple[CanarySlot, ...]:
+    """Parse and validate ``slots.yaml`` content without inspecting compose files."""
+    data = safe_load_text(yaml, text) or {}
     raw_slots = data.get("slots")
     if not isinstance(raw_slots, list) or not raw_slots:
         raise CanaryPinError(f"{CANARY_SLOTS_REL} must list at least one slot")
@@ -120,6 +117,24 @@ def load_canary_slots(repo_root: Path = REPO_ROOT) -> tuple[CanarySlot, ...]:
         )
     if len({s.slot for s in slots}) != len(slots):
         raise CanaryPinError(f"{CANARY_SLOTS_REL} contains duplicate slot ids")
+    return slots
+
+
+def max_canary_slot_version(repo_root: Path = REPO_ROOT) -> str | None:
+    """Return the highest ``version`` declared in ``slots.yaml``, or ``None`` if absent."""
+    slots_path = repo_root / CANARY_SLOTS_REL
+    if not slots_path.is_file():
+        return None
+    slots = load_canary_slots(repo_root)
+    return max((s.version for s in slots), key=_version_tuple)
+
+
+def load_canary_slots(repo_root: Path = REPO_ROOT) -> tuple[CanarySlot, ...]:
+    """Load and validate ``platform/30.todo/slots.yaml`` against ``compose.yaml``."""
+    slots_path = repo_root / CANARY_SLOTS_REL
+    if not slots_path.is_file():
+        raise CanaryPinError(f"missing {CANARY_SLOTS_REL}")
+    slots = slots_from_yaml_text(slots_path.read_text(encoding="utf-8"))
     compose_path = repo_root / CANARY_COMPOSE_REL
     if compose_path.is_file():
         compose_data = (

@@ -14,7 +14,6 @@ from common.deploy import app_contract
 from common.deploy.release_markers import newest_release_tag, production_marker
 from common.deploy.evidence import DeployRequest
 from common.deploy.stage_hooks import HookRunResult
-from common.deploy.git_refs import ResolvedRef
 from infra2_sdk.config import EnvironmentField, EnvironmentManifest
 from infra2_sdk.delivery import RuntimeHooksManifest
 
@@ -550,31 +549,24 @@ def test_preflight_refuses_an_infra2_stack_manifest_that_is_not_a_manifest(
         _preflight(root, _manifest(DATABASE))
 
 
-def test_query_serving_release_returns_authoritative_dokploy_and_health_state() -> None:
-    class _FakeDokploy:
-        def get_compose_env(self, compose_id: str) -> str:
-            assert compose_id == "lNn9gVS1Zyw79Jzw5dlbu"
-            return (
-                f"IMAGE_TAG=v0.1.45\nGIT_COMMIT_SHA=v0.1.45\nINFRA_IAC_REF={'b' * 40}\n"
-            )
+def test_first_diagnostic_line_skips_python_warning_noise() -> None:
+    from common.deploy.stage_hooks import _first_diagnostic_line
 
-    serving = app_contract.query_serving_release(
-        "finance_report/app",
-        "prod",
-        domain="zitian.party",
-        client=_FakeDokploy(),
-        http_get_fn=lambda _u: (200, '{"status": "ok", "version": "v0.1.45"}'),
-        resolve_image=lambda tag, **_k: ResolvedRef(
-            sha=RELEASE_SHA, image_ref=tag, form="tag"
-        ),
+    stderr = (
+        "/app/.venv/lib/python3.12/site-packages/pkg.py:12: DeprecationWarning: old api\n"
+        "  warnings.warn('old', DeprecationWarning)\n"
+        "PytestDeprecationWarning: pytest-asyncio config unset\n"
+        "AssertionError: staging smoke health returned 503\n"
+        "extra traceback context\n"
     )
-    assert serving.service == "finance_report/app"
-    assert serving.environment == "production"
-    assert serving.image_tag == "v0.1.45"
-    assert serving.source_sha == RELEASE_SHA
-    assert serving.iac_ref == "b" * 40
-    assert serving.public_version == "v0.1.45"
-    assert serving.healthy is True
+    assert (
+        _first_diagnostic_line(stderr, "", "fallback")
+        == "AssertionError: staging smoke health returned 503"
+    )
+    assert (
+        _first_diagnostic_line("UserWarning: heads up\n", "", "fallback")
+        == "UserWarning: heads up"
+    )
 
 
 def test_fetch_and_execute_app_hook_slot(tmp_path: Path) -> None:

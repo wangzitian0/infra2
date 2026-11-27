@@ -10,6 +10,9 @@ import json
 import os
 import shlex
 import subprocess
+import sys
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from common.deploy.compose_compile import COMPILED_TEMPLATE_PATH, VAULT_TEMPLATE_LABEL
@@ -19,6 +22,9 @@ from common.security.vault_audit import (
     VaultService,
     _resolve_env_suffix,
     _vault_addr_from_env,
+    audit_from_observations,
+    inventory_ids_not_in_production,
+    load_inventory,
     parse_env,
 )
 
@@ -265,3 +271,89 @@ def write_report(report: dict[str, Any], *, as_json: bool = False) -> str:
             f"{result['service_id']}::{result['check_id']} - {result['summary']}"
         )
     return "\n".join(lines)
+
+
+REPORT_ENV = "VAULT_SELF_REFRESH_AUDIT_REPORT"
+CAN_FAIL_BUT_REPORT_INFO = ("deployed-template",)
+
+
+def run_check(
+    env: str = "production",
+    *,
+    collect_fn: Callable[[list[VaultService], str], dict[str, Any]] | None = None,
+    audit_fn: Callable[[list[VaultService], dict[str, Any], str], dict[str, Any]]
+    | None = None,
+    excluded_fn: Callable[[], set[str]] = inventory_ids_not_in_production,
+) -> dict[str, Any]:
+    """Collect live observations and classify them (read-only)."""
+    services = load_inventory()
+    if env == "production":
+        excluded = excluded_fn()
+        services = [s for s in services if s.id not in excluded]
+    observations = (
+        collect_fn(services, env)
+        if collect_fn is not None
+        else collect_live_observations(services, env=env)
+    )
+    return (
+        audit_fn(services, observations, env)
+        if audit_fn is not None
+        else audit_from_observations(services, observations, env=env)
+    )
+
+
+def confirmed_finding_pairs(report: dict[str, Any]) -> list[tuple[str, str]]:
+    """``(identity key, display line)`` per confirmed ``fail`` result (#962)."""
+    return [
+        (
+            f"{r['service_id']}::{r['check_id']}",
+            f"- {r['severity']} {r['service_id']}::{r['check_id']} - {r['summary']}",
+        )
+        for r in report["results"]
+        if r["status"] == "fail"
+    ]
+
+
+def unevaluated_keys(report: dict[str, Any]) -> list[str]:
+    """Key prefixes of checks that reported ``info`` instead of pass/fail (#962)."""
+    return [
+        f"{r['service_id']}::{r['check_id']}"
+        for r in report["results"]
+        if r["status"] == "info" and r["check_id"] in CAN_FAIL_BUT_REPORT_INFO
+    ]
+
+
+def load_report(env: Mapping[str, str]) -> dict[str, Any] | None:
+    """Return the JSON report written by ``main_check()``, or None if missing/invalid."""
+    path = (env.get(REPORT_ENV) or "").strip()
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def read_unevaluated(env: Mapping[str, str]) -> list[str]:
+    """Return unevaluated prefixes from the last report, or ``[""]`` when unreadable."""
+    path = (env.get(REPORT_ENV) or "").strip()
+    try:
+        report = json.loads(Path(path).read_text(encoding="utf-8"))
+        if report["status"] == "pass":
+            return unevaluated_keys(report)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return [""]
+
+
+def main_check(*, run_fn: Callable[[str], dict[str, Any]] | None = None) -> int:
+    """Run production Vault self-refresh audit and write optional report JSON."""
+    report = run_fn("production") if run_fn is not None else run_check("production")
+    print(write_report(report))
+    if path := os.environ.get(REPORT_ENV, "").strip():
+        try:
+            Path(path).write_text(json.dumps(report), encoding="utf-8")
+        except OSError as exc:
+            print(f"could not record the report: {exc}", file=sys.stderr)
+    return 0 if report["status"] == "pass" else 1

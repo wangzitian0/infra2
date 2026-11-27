@@ -30,7 +30,7 @@
 | `dokploy_client.py` | Dokploy REST API client | `DokployClient`, `get_dokploy()`, `ensure_project()` |
 | `host_hygiene_schedule.py` | Dokploy host-hygiene schedule provisioner (entry: `tools.host_hygiene_schedule`, scheduled automation) | `build_hygiene_script()`, `ensure_host_hygiene_schedule()`, `main()` |
 | `facet_reconcile.py` | Daily compose_id, config-hash and DNS drift reconcile (entry: `tools.facet_reconcile`, scheduled automation) | `Section`, `run_all()`, `confirmed_finding_pairs()`, `main()` |
-| `app_contract.py` | App manifest preflight, Vault template rendering, SDK hooks, and release evidence | `verify_app_manifests()`, `render_release_template()`, `execute_app_hook_slot()`, `query_serving_release()` |
+| `app_contract.py` | App manifest preflight, Vault template rendering, and SDK hooks | `verify_app_manifests()`, `render_release_template()`, `execute_app_hook_slot()` |
 | `release_markers.py` | Production release marker CRUD and lag guard CLI | `newest_release_tag()`, `production_marker()`, `marker_status()` |
 
 ## Usage Examples

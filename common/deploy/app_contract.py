@@ -26,15 +26,11 @@ from common.core._sdk_wire import field_rendered, parse_env_manifest_dict
 from common.deploy.evidence import (
     PRODUCTION_DEPLOY_BUDGET_SECONDS,
     PRODUCTION_REQUEST_MAX_AGE_SECONDS,
-    VERSION_KEYS,
     DeployOperation,
     DeployRequest,
     DeployType,
-    default_http_get,
     parse_sender_deadline,
     production_request_accept_until,
-    validate_evidence_urls,
-    verify_production_evidence,
 )
 from common.deploy.stage_hooks import (
     FORBIDDEN_HOOK_ENV_NAMES,
@@ -49,7 +45,7 @@ from infra2_sdk.delivery import (
     RuntimeHooksManifest,
     resolve_check_cells,
 )
-from common.deploy.git_refs import ResolvedRef, next_patch_tag, resolve_image_ref
+from common.deploy.git_refs import next_patch_tag
 from common.security.manifest_merge import merge_manifests
 from infra2_sdk.config import EnvironmentField, EnvironmentManifest
 from common.security.backends import render_agent_policy, render_agent_template
@@ -58,7 +54,7 @@ from common.security.secrets_render import escape_composed_url_secrets
 
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.fetch_app_manifests import http_get
-from common.core.registry import ServiceMeta, domain_for_service, service_attrs
+from common.core.registry import ServiceMeta, service_attrs
 from common.deploy.release_markers import PRODUCTION_MARKER_PREFIX
 from common.security.registry import Service
 
@@ -854,146 +850,6 @@ def git_url(repository: str) -> str:
     return f"https://github.com/{repository}.git"
 
 
-_git_url = git_url
-
-
-@dataclass(frozen=True)
-class ServingRelease:
-    """Authoritative deployed/serving state for a fixed app environment (#588)."""
-
-    service: str
-    environment: str
-    compose_id: str
-    image_tag: str
-    source_sha: str
-    iac_ref: str
-    public_url: str
-    public_version: str
-    healthy: bool
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "service": self.service,
-            "environment": self.environment,
-            "compose_id": self.compose_id,
-            "image_tag": self.image_tag,
-            "source_sha": self.source_sha,
-            "iac_ref": self.iac_ref,
-            "public_url": self.public_url,
-            "public_version": self.public_version,
-            "healthy": self.healthy,
-        }
-
-
-def query_serving_release(
-    service: str,
-    environment: str,
-    *,
-    domain: str,
-    client: object | None = None,
-    http_get_fn: Callable[[str], tuple[int, str]] | None = None,
-    resolve_image: Callable[..., ResolvedRef] = resolve_image_ref,
-) -> ServingRelease:
-    """Query infra2's authoritative serving state for ``(service, environment)`` (#588)."""
-    from common.deploy.env_config import app_compose_env_config
-    from common.deploy.env_util import _parse_env_text
-
-    expected_source = APP_SOURCES.get(service)
-    if expected_source is None:
-        raise ValueError(
-            f"service {service!r} is not an app service with serving state"
-        )
-    norm_env = "prod" if environment in ("prod", "production") else environment
-    if norm_env not in ("staging", "prod"):
-        raise ValueError(
-            f"serving state query supports fixed environments ('staging' or 'prod'), got {environment!r}"
-        )
-    effective_domain = domain_for_service(service) or domain
-    if not effective_domain or any(c.isspace() for c in effective_domain):
-        raise ValueError("domain must be non-empty and contain no whitespace")
-    cfg = app_compose_env_config(service, norm_env)
-    compose_id = cfg.compose_id or ""
-    public_url = f"{cfg.app_url(domain=effective_domain).rstrip('/')}/api/health"
-
-    env_map: dict[str, str] = {}
-    if client is not None and compose_id and hasattr(client, "get_compose_env"):
-        env_text = client.get_compose_env(compose_id) or ""
-        env_map = _parse_env_text(env_text)
-
-    getter = http_get_fn or default_http_get()
-    public_version = ""
-    healthy = False
-    try:
-        status_code, body = getter(public_url)
-        if status_code == 200 and body:
-            parsed = json.loads(body)
-            if isinstance(parsed, Mapping):
-                healthy = str(parsed.get("status") or "ok").lower() in (
-                    "ok",
-                    "healthy",
-                )
-                for key in VERSION_KEYS:
-                    val = parsed.get(key)
-                    if isinstance(val, str) and val.strip():
-                        public_version = val.strip()
-                        break
-    except (OSError, ValueError):
-        healthy = False
-
-    image_tag = (
-        env_map.get("IMAGE_TAG")
-        or env_map.get("INFRA_SERVICE_VERSION")
-        or public_version
-    )
-    if not image_tag:
-        raise RuntimeError(
-            f"cannot determine serving release for {service} ({norm_env}): "
-            f"neither Dokploy compose {compose_id!r} nor {public_url} reported a version"
-        )
-    iac_ref = env_map.get("INFRA_IAC_REF", "")
-    source_sha = ""
-    raw_sha = env_map.get("GIT_COMMIT_SHA", "")
-    if re.fullmatch(r"[0-9a-f]{40}", raw_sha):
-        source_sha = raw_sha
-    else:
-        try:
-            resolved = resolve_image(image_tag, repo=_git_url(expected_source))
-            source_sha = resolved.sha.lower()
-        except Exception:  # noqa: BLE001
-            source_sha = raw_sha
-    return ServingRelease(
-        service=service,
-        environment="production" if norm_env == "prod" else "staging",
-        compose_id=compose_id,
-        image_tag=image_tag,
-        source_sha=source_sha,
-        iac_ref=iac_ref,
-        public_url=public_url,
-        public_version=public_version or image_tag,
-        healthy=healthy,
-    )
-
-
-def validate_app_release_evidence(
-    request: DeployRequest,
-    *,
-    verify_prod: bool = False,
-    production_evidence_verifier: Callable[[DeployRequest], None] | None = None,
-) -> dict[str, int]:
-    """Validate a ``DeployRequest`` evidence envelope against its registered App source."""
-    expected_source = APP_SOURCES.get(request.service)
-    if expected_source is None:
-        raise ValueError(f"no source repository registered for {request.service!r}")
-    validate_evidence_urls(request, expected_repository=expected_source)
-    if verify_prod and request.deploy_type == DeployType.PRODUCTION:
-        verifier = production_evidence_verifier or verify_production_evidence
-        verifier(request)
-    return {
-        "max_age_seconds": PRODUCTION_REQUEST_MAX_AGE_SECONDS,
-        "deploy_budget_seconds": PRODUCTION_DEPLOY_BUDGET_SECONDS,
-    }
-
-
 def next_app_release_tag(
     existing_tags: Sequence[str],
     *,
@@ -1019,7 +875,6 @@ __all__ = [
     "PRODUCTION_DEPLOY_BUDGET_SECONDS",
     "PRODUCTION_REQUEST_MAX_AGE_SECONDS",
     "RuntimeHooksManifest",
-    "ServingRelease",
     "_contract_gaps",
     "_gap_remedy",
     "_git_contract_reader",
@@ -1036,7 +891,6 @@ __all__ = [
     "parse_sender_deadline",
     "policy_paths",
     "production_request_accept_until",
-    "query_serving_release",
     "render_release_template",
     "service_for_id",
     "slot_checkout_lineage",
@@ -1044,6 +898,5 @@ __all__ = [
     "service_vault_policy",
     "set_template_env",
     "unmet",
-    "validate_app_release_evidence",
     "verify_app_manifests",
 ]

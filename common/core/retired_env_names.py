@@ -36,8 +36,7 @@ RETIRED_NAMES: dict[str, str] = {
 }
 
 # The guard governs what is deployed: service stacks, deploy code, and the two tables that
-# map service names to containers. Analysis tools that only *detect* old names in other
-# repositories (for example `common/core/sdk_usage_census.py`) are not configuration.
+# map service names to containers. Analysis tools outside those trees are not configuration.
 SCAN_ROOTS = (
     "platform",
     "finance_report",

@@ -1337,7 +1337,7 @@ def test_hookless_production_promotion_writes_post_record_and_card_passes(
     ]
     post = [r for r in loaded if r.phase == "post"]
     assert len(post) == 1 and post[0].verdict == "pass"
-    assert post[0].checks[0].name == "hooks" and post[0].checks[0].ok is True
+    assert post[0].checks[0].name == "post_plan" and post[0].checks[0].ok is True
     assert render_stage_card(loaded)["header"]["title"]["content"].endswith("Passed")
 
 

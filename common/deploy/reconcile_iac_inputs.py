@@ -37,6 +37,10 @@ from typing import Any, Callable, Sequence
 import httpx
 import yaml
 
+from common.core._sdk_wire import (
+    sdk_requirement_from_lock_text,
+    sdk_version_from_lock_text,
+)
 from common.core.constants import (
     APP_REPO_ID_TO_SERVICE,
     APP_SDK_LOCKS,
@@ -45,8 +49,6 @@ from common.core.constants import (
     SERVICE_TO_SUBMODULE_PATH,
     load_app_sdk_locks,
 )
-from common.core.sdk_usage_census import sdk_requirement
-from common.core.sdk_usage_census import sdk_version as lock_sdk_version
 from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     ACCEPTED_HOOK_SCHEMA_VERSIONS,
@@ -64,11 +66,9 @@ from common.deploy.app_contract import (
     git_url,
     load_hooks_manifest,
     next_app_release_tag,
-    query_serving_release,
-    validate_app_release_evidence,
 )
 from common.deploy.app_manifest_sync import write_copies as write_app_manifest_copies
-from common.deploy.dependencies import explain_fanout
+from common.deploy.dependencies import explain_fanout, matches_service_dependencies
 from common.deploy.deploy_guard_audit import app_hook_pair
 from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec, validate_iac_ref_form
@@ -76,23 +76,23 @@ from common.deploy.preflight import (
     assert_app_version_ref_matches_train,
     assert_app_version_ref_on_main,
 )
-from common.deploy.env_config import (
-    app_compose_env_config,
-    preview_alias,
-    preview_service_config,
-)
+from common.deploy.env_config import app_compose_env_config
 from common.deploy.github_api import API as GITHUB_API, github_headers
 from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
 from common.deploy.canary_pin import (
     APP_SDK_RANGE,
     CanaryImageMissing,
+    _version_tuple,
+    canary_image_from_compose_text,
     canary_sdk_unit,
     canary_sdk_version,
     in_app_sdk_range,
+    max_canary_slot_version,
     resolve_canary_digest,
+    slots_from_yaml_text,
     sync_canary_pin_files,
 )
-from common.deploy.stage_record_reader import verified_sdk_versions
+from common.deploy.stage_record_reader import read_record, verified_sdk_versions
 from common.deploy.yaml_text import safe_load_text
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
@@ -101,7 +101,6 @@ from common.deploy.release_markers import (
     version_key,
 )
 from common.deploy.promotion_guard import require_upstream_post, required_staging_gates
-from common.deploy.evidence import DeployRequest
 from common.observability.issue_trail import CheckVerdict
 from common.deploy.stage_hooks import (  # noqa: F401
     STAGE_HOOK_PLANS,
@@ -302,6 +301,36 @@ def production_before(
     return max(older, key=version_key, default=None)
 
 
+def _staging_before_tag(tags: Sequence[str]) -> str:
+    """Return the newest prior tag with a passing staging post record when GitHub credentials exist."""
+    if not tags:
+        return ""
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if not (repo and token):
+        return tags[0]
+    staging_env = stage_hook_plan("staging").stage_id
+    for tag in tags[:10]:
+        try:
+            reading = read_record(
+                repo,
+                token,
+                env=staging_env,
+                subject=f"tag:{tag}",
+                phase="post",
+                event="push",
+            )
+        except Exception as exc:  # noqa: BLE001 - fall back to direct predecessor on API error
+            print(
+                f"::warning::staging_before lookup failed for {tag}: {exc}; falling back to {tags[0]}",
+                file=sys.stderr,
+            )
+            return tags[0]
+        if reading.ok:
+            return tag
+    return tags[0]
+
+
 def plan_base(
     after: str,
     before: str,
@@ -314,8 +343,8 @@ def plan_base(
 
     Production is cumulative from its own marker (``production_before``): staging-only
     changes of vN+1 and vN+2 are not skipped when vN+3 is promoted. An explicit ``before``
-    must equal that marker. Staging starts from ``before``, or from the previous release
-    tag when ``previous_tag`` is true.
+    must equal that marker. Staging starts from ``before``, or from the newest prior tag
+    with a passing staging post record (else direct predecessor) when ``previous_tag`` is true.
     """
     if promote_prod:
         marker = production_before(after, repo_root)
@@ -349,7 +378,7 @@ def plan_base(
         text=True,
     )
     tags = [t for t in listed.stdout.split() if RELEASE_TAG_RE.fullmatch(t)]
-    return tags[0] if listed.returncode == 0 and tags else ""
+    return _staging_before_tag(tags) if listed.returncode == 0 and tags else ""
 
 
 def releases_between(marker: str, after: str, repo_root: Path) -> list[str]:
@@ -665,25 +694,6 @@ def changed_app_services_from_repos_yaml(
     return selected
 
 
-def advance_app_release_train(
-    service: str,
-    *,
-    repo_url: str,
-    existing_tags: Sequence[str],
-    candidate_ref: str = "main",
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-) -> dict[str, str]:
-    """Compute the next ``vX.Y.(Z+1)`` App release tag and resolve ``candidate_ref``."""
-    resolved = resolve_image_ref(candidate_ref, repo=repo_url, runner=runner)
-    next_tag = next_patch_tag(existing_tags)
-    return {
-        "service": service,
-        "candidate_sha": resolved.sha,
-        "image_ref": resolved.image_ref,
-        "next_tag": next_app_release_tag(existing_tags, initial=next_tag),
-    }
-
-
 def update_repos_yaml_release_tags(
     repo_root: Path,
     updates: Mapping[str, str],
@@ -756,195 +766,6 @@ def _query_remote_app_refs(
     return main_sha, tag_shas
 
 
-def _compute_preview_touched_files(
-    repo_slug: str,
-    prev_sha: str,
-    main_sha: str,
-    *,
-    repo_root: Path = REPO_ROOT,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-) -> list[str]:
-    """Return changed repo-relative paths between ``prev_sha`` and ``main_sha``."""
-    if (
-        not prev_sha
-        or is_zero_sha(prev_sha)
-        or not main_sha
-        or prev_sha == main_sha
-        or not repo_slug
-    ):
-        return []
-    res = runner(
-        [
-            "gh",
-            "api",
-            f"repos/{repo_slug}/compare/{prev_sha}...{main_sha}",
-            "--jq",
-            "(.files // [])[].filename",
-        ],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if res.returncode != 0:
-        detail = (res.stderr or res.stdout or "").strip()
-        print(
-            f"::warning::compare {repo_slug} {prev_sha[:7]}...{main_sha[:7]} failed ({detail}); skipping INFRA2_TOUCHED_FILES",
-            file=sys.stderr,
-        )
-        return []
-    files = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
-    if len(files) >= 300:
-        print(
-            f"::warning::compare {repo_slug} {prev_sha[:7]}...{main_sha[:7]} returned {len(files)} files (GitHub compare API 300-file cap may truncate INFRA2_TOUCHED_FILES)",
-            file=sys.stderr,
-        )
-    return files
-
-
-def verify_and_cut_app_preview_tag(
-    service: str,
-    *,
-    repo_slug: str,
-    repo_url: str,
-    main_sha: str,
-    next_tag: str,
-    prev_sha: str = "",
-    repo_root: Path = REPO_ROOT,
-    domain: str = "zitian.party",
-    timeout: int = 1800,
-    python_executable: str = sys.executable or "python",
-    manifest_fetcher: Callable[[str], bytes] | None = None,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-) -> str:
-    """Deploy ephemeral preview/branch (main), run preview_gate, cut next_tag, and always tear down (#1554)."""
-    assert_app_version_ref_on_main(
-        main_sha,
-        "staging",
-        service=service,
-        repo=repo_url,
-        repo_root=repo_root,
-    )
-    preview_cfg = preview_service_config(service)
-    effective_domain = domain_for_service(service) or domain
-    alias_cfg = preview_alias("branch", "main", slug_prefix=preview_cfg.slug_prefix)
-    preview_url = alias_cfg.app_url(
-        domain=effective_domain, base_subdomain=preview_cfg.base_subdomain
-    )
-    try:
-        iac_ref = newest_release_tag(repo_root=repo_root, runner=runner)
-    except ValueError:
-        iac_ref = "main"
-
-    up_argv = [
-        python_executable,
-        "-m",
-        "tools.deploy_v2",
-        "--service",
-        service,
-        "--type",
-        "preview/branch",
-        "--version-ref",
-        "main",
-        "--iac-ref",
-        iac_ref,
-        "--domain",
-        effective_domain,
-        "--timeout",
-        str(timeout),
-    ]
-    down_argv = [
-        python_executable,
-        "-m",
-        "tools.deploy_v2",
-        "--service",
-        service,
-        "--type",
-        "preview/branch",
-        "--version-ref",
-        "main",
-        "--iac-ref",
-        iac_ref,
-        "--domain",
-        effective_domain,
-        "--down",
-    ]
-    try:
-        up_res = runner(up_argv, cwd=repo_root, capture_output=True, text=True)
-        if up_res.returncode != 0:
-            detail = (up_res.stderr or up_res.stdout or "").strip()
-            raise RuntimeError(
-                f"preview/branch deploy failed for {service}@{main_sha[:7]}: {detail}"
-            )
-        manifest = fetch_hooks_manifest(
-            service,
-            main_sha,
-            manifest_fetcher=manifest_fetcher,
-        )
-        hook_cwd, tmp_checkout = resolve_app_hook_cwd(
-            service,
-            main_sha,
-            repo_root=repo_root,
-            runner=runner,
-        )
-        try:
-            touched_files = _compute_preview_touched_files(
-                repo_slug,
-                prev_sha,
-                main_sha,
-                repo_root=repo_root,
-                runner=runner,
-            )
-            ambient_env = dict(os.environ)
-            if touched_files:
-                ambient_env["INFRA2_TOUCHED_FILES"] = " ".join(touched_files)
-            else:
-                ambient_env.pop("INFRA2_TOUCHED_FILES", None)
-            hook_res = execute_app_hook_slot(
-                manifest,
-                stage_hook_plan("preview").post_slot,
-                app_url=preview_url,
-                environment="preview",
-                version_ref=main_sha[:7],
-                cwd=hook_cwd,
-                ambient_env=ambient_env,
-                runner=runner,
-            )
-        finally:
-            if tmp_checkout is not None:
-                tmp_checkout.cleanup()
-        if hook_res.status != "pass":
-            raise RuntimeError(
-                f"preview_gate failed for {service}@{main_sha[:7]}: {hook_res.summary}"
-            )
-        runner(
-            [
-                "gh",
-                "api",
-                f"repos/{repo_slug}/git/refs",
-                "-f",
-                f"ref=refs/tags/{next_tag}",
-                "-f",
-                f"sha={main_sha}",
-            ],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    finally:
-        down_res = runner(down_argv, cwd=repo_root, capture_output=True, text=True)
-        if down_res.returncode != 0:
-            detail = (down_res.stderr or down_res.stdout or "").strip()
-            msg = (
-                f"preview/branch teardown failed for {service}@{main_sha[:7]}: {detail}"
-            )
-            if sys.exc_info()[1] is None:
-                raise RuntimeError(msg)
-            print(f"WARN: {msg}", file=sys.stderr)
-    return preview_url
-
-
 def _extract_sdk_version_from_requirement(requirement: str) -> str:
     """Return ``X.Y.Z`` from a direct-wheel or PEP-508 requirement string."""
     match = re.search(
@@ -960,7 +781,7 @@ def locked_sdk_version_for_app_ref(
     repo_root: Path = REPO_ROOT,
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> str:
-    """Fetch ``<app_repo>@<ref>:<sdk_lock>`` and extract its SDK version via ``tools.sdk_requirement`` (#1635)."""
+    """Fetch ``<app_repo>@<ref>:<sdk_lock>`` and extract its SDK version via ``common.core._sdk_wire`` (#1635)."""
     run = runner or subprocess.run
     repo_slug = APP_SOURCES.get(service)
     if not repo_slug:
@@ -986,10 +807,9 @@ def locked_sdk_version_for_app_ref(
         raise ValueError(
             f"failed to fetch {repo_slug}:{lock_rel}@{ref} ({detail or f'exit {res.returncode}'})"
         )
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        lock_copy = Path(tmp_dir) / "pinned.lock"
-        lock_copy.write_text(res.stdout, encoding="utf-8")
-        req = sdk_requirement(lock_copy)
+    req = sdk_requirement_from_lock_text(
+        res.stdout, label=f"{repo_slug}:{lock_rel}@{ref}"
+    )
     sdk_ver = _extract_sdk_version_from_requirement(req)
     if not sdk_ver:
         raise ValueError(f"could not parse infra2-sdk version from {req!r}")
@@ -1015,19 +835,29 @@ def assert_app_sdk_version_verified(
         repo_root=repo_root,
         runner=runner,
     )
-    verified = (
-        set(verified_versions)
-        if verified_versions is not None
-        else verified_sdk_versions(
-            repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
-        )
-    )
     if not in_app_sdk_range(sdk_ver):
         low, high = APP_SDK_RANGE
         raise UnverifiedSdkError(
             f"{service}@{app_tag} pins infra2-sdk {sdk_ver}, outside the accepted app "
             f"range [{low}, {high}) of common/deploy/canary_pin.py"
         )
+    if verified_versions is None:
+        max_canary = max_canary_slot_version(repo_root)
+        if max_canary is not None and _version_tuple(sdk_ver) > _version_tuple(
+            max_canary
+        ):
+            raise UnverifiedSdkError(
+                f"{service}@{app_tag} pins infra2-sdk {sdk_ver}, newer than active "
+                f"Canary slots in platform/30.todo/slots.yaml (max={max_canary})"
+            )
+    verified = (
+        set(verified_versions)
+        if verified_versions is not None
+        else verified_sdk_versions(
+            repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2"),
+            wanted={sdk_ver},
+        )
+    )
     if sdk_ver not in verified:
         raise UnverifiedSdkError(
             f"{service}@{app_tag} pins infra2-sdk {sdk_ver}, which has not passed "
@@ -1045,8 +875,8 @@ def assert_app_sdk_versions_verified(
 ) -> dict[tuple[str, str], str]:
     """Check the locked SDK of each ``(service, app_tag)`` with one scan of the stage records.
 
-    The scan stops when each locked SDK version is verified. An unverified version scans the
-    full window, and ``assert_app_sdk_version_verified`` rejects its App tag.
+    The scan stops when each locked SDK version is verified. An unverified version fails fast
+    against ``max_canary_slot_version`` when newer than active Canary slots.
     """
     unique = list(dict.fromkeys(pins))
     if not unique:
@@ -1057,6 +887,16 @@ def assert_app_sdk_versions_verified(
         )
         for svc, tag in unique
     }
+    max_canary = max_canary_slot_version(repo_root)
+    if max_canary is not None:
+        for (svc, tag), sdk_ver in locked.items():
+            if in_app_sdk_range(sdk_ver) and _version_tuple(sdk_ver) > _version_tuple(
+                max_canary
+            ):
+                raise UnverifiedSdkError(
+                    f"{svc}@{tag} pins infra2-sdk {sdk_ver}, newer than active "
+                    f"Canary slots in platform/30.todo/slots.yaml (max={max_canary})"
+                )
     verified = verified_sdk_versions(
         repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2"),
         wanted=set(locked.values()),
@@ -1240,7 +1080,6 @@ def sync_app_releases(
     services: Sequence[str] = (),
     apply_repos_yaml: bool = False,
     sync_gitlinks: bool = False,
-    cut_missing_app_tag: bool = False,
     create_pr: bool = False,
     pr_branch: str = "chore/sync-app-releases",
     dry_run: bool = False,
@@ -1277,25 +1116,6 @@ def sync_app_releases(
         )
         target_tag = latest_tag
         target_sha = latest_tag_sha
-        preview_verified = False
-        preview_url = ""
-        if cut_missing_app_tag and main_ahead and computed_next_tag:
-            if not dry_run:
-                preview_url = verify_and_cut_app_preview_tag(
-                    service,
-                    repo_slug=repo_slug,
-                    repo_url=repo_url,
-                    main_sha=main_sha,
-                    next_tag=computed_next_tag,
-                    prev_sha=latest_tag_sha,
-                    repo_root=repo_root,
-                    domain=domain,
-                    manifest_fetcher=manifest_fetcher,
-                    runner=runner,
-                )
-                preview_verified = True
-            target_tag = computed_next_tag
-            target_sha = main_sha
 
         drifted = bool(target_tag and target_tag != pinned_tag)
         sdk_held_reason = ""
@@ -1336,8 +1156,6 @@ def sync_app_releases(
             "next_app_tag": computed_next_tag,
             "target_tag": target_tag,
             "target_sha": target_sha,
-            "preview_verified": preview_verified,
-            "preview_url": preview_url,
             "sdk_held_reason": sdk_held_reason,
             "needs_update": drifted,
         }
@@ -2474,18 +2292,7 @@ def _latest_canary_release_tag(
                 "platform/todo" in explain_fanout(tag_files).selected
                 or MANIFEST_PATH in tag_files
                 or any(path in SOURCE_HASH_FORMULA_PATHS for path in tag_files)
-                or any(
-                    f == "uv.lock"
-                    or f.startswith(
-                        (
-                            "platform/",
-                            "common/deploy/",
-                            "common/security/",
-                            "common/observability/",
-                        )
-                    )
-                    for f in tag_files
-                )
+                or matches_service_dependencies("platform/todo", tag_files)
             ):
                 return tag
     except (subprocess.CalledProcessError, OSError, ValueError):
@@ -3180,13 +2987,17 @@ def operation_checks(results: Sequence[dict], *, dry_run: bool) -> list[CheckVer
 
 
 def post_checks(hook_results: Sequence[dict]) -> list[CheckVerdict]:
-    """One check for each hook slot that ran. No hook ran: one green check that says so.
+    """One check for each hook slot that ran. No hook ran: one green post_plan check.
 
     The detail starts with ``[<version_ref>]`` when the hook has a version: the guard of a
     production promotion reads it back (``staging_gates_verdict``, #1563).
     """
     if not hook_results:
-        return [CheckVerdict("hooks", True, "no service with a hook slot was applied")]
+        return [
+            CheckVerdict(
+                "post_plan", True, "0 post hook slots scheduled for applied services"
+            )
+        ]
     return [
         CheckVerdict(
             f"{item['service']}:{item['slot']}",
@@ -3625,10 +3436,7 @@ def locked_sdk_version_at_ref(ref: str, repo_root: Path) -> str:
     )
     if res.returncode != 0:
         raise ValueError(f"cannot read {ref}:uv.lock: {res.stderr.strip()}")
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        lock_copy = Path(tmp_dir) / "uv.lock"
-        lock_copy.write_text(res.stdout, encoding="utf-8")
-        return lock_sdk_version(lock_copy)
+    return sdk_version_from_lock_text(res.stdout, label=f"{ref}:uv.lock")
 
 
 def _read_runner_health(runner_url: str) -> dict[str, object]:
@@ -3708,26 +3516,36 @@ def assert_runner_sdk_covers_ref(
 
 
 def _expected_canary_sdk_at_ref(after: str, repo_root: Path) -> str:
-    """Resolve the Canary image SDK version pinned at ``after``."""
-    try:
-        shown = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repo_root),
-                "show",
-                f"{after}:platform/30.todo/compose.yaml",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if shown.returncode == 0:
-            from common.deploy.canary_pin import canary_image_from_compose_text
-
-            return canary_image_from_compose_text(shown.stdout)[1]
-    except Exception:  # noqa: BLE001
-        pass
+    """Resolve the primary Canary SDK version pinned at ``after``."""
+    shown_slots = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "show",
+            f"{after}:platform/30.todo/slots.yaml",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown_slots.returncode == 0:
+        slots = slots_from_yaml_text(shown_slots.stdout)
+        return next(s for s in slots if s.primary).version
+    shown_compose = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "show",
+            f"{after}:platform/30.todo/compose.yaml",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown_compose.returncode == 0:
+        return canary_image_from_compose_text(shown_compose.stdout)[1]
     return canary_sdk_version(repo_root)
 
 
@@ -4336,32 +4154,6 @@ def main(argv: list[str] | None = None) -> int:
         help="App URL passed to --run-hook-slot",
     )
     parser.add_argument(
-        "--query-serving-service",
-        default="",
-        help="optional App service key to query serving release state for",
-    )
-    parser.add_argument(
-        "--validate-evidence-json",
-        default="",
-        help="optional DeployRequest JSON string to validate evidence URLs for",
-    )
-    parser.add_argument(
-        "--advance-train-service",
-        default="",
-        help="optional App service key to compute next release train tag for",
-    )
-    parser.add_argument(
-        "--advance-train-repo",
-        default="",
-        help="Git repo URL for --advance-train-service",
-    )
-    parser.add_argument(
-        "--advance-train-tag",
-        action="append",
-        default=[],
-        help="existing release tag for --advance-train-service (repeatable)",
-    )
-    parser.add_argument(
         "--post-deploy-hook-slot",
         default="",
         help=(
@@ -4438,11 +4230,6 @@ def main(argv: list[str] | None = None) -> int:
         "--sync-gitlinks",
         action="store_true",
         help="update submodule gitlinks alongside harness/repos.yaml during --sync-app-releases",
-    )
-    parser.add_argument(
-        "--cut-missing-app-tag",
-        action="store_true",
-        help="compute next patch tag when upstream App main is ahead of its latest v*.*.* tag",
     )
     parser.add_argument(
         "--create-pr",
@@ -4543,7 +4330,6 @@ def main(argv: list[str] | None = None) -> int:
             services=args.sync_service,
             apply_repos_yaml=args.apply_repos_yaml,
             sync_gitlinks=args.sync_gitlinks,
-            cut_missing_app_tag=args.cut_missing_app_tag,
             create_pr=args.create_pr,
             pr_branch=args.pr_branch,
             dry_run=args.dry_run,
@@ -4553,30 +4339,6 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.output_json).write_text(
                 json.dumps(sync_res, indent=2), encoding="utf-8"
             )
-        return 0
-    if args.advance_train_service:
-        train = advance_app_release_train(
-            args.advance_train_service,
-            repo_url=args.advance_train_repo,
-            existing_tags=args.advance_train_tag,
-            candidate_ref=args.after or "main",
-        )
-        print(json.dumps(train, sort_keys=True))
-        return 0
-    if args.validate_evidence_json:
-        request = DeployRequest.from_dict(json.loads(args.validate_evidence_json))
-        evidence_result = validate_app_release_evidence(
-            request, verify_prod=promote_prod
-        )
-        print(json.dumps(evidence_result, sort_keys=True))
-        return 0
-    if args.query_serving_service:
-        serving = query_serving_release(
-            args.query_serving_service,
-            target_env,
-            domain=args.domain,
-        )
-        print(json.dumps(serving.to_dict(), sort_keys=True))
         return 0
     if args.run_hook_slot:
         if args.run_hook_slot not in HOOK_SLOTS:

@@ -146,7 +146,6 @@
   "common/tests/test_sdk_contract_adoption.py": 11.77,
   "common/tests/test_sdk_free_import_surface.py": 0.76,
   "common/tests/test_sdk_requirement.py": 8.18,
-  "common/tests/test_sdk_usage_census.py": 35.75,
   "common/tests/test_secret_supply_restart.py": 0.03,
   "common/tests/test_secrets_prune.py": 0.04,
   "common/tests/test_secrets_reconcile.py": 0.33,
