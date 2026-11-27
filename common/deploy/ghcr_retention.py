@@ -175,6 +175,7 @@ class Ghcr:
             max_attempts=3,
             retry_statuses=(500, 502, 503, 504),
             backoff_base=0.25,
+            sleep=self.sleep,
             **kwargs,
         )
 

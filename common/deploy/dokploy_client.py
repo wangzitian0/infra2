@@ -11,14 +11,11 @@ import os
 import time
 import httpx
 from dotenv import load_dotenv
-from infra2_sdk.service import (
-    HttpClientSettings,
-    create_http_client,
-    request_with_retry,
-)
 from common.core.environ import normalize_env_name as _common_normalize_env_name
 
 logger = logging.getLogger(__name__)
+
+create_http_client = None
 
 load_dotenv()
 
@@ -97,7 +94,14 @@ class DokployClient:
             **kwargs.pop("headers", {}),
         }
         url = f"{self.base_url}/{endpoint}"
-        with create_http_client(
+        from infra2_sdk.service import (
+            HttpClientSettings,
+            create_http_client as _sdk_create_http_client,
+            request_with_retry,
+        )
+
+        client_factory = create_http_client or _sdk_create_http_client
+        with client_factory(
             HttpClientSettings(timeout_seconds=30.0), propagate_trace=False
         ) as client:
             try:
