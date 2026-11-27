@@ -1069,6 +1069,44 @@ def _verified(gh, wanted=None) -> set[str]:
     )
 
 
+def test_a_rate_limit_stops_the_verified_sdk_scan_and_a_404_skips_one_record() -> None:
+    """Release v3.2.60: each run read met the rate limit and the scan returned an empty set."""
+
+    class _Refuses(_CountingGitHub):
+        def __init__(self, error) -> None:
+            super().__init__()
+            self.error = error
+
+        def __call__(self, request, timeout=0):
+            if "/actions/runs/104" in request.full_url:
+                raise self.error
+            return super().__call__(request, timeout)
+
+    def window(error) -> _Refuses:
+        gh = _Refuses(error)
+        gh.add(
+            _sdk_record("4.4.0", "v1.0.4", run=104),
+            run=104,
+            created="2026-11-04T00:00:00Z",
+        )
+        gh.add(
+            _sdk_record("4.3.0", "v1.0.1", run=101),
+            run=101,
+            created="2026-11-01T00:00:00Z",
+        )
+        return gh
+
+    limited = urllib.error.HTTPError(
+        "u", 403, "x", {"x-ratelimit-remaining": "0"}, None
+    )
+    with pytest.raises(RuntimeError, match="GitHub rate limit at .*v1.0.4"):
+        _verified(window(limited))
+    with pytest.raises(RuntimeError, match="HTTP 429"):
+        _verified(window(_http(429)))
+    assert _verified(window(_http(404))) == {"4.3.0"}
+    assert _verified(window(_http(403))) == {"4.3.0"}
+
+
 def test_verified_sdk_scan_stops_when_each_wanted_version_is_verified() -> None:
     full = _sdk_window()
     assert _verified(full) == {"4.4.0", "4.3.0"}

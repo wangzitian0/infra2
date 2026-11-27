@@ -18,7 +18,8 @@ field. The exit code is 0 for a pass, 1 for a refusal and 4 when it cannot decid
 
 The command lines are ``python -m tools.stage_records list`` and ``... read``.
 
-Fail safe: ``list`` skips an artifact it doubts and writes the reason to stderr. ``read`` never
+Fail safe: ``list`` skips an artifact it doubts and writes the reason to stderr. A GitHub rate
+limit is not a doubt about one artifact: it stops the read with ``RuntimeError``. ``read`` never
 passes on a doubt. Standard library only: a step may run it before any dependency is installed.
 """
 
@@ -189,6 +190,18 @@ def _artifacts(
             return
 
 
+def _is_rate_limit(err: urllib.error.HTTPError) -> bool:
+    """HTTP 429, or HTTP 403 with no request left or with a ``Retry-After`` header."""
+    headers = err.headers or {}
+    return err.code == 429 or (
+        err.code == 403
+        and (
+            headers.get("x-ratelimit-remaining") == "0"
+            or headers.get("retry-after") is not None
+        )
+    )
+
+
 def _created(artifact: dict) -> datetime:
     return datetime.fromisoformat(str(artifact["created_at"]).replace("Z", "+00:00"))
 
@@ -221,6 +234,16 @@ def _checked_records(
             continue
         try:
             checked = _check_artifact(artifact, repo, token, opener)
+        except urllib.error.HTTPError as exc:
+            if _is_rate_limit(exc):
+                # Each later call fails the same way. An unread record is not an absent
+                # record: release v3.2.60 was refused with an empty verified list (#1644).
+                raise RuntimeError(
+                    f"stage_records: GitHub rate limit at {name} (HTTP {exc.code}); "
+                    "the records are unread"
+                ) from exc
+            print(f"stage_records: skip {name} (HTTPError: {exc})", file=sys.stderr)
+            continue
         except Exception as exc:  # noqa: BLE001 - one bad artifact never hides the others
             print(
                 f"stage_records: skip {name} ({type(exc).__name__}: {exc})",
