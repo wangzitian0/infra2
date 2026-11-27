@@ -2620,3 +2620,27 @@ def test_webhook_rejects_sync_spec_env_escalation_and_preserves_wait_in_flight_i
         assert dup_body["deployment_id"] == webhook_server._deployment_id(key)
     finally:
         webhook_server._in_flight_deploys.discard(key)
+
+
+def test_diagnose_failure_surfaces_sync_pipeline_error_instead_of_stdout_info(
+    monkeypatch,
+) -> None:
+    """SyncPipeline ERROR prefix wins over stdout info lines in diagnose_failure."""
+    sync_runner = _load_module(
+        "sync_runner_sync_pipeline_error_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        stderr=(
+            "ERROR: SyncPipeline failed (SchemaGateError): "
+            "pre-deploy schema gate NOT EVALUATED finance_report/app"
+        ),
+        stdout="ℹ️ S3 bucket 'finance-report-staging' verified reachable via S3 API",
+    )
+
+    assert diagnostic["error_kind"] == "unknown_invoke_failure"
+    assert "SchemaGateError" in diagnostic["summary"]
+    assert "pre-deploy schema gate" in diagnostic["summary"]
+    assert "S3 bucket" not in diagnostic["summary"]

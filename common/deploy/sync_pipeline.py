@@ -810,14 +810,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     raw = os.environ.get(args.spec_env, "").strip()
     if not raw:
-        print(f"SyncPipeline spec env {args.spec_env!r} is empty", file=sys.stderr)
+        print(
+            f"ERROR: SyncPipeline spec env {args.spec_env!r} is empty",
+            file=sys.stderr,
+        )
         return 1
     try:
         spec = json.loads(raw)
         expected_env = os.environ.get("IAC_SYNC_EXPECTED_ENV", "").strip() or None
         result = run_sync_spec(spec, expected_env=expected_env)
     except Exception as exc:  # noqa: BLE001
-        print(f"SyncPipeline failed: {exc}", file=sys.stderr)
+        print(
+            f"ERROR: SyncPipeline failed ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
         return 1
     print(json.dumps(result))
     if result.get("action") == "down" and not result.get("containers_cleared"):

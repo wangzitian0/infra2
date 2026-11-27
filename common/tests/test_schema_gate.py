@@ -676,6 +676,46 @@ def test_launcher_storage_omits_diff_details_on_ok(tmp_path):
     assert "SCHEMA_DIFF:" not in result.stderr
 
 
+def test_launcher_runpy_alter_sys_resolves_pydantic_forward_refs_in_storage_module(
+    tmp_path,
+):
+    """Running storage via runpy with alter_sys=True binds sys.modules['__main__'] so postponed annotations resolve."""
+    storage_source = """\
+from __future__ import annotations
+
+import json
+import sys
+from pydantic import BaseModel
+
+
+class _Child(BaseModel):
+    name: str
+
+
+class _Parent(BaseModel):
+    children: tuple[_Child, ...] = ()
+
+
+def _main() -> int:
+    _Parent(children=(_Child(name="ok"),))
+    print(json.dumps({"label": "finance_report/app", "rollback_class": "A", "migrations_pending": False}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
+"""
+    stub = _stub_sdk(tmp_path, storage_source=storage_source)
+    result = _run_launcher(
+        tmp_path,
+        ["--metadata", "m:x", "--label", "finance_report/app"],
+        "postgresql://h/db\n",
+        stub,
+    )
+    assert result.returncode == sg.EXIT_OK == 0, result.stderr
+    assert "[finance_report/app] ROLLBACK_CLASS: A pending=False" in result.stdout
+
+
 def test_launcher_imports_modules_against_real_storage_cli(tmp_path):
     """Real installed infra2_sdk.storage CLI accepts remaining args after _LAUNCHER imports --import modules."""
     (tmp_path / "mod_a.py").write_text("VALUE = 1\n")
