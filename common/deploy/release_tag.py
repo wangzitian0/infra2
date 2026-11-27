@@ -7,8 +7,9 @@ behind it, and was refused for the red Canary check of v3.2.59. This tool cuts n
 * when the newest release tag is the head of ``origin/main``;
 * in the 30 minutes after the newest release tag was made.
 
-The longest tag train of that day took 26 minutes (v3.2.62). After 30 minutes the train of
-the tag before has ended, and the pull requests that merged in that time ride one tag.
+The longest tag train of that day took 26 minutes (v3.2.62). A train that takes more than
+30 minutes makes the next tag wait behind it in the concurrency group of the train
+workflow. The pull requests that merge in the 30 minutes ride one tag.
 
 The tool reads git only. It lists no workflow run: a run listing is eventually consistent,
 and the code of the release train must not decide from it (#970, #1646,
@@ -23,6 +24,7 @@ push failed.
 from __future__ import annotations
 
 import argparse
+import signal
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -34,6 +36,8 @@ from common.core.constants import REPO_ROOT
 from common.deploy.release_markers import RELEASE_TAG_RE, version_key
 
 MIN_INTERVAL = timedelta(minutes=30)
+#: A tagger time later than the local clock by more than this is a wrong clock.
+CLOCK_SKEW = timedelta(minutes=5)
 ORIGIN = "origin"
 EXIT_OK, EXIT_WAIT, EXIT_UNREADABLE = 0, 1, 4
 
@@ -121,21 +125,35 @@ def remote_refs(
     return refs.get("refs/heads/main", ""), tags
 
 
+def _header_time(text: str, key: str) -> datetime | None:
+    """The time of the ``key`` line (``tagger`` or ``committer``) in the header of an object."""
+    for line in text.splitlines():
+        if not line:
+            return None
+        if line.startswith(f"{key} "):
+            return datetime.fromtimestamp(int(line.split()[-2]), tz=timezone.utc)
+    return None
+
+
 def tag_time(
-    name: str, tag: Tag, root: Path, runner: Runner = subprocess.run
+    name: str, tag: Tag, root: Path, runner: Runner, now: datetime
 ) -> datetime:
     """When the tag was made: the ``tagger`` time of an annotated tag.
 
-    A lightweight tag has no time of its own; the time of its commit is used. That time is
-    earlier than the push, so the interval is then shorter than 30 minutes.
+    The ``committer`` time of the commit is used in two cases. A lightweight tag has no time
+    of its own. A tagger time in the future is a wrong clock on the tagging machine; without
+    this case the tool waits until that time. The commit time is earlier than the push, so
+    the interval is then shorter than 30 minutes.
     """
-    _git(runner, root, "fetch", "--quiet", ORIGIN, f"refs/tags/{name}")
-    for line in _git(runner, root, "cat-file", "-p", tag.obj).splitlines():
-        if not line:
-            break
-        if line.startswith(("tagger ", "committer ")):
-            return datetime.fromtimestamp(int(line.split()[-2]), tz=timezone.utc)
-    raise ValueError(f"the object of {name} holds no tagger or committer time")
+    _git(runner, root, "fetch", "--quiet", "--no-tags", ORIGIN, f"refs/tags/{name}")
+    made = _header_time(_git(runner, root, "cat-file", "-p", tag.obj), "tagger")
+    if made is None or made > now + CLOCK_SKEW:
+        made = _header_time(
+            _git(runner, root, "cat-file", "-p", tag.commit), "committer"
+        )
+    if made is None:
+        raise ValueError(f"the object of {name} holds no tagger or committer time")
+    return made
 
 
 def cut(decision: Decision, message: str, root: Path, runner: Runner) -> None:
@@ -143,7 +161,7 @@ def cut(decision: Decision, message: str, root: Path, runner: Runner) -> None:
 
     A failed push deletes the local tag of this run, so the next run can make it again.
     """
-    _git(runner, root, "fetch", "--quiet", ORIGIN, decision.sha)
+    _git(runner, root, "fetch", "--quiet", "--no-tags", ORIGIN, decision.sha)
     _git(runner, root, "tag", "-a", decision.tag, "-m", message, decision.sha)
     try:
         _git(runner, root, "push", ORIGIN, f"refs/tags/{decision.tag}", timeout=120)
@@ -160,6 +178,11 @@ def cut(decision: Decision, message: str, root: Path, runner: Runner) -> None:
         raise
 
 
+def _terminate(signum: int, _frame: object) -> None:
+    """SIGTERM as an exception, so ``cut`` deletes the tag of this run before the exit."""
+    raise SystemExit(128 + signum)
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -171,23 +194,27 @@ def main(
     parser.add_argument("--push", action="store_true", help="create and push the tag")
     parser.add_argument("-m", "--message", default="", help="the tag message")
     args = parser.parse_args(argv)
+    moment = now()
     try:
         main_sha, tags = remote_refs(root, runner)
         decision = decide(
             main_sha,
             tags,
-            lambda name: tag_time(name, tags[name], root, runner),
-            now(),
+            lambda name: tag_time(name, tags[name], root, runner, moment),
+            moment,
         )
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"release tag: unreadable: {exc}")
         return EXIT_UNREADABLE
     if decision.action == "cut" and args.push:
+        previous = signal.signal(signal.SIGTERM, _terminate)
         try:
             cut(decision, args.message or f"Release {decision.tag}", root, runner)
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
             print(f"release tag: failed {decision.tag}: {exc}")
             return EXIT_UNREADABLE
+        finally:
+            signal.signal(signal.SIGTERM, previous)
     done = "pushed" if decision.action == "cut" and args.push else decision.action
     target = f" {decision.tag} at {decision.sha[:8]}" if decision.tag else ""
     print(f"release tag: {done}{target}: {decision.reason}")

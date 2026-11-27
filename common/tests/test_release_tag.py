@@ -17,6 +17,7 @@ TAGS = {"v3.2.9": Tag("c" * 40, "c" * 40), "v3.2.59": Tag(TAG_OBJECT, OLD)}
 MADE = datetime(2026, 11, 27, 8, 13, 13, tzinfo=timezone.utc)
 NOW = datetime(2026, 11, 27, 8, 17, tzinfo=timezone.utc)
 LATER = datetime(2026, 11, 27, 8, 43, 13, tzinfo=timezone.utc)
+COMMITTED = datetime(2026, 11, 27, 7, 50, tzinfo=timezone.utc)
 
 
 def _made(name: str) -> datetime:
@@ -49,8 +50,10 @@ def test_no_tag_and_no_time_read_when_the_newest_tag_is_the_head_of_main() -> No
 class _Git:
     """Answer the read commands of the tool; record each command that changes a ref."""
 
-    def __init__(self, *, fail: str = "", tagger: str = "tagger") -> None:
-        self.fail, self.tagger = fail, tagger
+    def __init__(
+        self, *, fail: str = "", annotated: bool = True, made: datetime | None = None
+    ) -> None:
+        self.fail, self.annotated, self.made = fail, annotated, made
         self.read: list[list[str]] = []
         self.commands: list[list[str]] = []
         self.cwds: set[object] = set()
@@ -68,18 +71,22 @@ class _Git:
                 f"{MAIN}\trefs/tags/v4.14.2-canary\n"
             )
         elif argv[1] == "cat-file":
-            out = (
-                f"object {OLD}\ntype commit\ntag v3.2.59\n"
-                f"{self.tagger} t <t@example.com> {int(MADE.timestamp())} +0800\n\nRelease\n"
-            )
-        if (
-            argv[1] in ("ls-remote", "cat-file")
-            or argv[1:3]
-            == [
-                "fetch",
-                "--quiet",
-            ]
-            and argv[-1].startswith("refs/tags/")
+            stamp = int((self.made or MADE).timestamp())
+            if argv[-1] == TAG_OBJECT and self.annotated:
+                out = (
+                    f"object {OLD}\ntype commit\ntag v3.2.59\n"
+                    f"tagger t t <t@example.com> {stamp} +0800\n\nRelease\n"
+                )
+            else:
+                # A commit: the author time is another time and is not the answer.
+                out = (
+                    f"tree {'e' * 40}\nparent {'f' * 40}\n"
+                    f"author a a <a@example.com> 1700000000 +0000\n"
+                    f"committer c c <c@example.com> {int(COMMITTED.timestamp())} +0000\n"
+                    f"gpgsig -----BEGIN\n\ncommitter x <x@example.com> 1 +0000\n"
+                )
+        if argv[1] in ("ls-remote", "cat-file") or (
+            argv[1] == "fetch" and argv[-1].startswith("refs/tags/")
         ):
             self.read.append(argv)
         else:
@@ -98,7 +105,7 @@ def test_the_tool_reads_origin_with_git_and_the_time_of_the_tag_object(
     assert _main(git, tmp_path) == 0
     assert git.read == [
         ["git", "ls-remote", "origin", "refs/heads/main", "refs/tags/v*"],
-        ["git", "fetch", "--quiet", "origin", "refs/tags/v3.2.59"],
+        ["git", "fetch", "--quiet", "--no-tags", "origin", "refs/tags/v3.2.59"],
         ["git", "cat-file", "-p", TAG_OBJECT],
     ]
     assert git.commands == []
@@ -110,16 +117,26 @@ def test_the_tool_reads_origin_with_git_and_the_time_of_the_tag_object(
     )
 
 
-def test_a_lightweight_tag_uses_the_time_of_its_commit(tmp_path) -> None:
-    git = _Git(tagger="committer")
-    assert release_tag.tag_time("v3.2.59", TAGS["v3.2.59"], tmp_path, git) == MADE
+def test_a_lightweight_tag_uses_the_committer_time_of_its_commit(tmp_path) -> None:
+    git = _Git(annotated=False)
+    light = Tag(OLD, OLD)
+    assert release_tag.tag_time("v3.2.59", light, tmp_path, git, LATER) == COMMITTED
+
+
+def test_a_tagger_time_in_the_future_uses_the_commit_time(tmp_path) -> None:
+    """A wrong clock on the tagging machine must not hold each later tag for days."""
+    ahead = datetime(2026, 11, 29, 8, 0, tzinfo=timezone.utc)
+    tag = TAGS["v3.2.59"]
+    late = _Git(made=ahead)
+    assert release_tag.tag_time("v3.2.59", tag, tmp_path, late, LATER) == COMMITTED
+    assert release_tag.tag_time("v3.2.59", tag, tmp_path, _Git(), LATER) == MADE
 
 
 def test_push_tags_the_commit_of_origin_main(tmp_path, capsys) -> None:
     git = _Git()
     assert _main(git, tmp_path, "--push", "-m", "Release notes") == 0
     assert git.commands == [
-        ["git", "fetch", "--quiet", "origin", MAIN],
+        ["git", "fetch", "--quiet", "--no-tags", "origin", MAIN],
         ["git", "tag", "-a", "v3.2.60", "-m", "Release notes", MAIN],
         ["git", "push", "origin", "refs/tags/v3.2.60"],
     ]
@@ -165,6 +182,10 @@ def test_an_interrupt_in_the_push_deletes_the_tag_of_this_run(tmp_path) -> None:
     with pytest.raises(KeyboardInterrupt):
         _main(git, tmp_path, "--push")
     assert git.commands[-1] == ["git", "tag", "-d", "v3.2.60"]
+    # SIGTERM takes the same path: the handler of main() raises SystemExit.
+    with pytest.raises(SystemExit) as stopped:
+        release_tag._terminate(15, None)
+    assert stopped.value.code == 143
 
 
 @pytest.mark.parametrize("source", ["ls-remote", "cat-file"])
