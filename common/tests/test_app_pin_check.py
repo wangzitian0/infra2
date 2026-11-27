@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from unittest.mock import create_autospec
 
 import pytest
 
@@ -11,7 +12,7 @@ from common.deploy.reconcile_iac_inputs import UnverifiedSdkError
 
 REPOS_YAML = """\
 repositories:
-  - id: finance_report
+  - id: finance-report
     role: external-application
     release_tag: {fr}
   - id: truealpha
@@ -49,20 +50,24 @@ def train(monkeypatch):
     calls: list[object] = []
     answers: dict[str, BaseException] = {}
 
-    def on_main(tag, deploy_type, *, service):
+    def on_main(tag, deploy_type, *, service, **_kwargs):
         calls.append((service, tag, deploy_type))
         if "on_main" in answers:
             raise answers["on_main"]
 
-    def sdk_verified(pins, *, repo_root):
+    def sdk_verified(pins, *, repo_root, **_kwargs):
         calls.append(list(pins))
         if "sdk" in answers:
             raise answers["sdk"]
 
-    monkeypatch.setattr(preflight, "assert_app_version_ref_on_main", on_main)
-    monkeypatch.setattr(
-        reconcile_iac_inputs, "assert_app_sdk_versions_verified", sdk_verified
-    )
+    # autospec: a call that the real signature refuses raises TypeError here too.
+    for module, name, fake in (
+        (preflight, "assert_app_version_ref_on_main", on_main),
+        (reconcile_iac_inputs, "assert_app_sdk_versions_verified", sdk_verified),
+    ):
+        monkeypatch.setattr(
+            module, name, create_autospec(getattr(module, name), side_effect=fake)
+        )
     return calls, answers
 
 
