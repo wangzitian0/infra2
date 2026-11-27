@@ -232,3 +232,19 @@ def test_concurrent_writers_do_not_corrupt_or_lose_records(monkeypatch, tmp_path
         ws._deployment_id(k) for k in keys
     }
     assert saved["in_flight"] == []
+
+
+def test_staging_bootstrap_reads_slash_titled_vault_root_token_via_op_item_get() -> (
+    None
+):
+    """1Password CLI rejects op:// references for items with slashes in the title."""
+    script = (
+        Path(__file__).parents[2] / "scripts/deploy_iac_runner_bootstrap.sh"
+    ).read_text(encoding="utf-8")
+    assert "op://Infra2/bootstrap/vault/Root Token/Root Token" not in script
+    assert '"op",\n' in script
+    assert '"item",\n' in script
+    assert '"get",\n' in script
+    assert '"bootstrap/vault/Root Token",\n' in script
+    assert '"label=Root Token",\n' in script
+    assert '"--reveal",\n' in script

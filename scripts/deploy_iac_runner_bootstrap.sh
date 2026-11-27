@@ -219,7 +219,17 @@ def get_env_value(env_text, key):
 
 def provision_staging_vault(prod_details):
     root_token = subprocess.check_output(
-        ["op", "read", "op://Infra2/bootstrap/vault/Root Token/Root Token"],
+        [
+            "op",
+            "item",
+            "get",
+            "bootstrap/vault/Root Token",
+            "--vault",
+            "Infra2",
+            "--fields",
+            "label=Root Token",
+            "--reveal",
+        ],
         text=True,
         timeout=30,
     ).strip()
