@@ -847,7 +847,14 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 | Fail closed | Each list is read twice and must name the same ids. A kept index that GHCR cannot read stops the plan. A manifest that a second list also lacks was replaced during the run and is skipped. No main commit in the window stops the plan. |
 | Call budget | No delete starts when fewer than `RESERVED_CALLS` (2000) REST calls remain for the shared login. The count is read again after each plan. The next run resumes. |
 
-Without `--apply` the tool prints the plan and deletes nothing. A deletion is permanent, so a person confirms the dry-run counts before the first `--apply`.
+Without `--apply` the tool prints the plan and deletes nothing. A deletion is permanent. The owner confirmed the dry-run counts before the first `--apply` (2026-11-25, #2000). A policy change needs a fresh dry run before merge.
+
+| Trigger | Value |
+|---|---|
+| Schedule | `.github/workflows/ghcr-retention.yml` runs `--apply` daily at 03:41 UTC on `main`. Exit 3 (call reserve) is a warning; the next run resumes. Step 1 (#2114) prints the plan with `GITHUB_TOKEN`; step 2 reads the token below and deletes. The production contract judges a workflow with the table of `main`, so its entry lands before the secret read. |
+| Manual replay | `workflow_dispatch` of the same workflow; input `dry_run` prints the plan only. |
+| Token | Secret `GHCR_RETENTION_TOKEN`: a classic PAT of the package owner with `read:packages` and `delete:packages`. Without it the run fails. |
+| Retries | A read, a delete and the `git clone` of `recent_commits` get 3 attempts. A 404 on a delete retry is a success: the lost first reply had deleted the version. |
 
 ## Used by
 

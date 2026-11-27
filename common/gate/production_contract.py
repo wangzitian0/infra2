@@ -67,6 +67,10 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
         "reconcile-iac-inputs.yml",
         "alert",
     ): "failure alert and stage card of a release run: reads only the Feishu delivery secrets (#1646)",
+    (
+        "ghcr-retention.yml",
+        "retention",
+    ): "scheduled deletion of old App image versions; it keeps every release tag and every image of the last 30 days (#2000)",
 }
 
 # An ungated job that appears here may read only the secrets named for it. Every job in
@@ -107,6 +111,7 @@ UNGATED_SECRET_LIMITS: dict[tuple[str, str], frozenset[str]] = {
     ),
     ("reconcile-iac-inputs.yml", "post"): _TA_HOOK_SECRETS,
     ("reconcile-iac-inputs.yml", "alert"): _ALERT_SECRETS,
+    ("ghcr-retention.yml", "retention"): frozenset({"GHCR_RETENTION_TOKEN"}),
     ("ops-checks.yml", "audit"): (
         frozenset({"DOKPLOY_API_KEY", "INFRA2_HOOKS_READ_TOKEN"}) | _ALERT_SECRETS
     ),
