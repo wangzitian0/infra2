@@ -10,14 +10,20 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import tomllib
 import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from common.core._sdk_wire import sdk_version_from_lock_text
 from common.core.constants import APP_SOURCES
-from common.deploy.canary_pin import APP_SDK_RANGE, in_app_sdk_range
+from common.deploy.canary_pin import (
+    APP_SDK_RANGE,
+    _version_tuple,
+    in_app_sdk_range,
+    max_canary_slot_version,
+)
+from common.deploy.dependencies import matches_service_dependencies
 from common.deploy.stage_record import CI_ENV
 from common.deploy.stage_record_reader import (
     EXIT_UNREADABLE,
@@ -27,13 +33,6 @@ from common.deploy.stage_record_reader import (
     verified_sdk_versions,
 )
 from common.deploy.stage_hooks import stage_hook_plan
-
-_CANARY_TRIGGER_PREFIXES = (
-    "platform/",
-    "common/deploy/",
-    "common/security/",
-    "common/observability/",
-)
 
 
 def required_staging_gates(plan: Any) -> dict[str, str]:
@@ -45,8 +44,9 @@ def required_staging_gates(plan: Any) -> dict[str, str]:
     }
     canary_ref = str(getattr(plan, "canary_version_ref", "") or "").strip()
     changed_files = getattr(plan, "changed_files", ()) or ()
-    platform_or_shared = "platform/todo" in plan.selected or any(
-        f == "uv.lock" or f.startswith(_CANARY_TRIGGER_PREFIXES) for f in changed_files
+    platform_or_shared = (
+        "platform/todo" in plan.selected
+        or matches_service_dependencies("platform/todo", changed_files)
     )
     if canary_ref and platform_or_shared:
         required["platform/todo"] = canary_ref
@@ -96,14 +96,6 @@ def check_prod_canary_health(
         )
 
 
-def _infra2_sdk_from_uv_lock_text(text: str) -> str:
-    data = tomllib.loads(text)
-    for pkg in data.get("package") or ():
-        if isinstance(pkg, Mapping) and pkg.get("name") == "infra2-sdk":
-            return str(pkg.get("version") or "").strip()
-    return ""
-
-
 def assert_uv_lock_sdk_verified(
     after: str,
     repo_root: Path,
@@ -125,17 +117,27 @@ def assert_uv_lock_sdk_verified(
                 f"::error::upstream_post refused: cannot read {after}:uv.lock ({shown.stderr.strip()})"
             )
         return
-    sdk_ver = _infra2_sdk_from_uv_lock_text(shown.stdout)
-    if not sdk_ver:
+    try:
+        sdk_ver = sdk_version_from_lock_text(shown.stdout, label=f"{after}:uv.lock")
+    except ValueError as exc:
         raise SystemExit(
             f"::error::upstream_post refused: {after}:uv.lock declares no infra2-sdk package"
-        )
+        ) from exc
     if not in_app_sdk_range(sdk_ver):
         low, high = APP_SDK_RANGE
         raise SystemExit(
             f"::error::upstream_post refused: {after}:uv.lock pins infra2-sdk {sdk_ver}, "
             f"outside range [{low}, {high})"
         )
+    if verified_versions is None:
+        max_canary = max_canary_slot_version(repo_root)
+        if max_canary is not None and _version_tuple(sdk_ver) > _version_tuple(
+            max_canary
+        ):
+            raise SystemExit(
+                f"::error::upstream_post refused: {after}:uv.lock pins infra2-sdk {sdk_ver}, "
+                f"newer than active Canary slots (max={max_canary})"
+            )
     verified = (
         set(verified_versions)
         if verified_versions is not None

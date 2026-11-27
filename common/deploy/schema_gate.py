@@ -96,17 +96,21 @@ _SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
 }
 
 # Runs in the target image as ``python3 -c _LAUNCHER <spec options>``. It reads the
-# database URL from stdin and calls ``infra2_sdk.storage.check_schema_cli`` with
-# ``check-schema --db-url ... --json``. Any missing module/import failure or uncaught
-# exception exits EXIT_NOT_EVALUATED (3).
+# database URL from stdin and calls ``infra2_sdk.storage.check_schema_cli`` (v4.14.2+),
+# ``infra2_sdk.storage`` (`runpy` / `main`, v4.10+), or ``infra2_sdk.runtime.schema_check``
+# (v4.9.x, matching APP_SDK_RANGE) with ``--db-url`` and ``--json``.
 _LAUNCHER = f"""\
 import contextlib
 import importlib
 import io
 import json
 import sys
+_use_storage = False
 try:
     from infra2_sdk import storage
+    _use_storage = True
+except ImportError:
+    storage = None
 except Exception as exc:
     print(
         "NOT EVALUATED - deploy blocked: infra2_sdk.storage "
@@ -114,92 +118,137 @@ except Exception as exc:
         file=sys.stderr,
     )
     sys.exit({EXIT_NOT_EVALUATED})
-entry = getattr(storage, "check_schema_cli", None) or getattr(storage, "main", None)
-if not callable(entry):
-    print(
-        "NOT EVALUATED - deploy blocked: infra2_sdk.storage has no "
-        "check_schema_cli entrypoint",
-        file=sys.stderr,
-    )
-    sys.exit({EXIT_NOT_EVALUATED})
+schema_check = None
+if not _use_storage:
+    try:
+        from infra2_sdk.runtime import schema_check
+    except ImportError as exc:
+        print(
+            "NOT EVALUATED - deploy blocked: the image has neither "
+            "infra2_sdk.storage nor infra2_sdk.runtime.schema_check: " + repr(exc),
+            file=sys.stderr,
+        )
+        sys.exit({EXIT_NOT_EVALUATED})
+    except Exception as exc:
+        print(
+            "NOT EVALUATED - deploy blocked: infra2_sdk.runtime.schema_check "
+            "does not import: " + repr(exc),
+            file=sys.stderr,
+        )
+        sys.exit({EXIT_NOT_EVALUATED})
 db_url = sys.stdin.readline().strip()
 try:
-    rest = []
-    imports = []
-    argv = sys.argv[1:]
-    idx = 0
-    while idx < len(argv):
-        arg = argv[idx]
-        if arg == "--import":
-            if idx + 1 >= len(argv):
-                raise ValueError("--import requires a module name")
-            imports.append(argv[idx + 1])
-            idx += 2
-        elif arg.startswith("--import="):
-            imports.append(arg.split("=", 1)[1])
-            idx += 1
-        else:
-            rest.append(arg)
-            idx += 1
-    for mod in imports:
-        try:
-            importlib.import_module(mod)
-        except Exception as exc:
-            print(
-                f"NOT EVALUATED - deploy blocked: failed to import {{mod}}: " + repr(exc),
-                file=sys.stderr,
-            )
-            sys.exit({EXIT_NOT_EVALUATED})
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buf):
-            code = entry(["check-schema", *rest, "--db-url", db_url, "--json"])
-    except BaseException:
-        raw_out = buf.getvalue()
-        if raw_out:
-            sys.stdout.write(raw_out)
-        raise
-    raw_out = buf.getvalue()
-    stripped = raw_out.strip()
-    payload = None
-    if stripped.startswith("{{"):
-        try:
-            parsed = json.loads(stripped)
-        except ValueError:
-            parsed = None
-        if isinstance(parsed, dict) and "rollback_class" in parsed:
-            payload = parsed
-    if payload is not None:
-        label = payload.get("label") or ""
-        prefix = f"[{{label}}] " if label else ""
-        print(
-            f"{{prefix}}ROLLBACK_CLASS: {{payload['rollback_class']}} "
-            f"pending={{payload.get('migrations_pending')}}"
-        )
-        if code != 0:
-            details = {{
-                k: payload[k]
-                for k in (
-                    "dropped_tables",
-                    "dropped_columns",
-                    "enum_discrepancies",
-                    "precondition_failures",
-                    "new_tables",
-                    "additive_columns",
+    if _use_storage:
+        rest = []
+        imports = []
+        argv = sys.argv[1:]
+        idx = 0
+        while idx < len(argv):
+            arg = argv[idx]
+            if arg == "--import":
+                if idx + 1 >= len(argv):
+                    raise ValueError("--import requires a module name")
+                imports.append(argv[idx + 1])
+                idx += 2
+            elif arg.startswith("--import="):
+                imports.append(arg.split("=", 1)[1])
+                idx += 1
+            else:
+                rest.append(arg)
+                idx += 1
+        for mod in imports:
+            try:
+                importlib.import_module(mod)
+            except Exception as exc:
+                print(
+                    f"NOT EVALUATED - deploy blocked: failed to import {{mod}}: " + repr(exc),
+                    file=sys.stderr,
                 )
-                if payload.get(k)
-            }}
+                sys.exit({EXIT_NOT_EVALUATED})
+        entry = getattr(storage, "check_schema_cli", None) or getattr(storage, "main", None)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                if callable(entry):
+                    code = entry(["check-schema", *rest, "--db-url", db_url, "--json"])
+                else:
+                    import runpy
+
+                    old_argv = sys.argv
+                    sys.argv = [
+                        "infra2_sdk.storage",
+                        "check-schema",
+                        *rest,
+                        "--db-url",
+                        db_url,
+                        "--json",
+                    ]
+                    sys.modules.pop("infra2_sdk.storage", None)
+                    try:
+                        try:
+                            runpy.run_module(
+                                "infra2_sdk.storage",
+                                run_name="__main__",
+                                alter_sys=True,
+                            )
+                            code = 0
+                        except SystemExit as exc:
+                            code = (
+                                int(exc.code)
+                                if isinstance(exc.code, int)
+                                else (1 if exc.code else 0)
+                            )
+                    finally:
+                        sys.argv = old_argv
+        except BaseException:
+            raw_out = buf.getvalue()
+            if raw_out:
+                sys.stdout.write(raw_out)
+            raise
+        raw_out = buf.getvalue()
+        stripped = raw_out.strip()
+        payload = None
+        if stripped.startswith("{{"):
+            try:
+                parsed = json.loads(stripped)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and "rollback_class" in parsed:
+                payload = parsed
+        if payload is not None:
+            label = payload.get("label") or ""
+            prefix = f"[{{label}}] " if label else ""
             print(
-                "SCHEMA_DIFF: " + json.dumps(details, sort_keys=True),
-                file=sys.stderr,
+                f"{{prefix}}ROLLBACK_CLASS: {{payload['rollback_class']}} "
+                f"pending={{payload.get('migrations_pending')}}"
             )
-    elif raw_out:
-        sys.stdout.write(raw_out)
+            if code != 0:
+                details = {{
+                    k: payload[k]
+                    for k in (
+                        "dropped_tables",
+                        "dropped_columns",
+                        "enum_discrepancies",
+                        "precondition_failures",
+                        "new_tables",
+                        "additive_columns",
+                    )
+                    if payload.get(k)
+                }}
+                print(
+                    "SCHEMA_DIFF: " + json.dumps(details, sort_keys=True),
+                    file=sys.stderr,
+                )
+        elif raw_out:
+            sys.stdout.write(raw_out)
+    else:
+        code = schema_check.main([*sys.argv[1:], "--db-url", db_url])
 except SystemExit:
     raise
 except Exception as exc:
+    _ep = "storage.check_schema_cli" if _use_storage else "schema_check.main"
     print(
-        "NOT EVALUATED - deploy blocked: storage.check_schema_cli raised " + repr(exc),
+        f"NOT EVALUATED - deploy blocked: {{_ep}} raised " + repr(exc),
         file=sys.stderr,
     )
     sys.exit({EXIT_NOT_EVALUATED})

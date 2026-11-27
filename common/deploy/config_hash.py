@@ -16,7 +16,6 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
-import tomllib
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GLOB_CHARS_RE = re.compile(r"[*?[]")
@@ -749,19 +748,9 @@ def _runner_ast_closure(repo_root: Path, ref: str | None) -> set[str]:
 def _sdk_requirement_from_lock(raw_lock: bytes | None) -> str:
     if raw_lock is None:
         return ""
-    data = tomllib.loads(raw_lock.decode("utf-8"))
-    packages = [p for p in data.get("package", []) if p.get("name") == "infra2-sdk"]
-    if len(packages) != 1:
-        raise ValueError(
-            f"expected one infra2-sdk package in uv.lock, found {len(packages)}"
-        )
-    pkg = packages[0]
-    url = (pkg.get("source") or {}).get("url") or ""
-    wheels = pkg.get("wheels") or []
-    wheel_hash = str(wheels[0].get("hash") or "") if len(wheels) == 1 else ""
-    if not url or not wheel_hash.startswith("sha256:"):
-        raise ValueError("infra2-sdk wheel entry in uv.lock is malformed")
-    return f"infra2-sdk @ {url}#{wheel_hash.replace(':', '=', 1)}"
+    from common.core._sdk_wire import sdk_requirement_from_lock_text
+
+    return sdk_requirement_from_lock_text(raw_lock.decode("utf-8"))
 
 
 def iac_runner_input_hash(

@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 from common.core.harness import sweep as harness_sweep  # noqa: E402
 from common.core.harness.manifest import check_workspace, load_manifest  # noqa: E402
 from common.core.harness import prod_queue as harness_prod_queue  # noqa: E402
-from common.core.sdk_usage_census import sdk_version as read_sdk_version  # noqa: E402
+from common.core._sdk_wire import read_locked_sdk_version as read_sdk_version  # noqa: E402
 from common.core.harness.status import (  # noqa: E402
     WorkspaceStatus,
     fetch_json,

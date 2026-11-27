@@ -94,10 +94,8 @@ services:
       - truealpha/truealpha/observability/dashboard.json
 
   platform/todo:
-    # Canary Todo gates platform/, shared deploy/security/observability modules, uv.lock,
-    # and Preview S3 builds whenever any of those change (#1647).
+    # Canary Todo gates platform/, shared deploy/security/observability modules, and uv.lock (#1647).
     depends_on:
-      - platform/03.s3/Dockerfile
       - platform/**
       - common/deploy/**
       - common/security/**

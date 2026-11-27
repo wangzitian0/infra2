@@ -43,6 +43,7 @@ from common.deploy.github_api import Opener, get_json, github_headers, with_retr
 AGENT = "infra2-stage-records/1.0"
 PREFIX = "stage-"
 MAX_PAGES = 100
+MAX_SDK_SCAN_PAGES = 20
 PHASES = ("pre", "operation", "post")
 CANARY_STAGING_GATE_CHECKS = frozenset(
     {"platform/todo:staging_gate", "staging_gate:platform/todo"}
@@ -166,9 +167,16 @@ def _run_is_the_subject(
     return branch == "main"
 
 
-def _artifacts(repo: str, token: str, opener: Opener, name: str = "") -> Iterator[dict]:
+def _artifacts(
+    repo: str,
+    token: str,
+    opener: Opener,
+    name: str = "",
+    *,
+    max_pages: int = MAX_PAGES,
+) -> Iterator[dict]:
     """Artifacts of the repository (only those with ``name`` when it is given), newest first."""
-    for page in range(1, MAX_PAGES + 1):
+    for page in range(1, max_pages + 1):
         query = urllib.parse.urlencode(
             {"per_page": 100, "page": page, **({"name": name} if name else {})}
         )
@@ -195,12 +203,13 @@ def _checked_records(
     phase: str,
     since: datetime | None,
     phases: Collection[str] | None = None,
+    max_pages: int = MAX_PAGES,
 ) -> Iterator[tuple[datetime, dict]]:
     """``(created, record)`` of each record that passes the provenance checks, newest first."""
     allowed_phases = (
         set(phases) if phases is not None else ({phase} if phase else set())
     )
-    for artifact in _artifacts(repo, token, opener):
+    for artifact in _artifacts(repo, token, opener, max_pages=max_pages):
         name = str(artifact.get("name") or "")
         if since and _created(artifact) < since:
             return
@@ -357,6 +366,7 @@ def verified_sdk_versions(
         phase="",
         since=since,
         phases=("post", "operation"),
+        max_pages=MAX_SDK_SCAN_PAGES if targets else MAX_PAGES,
     ):
         passed_v, failed_v = _canary_sdk_verdict(record)
         for v in passed_v:

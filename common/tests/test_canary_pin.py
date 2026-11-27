@@ -308,6 +308,7 @@ def test_rewrite_canary_pin_replaces_exactly_one_pin() -> None:
     new_digest = "sha256:" + "c" * 64
     text = _compose(f"    image: {CANARY_IMAGE_REPOSITORY}:v3.35.0@{DIGEST}\n")
     out = rewrite_canary_pin(text, "3.36.0", new_digest)
+    assert f"v3.36.0@{new_digest}" in out
     assert canary_image_from_compose_text(out)[1:] == ("3.36.0", new_digest)
     with pytest.raises(CanaryPinError, match="found 2"):
         rewrite_canary_pin(
@@ -319,6 +320,39 @@ def test_rewrite_canary_pin_replaces_exactly_one_pin() -> None:
         rewrite_canary_pin("services: {}\n", "3.36.0", new_digest)
     with pytest.raises(CanaryPinError, match="invalid pin"):
         rewrite_canary_pin(text, "latest", new_digest)
+
+
+def test_app_sdk_check_fails_fast_when_newer_than_active_canary_slots(
+    monkeypatch, tmp_path
+) -> None:
+    """Versions strictly newer than slots.yaml fail closed before any stage-record scan."""
+    import shutil
+    from common.deploy.canary_pin import (
+        CANARY_SLOTS_REL,
+        REPO_ROOT,
+        max_canary_slot_version,
+    )
+
+    (tmp_path / CANARY_SLOTS_REL).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO_ROOT / CANARY_SLOTS_REL, tmp_path / CANARY_SLOTS_REL)
+    max_slot = max_canary_slot_version(tmp_path)
+    assert max_slot is not None
+    major, minor, patch = (int(p) for p in max_slot.split("."))
+    unverified_future = f"{major}.{minor}.{patch + 1}"
+
+    monkeypatch.setattr(
+        reconcile, "locked_sdk_version_for_app_ref", lambda *_a, **_k: unverified_future
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "verified_sdk_versions",
+        lambda **_k: pytest.fail("must short-circuit without scanning stage records"),
+    )
+    with pytest.raises(reconcile.UnverifiedSdkError, match="newer than active"):
+        reconcile.assert_app_sdk_versions_verified(
+            [("finance_report/app", "v9.9.9")],
+            repo_root=tmp_path,
+        )
 
 
 def test_resolve_canary_digest_reads_the_registry_header() -> None:

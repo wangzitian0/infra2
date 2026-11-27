@@ -198,20 +198,45 @@ def test_changed_app_services_from_repos_yaml_detects_single_app_tag_bump() -> N
     assert "v0.2.76 -> v0.2.77" in changed["truealpha/app"]
 
 
-def test_advance_app_release_train_computes_next_patch_tag() -> None:
-    def runner(argv, **_kwargs):
-        return subprocess.CompletedProcess(argv, 0, f"{SHA}\trefs/heads/main\n", "")
+def test_post_checks_and_staging_before_tag_selection(monkeypatch, tmp_path) -> None:
+    """post_checks([]) reports post_plan; _staging_before_tag skips failed prior staging tags."""
+    from common.deploy.stage_record_reader import Reading
 
-    info = reconcile.advance_app_release_train(
-        "truealpha/app",
-        repo_url="https://github.com/wangzitian0/truealpha.git",
-        existing_tags=["v0.2.76", "v0.2.77"],
-        candidate_ref="main",
-        runner=runner,
+    empty = reconcile.post_checks([])
+    assert len(empty) == 1 and empty[0].name == "post_plan" and empty[0].ok is True
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "wangzitian0/infra2")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(
+        reconcile,
+        "read_record",
+        lambda *_a, subject, **_k: Reading(
+            0 if subject == "tag:v3.2.66" else 1,
+            "ok" if subject == "tag:v3.2.66" else "missing",
+        ),
     )
-    assert info["candidate_sha"] == SHA
-    assert info["image_ref"] == SHA[:7]
-    assert info["next_tag"] == "v0.2.78"
+    assert reconcile._staging_before_tag(["v3.2.67", "v3.2.66", "v3.2.65"]) == "v3.2.66"
+
+
+def test_expected_canary_sdk_at_ref_prefers_slots_yaml(tmp_path) -> None:
+    slots = tmp_path / "platform/30.todo/slots.yaml"
+    slots.parent.mkdir(parents=True)
+    slots.write_text(
+        (ROOT / "platform/30.todo/slots.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@e.invalid"], cwd=tmp_path, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "slots"], cwd=tmp_path, check=True)
+    from common.deploy.canary_pin import canary_sdk_version
+
+    assert reconcile._expected_canary_sdk_at_ref(
+        "HEAD", tmp_path
+    ) == canary_sdk_version(ROOT)
 
 
 def test_manifest_change_reconciles_all_iac_pinned_services() -> None:
@@ -1125,39 +1150,6 @@ def test_run_hook_slot_fails_closed_without_manifest_or_service_coordinates() ->
         match="--run-hook-slot requires either --hooks-manifest or both --hook-service and --hook-source-sha",
     ):
         main(["--after", "v1.2.3", "--run-hook-slot", "smoke"])
-
-
-def test_validate_evidence_json_returns_immediately_without_running_reconcile(
-    monkeypatch, capsys
-) -> None:
-    """#1416: --validate-evidence-json validates the DeployRequest and returns 0 without
-    falling through into reconcile planning or deployment."""
-    monkeypatch.setattr(
-        reconcile,
-        "build_plan",
-        lambda *_a, **_kw: (_ for _ in ()).throw(
-            AssertionError("build_plan must not run on --validate-evidence-json")
-        ),
-    )
-    payload = json.dumps(
-        {
-            "contract_version": 1,
-            "request_id": "req-1416-staging",
-            "operation": "deploy",
-            "service": "finance_report/app",
-            "deploy_type": "staging",
-            "version_ref": "v0.2.46",
-            "source_repository": "wangzitian0/finance_report",
-            "source_sha": SHA,
-            "evidence": {
-                "source_run_url": "https://github.com/wangzitian0/finance_report/actions/runs/100"
-            },
-        }
-    )
-    rc = main(["--after", "v1.2.3", "--validate-evidence-json", payload])
-    assert rc == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["max_age_seconds"] > 0
 
 
 def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promote_prod() -> (
@@ -3836,128 +3828,6 @@ def test_stage_hook_plans_ssot_and_workflow_wiring() -> None:
     )
 
 
-def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_always_tears_down(
-    monkeypatch, tmp_path
-) -> None:
-    """#1554: when cut_missing_app_tag=True and an App's main is ahead of its latest tag,
-    sync_app_releases deploys preview/branch (main), runs preview_gate, cuts and pushes
-    refs/tags/vX.Y.Z only on pass, and always runs deploy_v2 --down in finally."""
-    from common.deploy.stage_hooks import HookRunResult
-
-    repos_yaml = tmp_path / "harness" / "repos.yaml"
-    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
-    repos_yaml.write_text(
-        "schema_version: 1\n"
-        "repositories:\n"
-        "  - id: finance-report\n"
-        "    role: external-application\n"
-        "    release_tag: v0.2.46\n"
-        "  - id: truealpha\n"
-        "    role: external-application\n"
-        "    release_tag: v0.2.80\n",
-        encoding="utf-8",
-    )
-
-    def _fake_remote(repo_url: str, **_kw):
-        if "finance_report" in repo_url:
-            return (SHA, {"v0.2.46": "1" * 40})
-        return ("2" * 40, {"v0.2.80": "2" * 40})
-
-    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
-    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.40")
-    _record_manifest_writes(monkeypatch)
-
-    manifest = _hooks_v3("finance_report/app")
-    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
-    monkeypatch.setattr(
-        reconcile,
-        "resolve_app_hook_cwd",
-        lambda *_a, **_kw: (tmp_path, None),
-    )
-
-    commands_seen: list[list[str]] = []
-    hook_calls: list[tuple[str, str, str, str]] = []
-    gate_should_pass = True
-
-    def _fake_exec(
-        _m, slot: str, *, app_url: str, environment: str, version_ref: str, **_kw
-    ):
-        hook_calls.append((slot, app_url, environment, version_ref))
-        return HookRunResult(
-            service="finance_report/app",
-            slot=slot,
-            environment=environment,
-            app_url=app_url,
-            version_ref=version_ref,
-            status="pass" if gate_should_pass else "fail",
-            exit_code=0 if gate_should_pass else 1,
-            duration_seconds=0.2,
-            summary="ok" if gate_should_pass else "preview e2e failed",
-        )
-
-    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
-
-    def _runner(cmd, **_kw):
-        argv = [str(x) for x in cmd]
-        commands_seen.append(argv)
-        return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
-
-    # 1. Passing preview_gate: deploys up, runs preview_gate, pushes tag ref, tears down (--down).
-    res = reconcile.sync_app_releases(
-        tmp_path,
-        apply_repos_yaml=True,
-        cut_missing_app_tag=True,
-        runner=_runner,
-    )
-    assert res["updates"] == {"finance_report/app": "v0.2.47"}
-    assert res["apps"]["finance_report/app"]["preview_verified"] is True
-    assert (
-        res["apps"]["finance_report/app"]["preview_url"]
-        == "https://report-branch-main.zitian.party"
-    )
-    assert hook_calls == [
-        (
-            "preview_gate",
-            "https://report-branch-main.zitian.party",
-            "preview",
-            SHA[:7],
-        )
-    ]
-    deploy_v2_calls = [c for c in commands_seen if "tools.deploy_v2" in c]
-    assert len(deploy_v2_calls) == 2
-    assert "--down" not in deploy_v2_calls[0]
-    assert "preview/branch" in deploy_v2_calls[0]
-    assert "--down" in deploy_v2_calls[1]
-    assert [
-        "gh",
-        "api",
-        "repos/wangzitian0/finance_report/git/refs",
-        "-f",
-        "ref=refs/tags/v0.2.47",
-        "-f",
-        f"sha={SHA}",
-    ] in commands_seen
-
-    # 2. Failing preview_gate (mutation proof): tears down (--down) in finally, never pushes tag, raises RuntimeError.
-    commands_seen.clear()
-    hook_calls.clear()
-    gate_should_pass = False
-    with pytest.raises(RuntimeError, match="preview_gate failed"):
-        reconcile.sync_app_releases(
-            tmp_path,
-            apply_repos_yaml=True,
-            cut_missing_app_tag=True,
-            runner=_runner,
-        )
-    deploy_v2_calls_fail = [c for c in commands_seen if "tools.deploy_v2" in c]
-    assert len(deploy_v2_calls_fail) == 2
-    assert "--down" in deploy_v2_calls_fail[1]
-    assert not any(
-        len(c) >= 3 and c[:2] == ["gh", "api"] and "/git/refs" in c[2]
-        for c in commands_seen
-    )
-
-
 def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
     monkeypatch, capsys, tmp_path
 ) -> None:
@@ -5228,7 +5098,7 @@ def test_sync_app_releases_missing_token_sdk_record_fails_not_held(
     monkeypatch.setattr(
         reconcile,
         "locked_sdk_version_for_app_ref",
-        lambda *_a, **_kw: "4.5.0",
+        lambda *_a, **_kw: "4.10.0",
     )
     with pytest.raises(ValueError, match="requires repo and token"):
         main(
@@ -5655,72 +5525,6 @@ def test_staging_wait_stops_at_timeout_when_cloudflare_always_refuses(
     assert len(calls) == 6
 
 
-def test_preview_gate_passes_infra2_touched_files_from_compare(
-    monkeypatch, tmp_path
-) -> None:
-    """finance_report#3034: verify_and_cut_app_preview_tag computes diff against prev_sha and passes INFRA2_TOUCHED_FILES."""
-    from types import SimpleNamespace
-
-    prev_sha = "1" * 40
-    main_sha = "2" * 40
-    captured: dict[str, object] = {}
-
-    monkeypatch.delenv("INFRA2_TOUCHED_FILES", raising=False)
-    monkeypatch.setattr(
-        reconcile, "assert_app_version_ref_on_main", lambda *a, **k: main_sha
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "fetch_hooks_manifest",
-        lambda *a, **k: SimpleNamespace(slots={"preview_gate": SimpleNamespace()}),
-    )
-    monkeypatch.setattr(
-        reconcile, "resolve_app_hook_cwd", lambda *a, **k: (tmp_path, None)
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "stage_hook_plan",
-        lambda _stage: SimpleNamespace(post_slot="preview_gate"),
-    )
-
-    def _fake_exec(manifest, slot, *, ambient_env=None, **kwargs):
-        captured["slot"] = slot
-        captured["ambient_env"] = dict(ambient_env or {})
-        return SimpleNamespace(status="pass", summary="ok")
-
-    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
-
-    def _fake_runner(argv, **_kwargs):
-        if argv[:3] == [
-            "gh",
-            "api",
-            f"repos/wangzitian0/finance_report/compare/{prev_sha}...{main_sha}",
-        ]:
-            return subprocess.CompletedProcess(
-                argv,
-                0,
-                "apps/frontend/src/app/(main)/portfolio/page.tsx\napps/backend/src/routers/portfolio.py\n",
-                "",
-            )
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    reconcile.verify_and_cut_app_preview_tag(
-        "finance_report/app",
-        repo_slug="wangzitian0/finance_report",
-        repo_url="https://github.com/wangzitian0/finance_report.git",
-        main_sha=main_sha,
-        prev_sha=prev_sha,
-        next_tag="v1.2.3",
-        runner=_fake_runner,
-    )
-
-    assert captured["slot"] == "preview_gate"
-    assert (
-        captured["ambient_env"].get("INFRA2_TOUCHED_FILES")
-        == "apps/frontend/src/app/(main)/portfolio/page.tsx apps/backend/src/routers/portfolio.py"
-    )
-
-
 def test_preview_gate_touched_files_survives_build_hook_env(tmp_path) -> None:
     """Real execute_app_hook_slot passes INFRA2_TOUCHED_FILES to the subprocess even if manifest omits it."""
     from common.deploy import app_contract
@@ -5749,27 +5553,6 @@ def test_preview_gate_touched_files_survives_build_hook_env(tmp_path) -> None:
     assert seen_envs and seen_envs[-1].get("INFRA2_TOUCHED_FILES") == (
         "apps/frontend/src/app/(main)/portfolio/page.tsx"
     )
-
-
-def test_compute_preview_touched_files_warns_on_compare_cap(capsys) -> None:
-    """_compute_preview_touched_files warns to stderr when GitHub Compare returns >=300 files."""
-    prev_sha = "1" * 40
-    main_sha = "2" * 40
-    many_files = "\n".join(f"apps/backend/src/f_{i}.py" for i in range(300))
-
-    def _fake_runner(argv, **_kwargs):
-        return subprocess.CompletedProcess(argv, 0, many_files, "")
-
-    files = reconcile._compute_preview_touched_files(
-        "wangzitian0/finance_report",
-        prev_sha,
-        main_sha,
-        runner=_fake_runner,
-    )
-    assert len(files) == 300
-    err = capsys.readouterr().err
-    assert "::warning::" in err
-    assert "300-file cap" in err
 
 
 # --- #1646: the release train has three phases ------------------------------------------

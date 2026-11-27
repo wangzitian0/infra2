@@ -2891,8 +2891,7 @@ FAILOPEN_ID = {
     "local-unpinned",
 }
 
-#: Env names the SDK reads outside the runtime contract: name -> (kind, SDK file that
-#: reads it). sdk_usage_census reads the same table.
+#: Env names the SDK reads outside the runtime contract: name -> (kind, SDK file that reads it).
 SDK_EXTRA_KEYS: dict[str, tuple[str, str]] = {
     "GITHUB_ACTIONS": ("helper", "_core.py"),
     "GITHUB_TOKEN": ("tool-token", "delivery.py"),

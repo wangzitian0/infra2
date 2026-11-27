@@ -95,6 +95,21 @@ def extra_dependency_globs(
     return list(m.get(service_key, []))
 
 
+def matches_service_dependencies(
+    service_key: str,
+    changed_files,
+    *,
+    manifest: dict[str, list[str]] | None = None,
+) -> bool:
+    """Return True when any path in ``changed_files`` matches ``service_key``'s manifest globs."""
+    globs = extra_dependency_globs(service_key, manifest)
+    return any(
+        fnmatch.fnmatch(str(path), pattern)
+        for path in changed_files
+        for pattern in globs
+    )
+
+
 def match_changed_services(
     changed_files, manifest: dict[str, list[str]] | None = None
 ) -> set[str]:
