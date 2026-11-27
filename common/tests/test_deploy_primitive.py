@@ -1216,6 +1216,13 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
     assert client.deployed  # the deploy still happened
 
 
+def test_real_truealpha_app_deployer_degrades_without_vault_token(monkeypatch):
+    """Real AppDeployer._ensure_vault_secret must propagate VaultAuthError (#2093)."""
+    monkeypatch.delenv("VAULT_TOKEN", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+    _real_ensure_generated_secrets("truealpha/app", "staging")  # must not raise
+
+
 # --- bash-parity: post-deploy effective-config verify ----------------------------
 
 

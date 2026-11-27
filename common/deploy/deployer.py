@@ -395,7 +395,7 @@ class Deployer:
             return True
 
         from common.security import supply as secrets_supply
-        from common.security.store import generate_password
+        from common.security.store import VaultSecrets, generate_password
 
         secrets_backend = cls.secrets_backend(env=effective_env)
         try:
@@ -404,6 +404,8 @@ class Deployer:
                 generators={cls.secret_key: lambda: generate_password(24)},
             )
             val = resolved.get(cls.secret_key)
+        except (VaultSecrets.VaultAuthError, VaultSecrets.VaultConnectionError):
+            raise
         except Exception as exc:  # noqa: BLE001
             error(f"Failed to store secret in Vault: {cls.secret_key} ({exc})")
             return False

@@ -8,7 +8,7 @@ import urllib.request
 from common.core.environ import get_env
 from common.console import error, header, info, success, warning
 from common.deploy.deployer import Deployer, make_tasks
-from common.security.store import generate_password
+from common.security.store import VaultSecrets, generate_password
 from common.core.facets import (
     ProbeFacet,
     PublicRouteFacet,
@@ -385,6 +385,8 @@ class AppDeployer(Deployer):
             )
             success(f"Vault: {key} verified")
             return True
+        except (VaultSecrets.VaultAuthError, VaultSecrets.VaultConnectionError):
+            raise
         except Exception as exc:  # noqa: BLE001
             error(f"Failed to store {key} in Vault: {exc}")
             return False
