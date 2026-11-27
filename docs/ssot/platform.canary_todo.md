@@ -163,7 +163,7 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 - Put metered external capabilities on dedicated SSO-protected endpoints exercised at low frequency by `tools/canary_verify.py` (never inside the 60 s probe loop).
 - Bound LLM summary runs with `UsageLimits`, `create_llm_agent` default retry wiring (vendor `max_retries=0`), and `redact_llm_error`.
 - Keep the probe target, the compose container name, and the app route equal. `test_probe_target_matches_the_compose_container_port_and_app_route` guards this.
-- Keep the Dockerfile installing `infra2-sdk` with explicit capability extras (`--extra fastapi --extra http --extra postgres --extra s3 --extra llm`) from `uv.lock`.
+- Keep the Dockerfile installing `infra2-sdk` with explicit capability extras (`--extra fastapi --extra postgres --extra s3 --extra llm`) from `uv.lock`.
 
 ### Do not
 - Do not route `/api/canary/status` without SSO. `test_only_the_health_path_is_served_without_sso` evaluates the real Traefik rules.
