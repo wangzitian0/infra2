@@ -478,6 +478,9 @@ compose_file="$code_dir/bootstrap/06.iac_runner/compose.yaml"
 traefik_override="$compose_root/traefik.override.yml"
 
 mkdir -p "$compose_root" "$data_path/workspace"
+if [ ! -e "$data_path/workspace/infra2/.git" ]; then
+  git clone --no-recurse-submodules https://github.com/wangzitian0/infra2.git "$data_path/workspace/infra2"
+fi
 if [ ! -e "$code_dir/.git" ] && [ -n "$control_code_dir" ] && [ -d "$control_code_dir/.git" ]; then
   mkdir -p "$code_dir" && cp -a "$control_code_dir/." "$code_dir/"
 fi
