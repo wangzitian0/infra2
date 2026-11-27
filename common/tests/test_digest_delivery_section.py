@@ -114,6 +114,18 @@ def test_a_run_without_a_post_record_is_a_failed_run() -> None:
     assert summarize_delivery(only_pre)["staging"]["all"]["passed"] == 0
 
 
+def test_a_production_run_passes_on_its_marker_check_without_a_post_record() -> None:
+    promoted = [
+        _rec(PROD, "pre", 1, ("app:x",), 5),
+        _rec(PROD, "operation", 1, ("app:x",), 60, passed=("production_marker",)),
+    ]
+    stopped = [
+        _rec(PROD, "operation", 2, ("app:x",), 60, failed=("production_marker",))
+    ]
+    group = summarize_delivery(promoted + stopped)["prod"]["all"]
+    assert (group["runs"], group["passed"]) == (2, 1)
+
+
 def test_records_of_other_envs_are_left_out() -> None:
     assert (
         summarize_delivery([_rec("github_ci.merge_authority", "post", 1, (), 5)]) == {}

@@ -420,10 +420,14 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
 - **Delivery section (#1645).** The weekly and monthly digest has a section "Delivery". For each env (`preview`, `staging`,
   `prod`) and each change kind (`app`, `sdk`, `infra`, `harness`) it gives the runs, the pass rate with a Wilson 95% interval,
   p50 and p90 of the `operation` and `post` seconds, and the 3 check ids that fail most. A run is the records of one env
-  that one workflow run wrote; it passes when it has a `post` record and every record passes. The source is
+  that one workflow run wrote; it passes when every record passes and it has a `post` record. A production promotion
+  writes no `post` record: it passes on the `production_marker` check of its `operation` record. The source is
   `tools/stage_records.py list` (reader: `common/deploy/stage_record_reader.py`; artifacts `stage-<env>-<phase>-<subject>`; see `ops.pipeline.md` §4.3), passed to
   `common/observability/digest.py` by `tools/watchdog_weekly_digest.py`; the maths is `common/observability/delivery_section.py`.
   A failed read shows as one line "stage records unavailable" and the digest still goes out.
+- **Delivery board (#1644 Q1).** Each day at 21:00 UTC+8, `tools/delivery_board.py` sends one card with five delivery
+  numbers and writes one SigNoz log record (`service.name = infra2-delivery-board`). [ops.pipeline.md](./ops.pipeline.md)
+  section 2.0 defines the numbers and section 4.2 the card and the record.
 - **账本文件的完整性**:类型不对的合法 JSON 与非法 JSON 一样视为损坏,移到 `*.corrupt.json` 后重新开始(否则每轮都会抛错、账本静默冻结);
   写入先 `fsync` 临时文件再原子 `rename`。
 - **禁止**:把 `fail>0` 计入 100%/perfect · 信任畸形 day/signal/outage 抬高可用率 · 空账本报 100% · 在 Worker 里累加。

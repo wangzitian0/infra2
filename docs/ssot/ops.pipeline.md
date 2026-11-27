@@ -98,6 +98,27 @@ Budgets come from the SDK `stages.yaml` (`src/infra2_sdk/data/stages.yaml`, `bud
 8. Alert is event-driven. Report is time-driven ([ops.observability.md](./ops.observability.md) section 2, `docs/ssot/watchdog-signals.yaml`).
 9. Find the cause, Periodic report and Alert and watch read records and telemetry. They never deploy.
 
+**Delivery board: five numbers, reported each day**
+
+Owner direction of 2026-11-27: thin gates; make each dependency explicit early and smoke it; write fewer tests; the board shows the measured state. The board is a report (rule 8). It gates nothing.
+
+| Number | Source | Definition |
+|---|---|---|
+| Staging pass rate | the run list of `reconcile-iac-inputs.yml` | Passed runs over the newest 20 finished tag-push runs. A cancelled run is not counted. |
+| Merge to production | the same run list, the `production/<tag>` markers, the merged PRs | Hours from the merge of a PR to the end of the first green `PROD` run of a marked tag that contains it: p50 and p90 over the promotions of the last 7 days. Also the PRs that wait now and the age of the oldest one. |
+| New App from zero to a green Staging | a timed run | Not measured until the first timed run. |
+| Version-only PRs | the merged PRs of the last 7 days | Share of the PRs whose every changed path is `harness/repos.yaml`, `pyproject.toml`, `uv.lock` or a path under `repos/`. |
+| Test lines divided by code lines | the tracked `*.py` files outside `repos/` | Lines of the test files divided by lines of the other files. |
+
+`GOALS` in `common/observability/delivery_board.py` holds the goal of each number. The card prints each goal next to its number. Section 4.2 describes the daily card and the SigNoz record.
+
+Rules 10 to 13 are the frame of that direction. They are targets. Slices Q2 to Q4 of #1644 make them true.
+
+10. Each stage asks one question, one time. PR: is the change consistent, and is each dependency ready? Train: does each changed unit start and serve (`smoke`)? Post: is the App good? Prod: the owner approves, and `smoke` runs.
+11. One train runs at a time. A bot cuts the tag. The tag carries each merge and each pin move since the last tag. Today each session cuts a tag (rule 5).
+12. A red post check stops only the promotion of its own App.
+13. A test stays only when it protects a cross-repository contract or the production reservation. The board proves a deletion.
+
 **Hook grid: 16 cells, two owners, one policy table**
 
 A cell is one stage and one phase. A stage moves the artifact one step. Pre answers "can it move?". Post answers "is the result good?".
@@ -456,10 +477,17 @@ Each staging soak and each production promotion writes three records: `pre`, `op
   then passed checks, at most 12 lines, with seconds, env, tag and run URL. The `alert` job of the reconcile run downloads the records of the three jobs and shows one card (`show_run_card`). In Feishu webhook mode the card step prints `::warning::`; the records
   are still written and the run does not fail.
 - **Summary.** `write_summary` renders the job summary from the records. It builds no line from the plan.
-- **Reminder.** At 21:00 UTC+8 the job `digest` of `ops-checks.yml` runs `tools/promotion_reminder.py`. It sends one card when
+- **Reminder.** At 21:00 UTC+8 the job `digest` of `watchdog.yml` runs `tools/promotion_reminder.py`. It sends one card when
   a release tag has a passing staging `post` record and no production `post` record or marker. The card names the tag, the
   record and the promote command. It dispatches nothing. The job `digest` runs it because that job already holds the Feishu
   secrets and is classified in `common/gate/production_contract.py`.
+- **Delivery board (#1644 Q1).** In the same job (`digest` of `watchdog.yml`) and at the same time, `tools/delivery_board.py` runs before the reminder.
+  It computes the five numbers of section 2.0 from the run list of `reconcile-iac-inputs.yml`, the `production/` markers,
+  the merged PRs and the tracked Python files. It reads no stage record: it needs about 10 API calls. It sends one card to
+  the reports chat. It posts one OTLP log record to the public ingest `https://otel.${INTERNAL_DOMAIN}/v1/logs`. In SigNoz
+  the record has `service.name = infra2-delivery-board`, `deployment.environment.name = ci` and one `delivery.*` attribute
+  for each measured number. The card states whether SigNoz took the record. A failed send prints `::warning::` and the run
+  does not fail. It dispatches nothing.
 
 ---
 

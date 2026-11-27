@@ -3,9 +3,8 @@
 ``summarize_delivery`` turns stage records (the dicts of ``tools.stage_records list --json``)
 into counts for each env (``preview``, ``staging``, ``prod``) and for each change kind (the
 prefix of ``units``: ``app``, ``sdk``, ``infra``, ``harness``). A run is the records of one
-env that one workflow run wrote. A run passes when it has a ``post`` record and every record
-of it passes. ``delivery_lines`` renders the summary as text, and the digest message and the
-digest card both use those lines.
+env that one workflow run wrote. ``run_passes`` judges a run. ``delivery_lines`` renders the
+summary as text, and the digest message and the digest card both use those lines.
 """
 
 from __future__ import annotations
@@ -20,6 +19,23 @@ ENVS = ("preview", "staging", "prod")
 KINDS = ("app", "sdk", "infra", "harness")
 TOP_FAILING = 3
 WILSON_Z = 1.96  # two-sided 95%
+#: The last check of a production promotion (``production/<tag>``).
+MARKER_CHECK = "production_marker"
+
+
+def run_passes(run: Iterable[Mapping[str, Any]]) -> bool:
+    """True when the run reached its last step and every record of it passes.
+
+    The last step is the ``post`` record. A production promotion writes no ``post``
+    record: its last step is the ``production_marker`` check of the ``operation`` record.
+    """
+    records = list(run)
+    done = any(r["phase"] == "post" for r in records) or any(
+        c["name"] == MARKER_CHECK and c["ok"] is True
+        for r in records
+        for c in r["checks"]
+    )
+    return done and all(r["verdict"] == "pass" for r in records)
 
 
 def wilson_interval(
@@ -53,12 +69,7 @@ def _seconds(record: Mapping[str, Any]) -> float:
 
 
 def _group(runs: list[list[Mapping[str, Any]]]) -> dict[str, Any]:
-    passed = sum(
-        1
-        for run in runs
-        if any(r["phase"] == "post" for r in run)
-        and all(r["verdict"] == "pass" for r in run)
-    )
+    passed = sum(map(run_passes, runs))
     failing = Counter(
         c["name"]
         for run in runs
