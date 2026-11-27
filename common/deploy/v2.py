@@ -1350,7 +1350,10 @@ def _handle_teardown(args: argparse.Namespace) -> int:
             sync_spec=sync_spec,
         )
         parsed = _runner_sync_detail(final)
-        cleared = bool(parsed.get("containers_cleared", True))
+        runner_status = str((final or {}).get("status", "")).lower()
+        cleared = runner_status == "completed" and bool(
+            parsed.get("containers_cleared", False)
+        )
         print(
             json.dumps(
                 {

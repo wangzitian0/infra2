@@ -668,12 +668,17 @@ def _supply_fixed_service_secrets(service: str, env_name: str) -> None:
         )
 
 
-def run_sync_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]:
+def run_sync_spec(
+    spec: dict[str, Any],
+    *,
+    client: Any = None,
+    expected_env: str | None = None,
+) -> dict[str, Any]:
     """Execute one unified SyncPipeline v2 fixed/preview spec for ``iac-runner``."""
     from common.core.environ import infra_domain
     from common.deploy.dokploy_client import get_dokploy
 
-    mode = str(spec.get("mode") or "fixed").strip().lower()
+    mode = str(spec.get("mode") or "").strip().lower()
     action = str(spec.get("action") or "up").strip().lower()
     service = str(spec.get("service") or "finance_report/app").strip()
     domain = str(spec.get("domain") or infra_domain()).strip()
@@ -689,8 +694,20 @@ def run_sync_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]
         injected_template = True
     try:
         if mode == "fixed":
-            env_name = str(spec.get("env") or "staging").strip()
+            env_name = str(spec.get("env") or "").strip()
+            if not env_name:
+                raise ValueError("SyncPipeline fixed spec requires non-empty 'env'")
             deploy_env = "production" if env_name == "prod" else env_name
+            if expected_env is not None:
+                canonical_expected = (
+                    "production"
+                    if expected_env.strip() == "prod"
+                    else expected_env.strip()
+                )
+                if deploy_env != canonical_expected:
+                    raise ValueError(
+                        f"SyncPipeline fixed env {env_name!r} disagrees with expected_env {expected_env!r}"
+                    )
             _supply_fixed_service_secrets(service, deploy_env)
             from common.deploy.steps.app_rollout import (
                 AppRolloutDeps,
@@ -722,12 +739,25 @@ def run_sync_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]
                     repo=spec.get("repo"),
                 ),
             )
-            payload = asdict(plan)
-            payload["mode"] = "fixed"
-            payload["action"] = "up"
-            return payload
+            return {
+                "mode": "fixed",
+                "action": "up",
+                "env": plan.env,
+                "sha": plan.sha,
+                "compose_id": plan.compose_id,
+                "data": plan.data,
+                "rollback_class": plan.rollback_class,
+                "rollback_attempted": plan.rollback_attempted,
+                "rollback_succeeded": plan.rollback_succeeded,
+                "rollback_error": plan.rollback_error,
+                "rollback_skipped_reason": plan.rollback_skipped_reason,
+            }
 
         if mode == "preview":
+            if expected_env is not None and expected_env.strip() != "preview":
+                raise ValueError(
+                    f"SyncPipeline preview mode disagrees with expected_env {expected_env!r}"
+                )
             kind = str(spec.get("alias_kind") or "branch")
             value = spec.get("alias_value")
             if action == "down":
@@ -785,7 +815,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         spec = json.loads(raw)
-        result = run_sync_spec(spec)
+        expected_env = os.environ.get("IAC_SYNC_EXPECTED_ENV", "").strip() or None
+        result = run_sync_spec(spec, expected_env=expected_env)
     except Exception as exc:  # noqa: BLE001
         print(f"SyncPipeline failed: {exc}", file=sys.stderr)
         return 1

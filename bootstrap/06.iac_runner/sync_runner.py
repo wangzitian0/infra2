@@ -917,9 +917,27 @@ def run_sync_pipeline_spec(
     python: str | None = None,
 ) -> dict[str, Any]:
     """Execute unified ``common.deploy.sync_pipeline`` for one app/preview spec."""
+    mode = str(sync_spec.get("mode") or "").strip().lower()
+    if deploy_env == "preview":
+        if mode != "preview":
+            raise ValueError(
+                f"preview runner deploy requires sync_spec.mode='preview', got {mode!r}"
+            )
+    else:
+        if mode != "fixed":
+            raise ValueError(
+                f"{deploy_env} runner deploy requires sync_spec.mode='fixed', got {mode!r}"
+            )
+        raw_spec_env = str(sync_spec.get("env") or "").strip().lower()
+        canonical_spec_env = "production" if raw_spec_env == "prod" else raw_spec_env
+        if canonical_spec_env != deploy_env:
+            raise ValueError(
+                f"sync_spec.env {raw_spec_env!r} does not match deploy_env {deploy_env!r}"
+            )
     env_vars = {
         **os.environ,
         **deploy_env_overrides(deploy_env),
+        "IAC_SYNC_EXPECTED_ENV": deploy_env,
         "IAC_SYNC_SPEC": json.dumps(sync_spec, separators=(",", ":")),
     }
     if deploy_ref:

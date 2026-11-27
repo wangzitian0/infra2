@@ -987,6 +987,90 @@ def _parse_json_object(raw_body: bytes) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _validate_sync_spec(
+    raw_spec: Any,
+    *,
+    env: str,
+    action: str,
+    services: list[str] | None,
+) -> tuple[dict[str, Any] | None, tuple[dict[str, Any], int] | None]:
+    """Validate optional sync_spec against the authenticated top-level env, action, and services."""
+    if raw_spec is None:
+        return None, None
+    if not isinstance(raw_spec, dict):
+        return None, ({"error": "sync_spec must be a JSON object"}, 400)
+    spec = dict(raw_spec)
+    if not services or len(services) != 1:
+        return None, (
+            {"error": "sync_spec requires exactly one target service in services"},
+            400,
+        )
+    if (
+        "service" in spec
+        and str(spec.get("service") or "").strip() != services[0].strip()
+    ):
+        return None, (
+            {
+                "error": f"sync_spec.service {spec.get('service')!r} does not match services[0] {services[0]!r}"
+            },
+            400,
+        )
+    mode = str(spec.get("mode") or "").strip().lower()
+    if env == "preview":
+        if mode != "preview" or action not in ("up", "down"):
+            return None, (
+                {
+                    "error": "preview env requires sync_spec.mode='preview' and action in ('up', 'down')"
+                },
+                403,
+            )
+        spec_action = str(spec.get("action") or action).strip().lower()
+        if spec_action != action:
+            return None, (
+                {
+                    "error": f"sync_spec.action {spec_action!r} does not match action {action!r}"
+                },
+                400,
+            )
+        if "env" in spec and str(spec.get("env") or "").strip().lower() not in (
+            "",
+            "preview",
+        ):
+            return None, ({"error": "sync_spec.env cannot override preview env"}, 403)
+        return spec, None
+
+    if mode != "fixed" or action not in ("sync", "up"):
+        return None, (
+            {
+                "error": "fixed env requires sync_spec.mode='fixed' and action in ('sync', 'up')"
+            },
+            403 if mode == "fixed" else 400,
+        )
+    spec_action = str(spec.get("action") or "up").strip().lower()
+    if spec_action != "up":
+        return None, (
+            {"error": f"sync_spec.action {spec_action!r} must be 'up' for fixed env"},
+            400,
+        )
+    raw_spec_env = str(spec.get("env") or "").strip().lower()
+    if raw_spec_env not in ("staging", "prod", "production"):
+        return None, (
+            {
+                "error": "sync_spec.env is required and must be staging, prod, or production"
+            },
+            400,
+        )
+    canonical_spec_env = "production" if raw_spec_env == "prod" else raw_spec_env
+    if canonical_spec_env != env:
+        return None, (
+            {
+                "error": f"sync_spec.env {raw_spec_env!r} is forbidden for runner env {env!r}"
+            },
+            403,
+        )
+    return spec, None
+
+
 class _RequestBodyError(Exception):
     def __init__(self, status_code: int, message: str) -> None:
         self.status_code = status_code
@@ -1065,10 +1149,11 @@ def _process_deploy_request(
     action = payload.get("action") or "sync"
     if action not in DEPLOY_ACTIONS:
         return {"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}, 400
-    raw_sync_spec = payload.get("sync_spec")
-    if raw_sync_spec is not None and not isinstance(raw_sync_spec, dict):
-        return {"error": "sync_spec must be a JSON object"}, 400
-    sync_spec = dict(raw_sync_spec) if raw_sync_spec is not None else None
+    sync_spec, spec_err = _validate_sync_spec(
+        payload.get("sync_spec"), env=env, action=action, services=services
+    )
+    if spec_err is not None:
+        return spec_err
     try:
         version_ref = validate_version_ref(
             payload.get("version_ref"),
@@ -1100,6 +1185,7 @@ def _process_deploy_request(
                         services,
                         version_ref=version_ref,
                         action=action,
+                        sync_spec=sync_spec,
                     ),
                     202,
                 )
@@ -1299,10 +1385,11 @@ def _process_status_request(
     action = payload.get("action") or "sync"
     if action not in DEPLOY_ACTIONS:
         return {"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}, 400
-    raw_sync_spec = payload.get("sync_spec")
-    if raw_sync_spec is not None and not isinstance(raw_sync_spec, dict):
-        return {"error": "sync_spec must be a JSON object"}, 400
-    sync_spec = dict(raw_sync_spec) if raw_sync_spec is not None else None
+    sync_spec, spec_err = _validate_sync_spec(
+        payload.get("sync_spec"), env=env, action=action, services=services
+    )
+    if spec_err is not None:
+        return spec_err
     try:
         version_ref = validate_version_ref(
             payload.get("version_ref"),

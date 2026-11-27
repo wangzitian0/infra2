@@ -2173,7 +2173,12 @@ def test_sync_pipeline_up_action_is_its_own_deployment_and_reaches_the_sync(
         )
 
     monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync)
-    spec = {"mode": "fixed", "action": "up", "service": "finance_report/app"}
+    spec = {
+        "mode": "fixed",
+        "action": "up",
+        "env": "staging",
+        "service": "finance_report/app",
+    }
     payload = {
         "env": "staging",
         "ref": DEPLOY_SHA,
@@ -2231,7 +2236,12 @@ def test_run_sync_pipeline_spec_passes_env_and_executes_module(
         return types.SimpleNamespace(returncode=0, stdout='{"ok": true}', stderr="")
 
     monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
-    spec = {"mode": "fixed", "action": "up", "service": "finance_report/app"}
+    spec = {
+        "mode": "fixed",
+        "action": "up",
+        "env": "staging",
+        "service": "finance_report/app",
+    }
     out = sync_runner.run_sync_pipeline_spec(spec, tmp_path, "staging")
     assert out["success"] is True
     assert captured["args"][1:] == [
@@ -2252,7 +2262,12 @@ def test_async_up_action_response_id_matches_the_status_lookup(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
-    spec = {"mode": "fixed", "action": "up", "service": "finance_report/app"}
+    spec = {
+        "mode": "fixed",
+        "action": "up",
+        "env": "staging",
+        "service": "finance_report/app",
+    }
     request_json = {
         "env": "staging",
         "ref": DEPLOY_SHA,
@@ -2525,3 +2540,82 @@ def test_diagnose_failure_classifies_dokploy_deployment_error_with_log_tail(
     assert "502 Bad Gateway" in diagnostic["summary"]
     assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["fix_hint"]
     assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["next_action"]
+
+
+def test_webhook_rejects_sync_spec_env_escalation_and_preserves_wait_in_flight_id(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    webhook_server = _load_module(
+        "webhook_sync_spec_guard", IAC_RUNNER / "webhook_server.py", monkeypatch
+    )
+    monkeypatch.setenv("IAC_RUNNER_ALLOWED_ENVS", "staging")
+    ref = "a" * 40
+
+    # Escalation attempt: top-level env='staging' with sync_spec targeting prod must 403.
+    body, code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "staging",
+            "ref": ref,
+            "action": "up",
+            "services": ["finance_report/app"],
+            "sync_spec": {
+                "mode": "fixed",
+                "env": "prod",
+                "service": "finance_report/app",
+            },
+        },
+        monkeypatch,
+    )
+    assert code == 403
+    assert "forbidden for runner env" in body["error"]
+
+    # Mode mismatch under preview env must 403.
+    monkeypatch.setenv("IAC_RUNNER_ALLOWED_ENVS", "staging")
+    body, code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "preview",
+            "ref": ref,
+            "action": "up",
+            "services": ["finance_report/app"],
+            "sync_spec": {"mode": "fixed", "env": "production"},
+        },
+        monkeypatch,
+    )
+    assert code == 403
+
+    # Duplicate in-flight wait=True must include sync_spec in its deployment_id.
+    sync_spec = {
+        "mode": "preview",
+        "action": "up",
+        "service": "finance_report/app",
+        "alias_kind": "pr",
+        "alias_value": "5",
+    }
+    key = webhook_server._deployment_key(
+        "preview", ref, ["finance_report/app"], "5", "up", sync_spec=sync_spec
+    )
+    webhook_server._in_flight_deploys.add(key)
+    try:
+        dup_body, dup_code = _post_signed(
+            webhook_server,
+            "/deploy",
+            {
+                "env": "preview",
+                "ref": ref,
+                "action": "up",
+                "wait": True,
+                "version_ref": "5",
+                "services": ["finance_report/app"],
+                "sync_spec": sync_spec,
+            },
+            monkeypatch,
+        )
+        assert dup_code == 202
+        assert dup_body["deployment_id"] == webhook_server._deployment_id(key)
+    finally:
+        webhook_server._in_flight_deploys.discard(key)

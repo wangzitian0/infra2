@@ -1256,6 +1256,30 @@ def test_cli_down_exits_nonzero_when_slot_containers_survive(monkeypatch, capsys
     assert json.loads(capsys.readouterr().out)["containers_cleared"] is False
 
 
+def test_cli_down_via_iac_runner_fails_closed_when_runner_fails_or_empty(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv("IAC_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(
+        dv2, "resolve_iac_runner_url", lambda env: "https://runner.zp.io"
+    )
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, repo=None: "a" * 40)
+    monkeypatch.setattr(
+        dv2,
+        "_trigger_and_poll",
+        lambda *a, **kw: (
+            {"status": "started"},
+            {"status": "failed", "results": [{"stdout": ""}]},
+        ),
+    )
+
+    rc = dv2.main(
+        ["--type", "preview/pr", "--version-ref", "5", "--domain", "zp.io", "--down"]
+    )
+    assert rc == 1
+    assert json.loads(capsys.readouterr().out)["containers_cleared"] is False
+
+
 def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     # --down resolves the SAME alias (kind from --type, value from --version-ref) and
     # routes to the preview backend's down(); it never resolves a ref or deploys.
