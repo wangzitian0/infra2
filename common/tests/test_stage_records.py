@@ -1430,3 +1430,22 @@ def test_staging_provider_regression_writer_and_scheduled_audit_stage_record(
     assert f"STAGE_RECORD_POST={expected_name}" in github_env.read_text(
         encoding="utf-8"
     )
+
+
+def test_first_diagnostic_line_skips_multiline_warning_block() -> None:
+    """Multi-line pytest warnings on stderr do not hide the real error line on stdout."""
+    from common.deploy.stage_hooks import _first_diagnostic_line
+
+    stderr = (
+        "/tmp/site-packages/pytest_asyncio/plugin.py:306: PytestDeprecationWarning: "
+        'The configuration option "asyncio_default_fixture_loop_scope" is unset.\n'
+        "The event loop scope for asynchronous fixtures will default to fixture.\n"
+        "  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\n"
+    )
+    stdout = (
+        "--- stdout ---\nsome setup output\nE   Failed: PDF fixture generation failed\n"
+    )
+    assert (
+        _first_diagnostic_line(stderr, stdout, "run exited with code 1")
+        == "E   Failed: PDF fixture generation failed"
+    )

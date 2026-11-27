@@ -40,21 +40,6 @@ on:
         description: "Optional base domain override (defaults to service domain or INTERNAL_DOMAIN)"
         required: false
         default: ""
-      staging_validated:
-        description: "prod only — assert this code already passed staging"
-        required: false
-        type: boolean
-        default: false
-      code_reviewed:
-        description: "prod only — positive RL-DATA-1 review signal (required for prod data)"
-        required: false
-        type: boolean
-        default: false
-      break_glass:
-        description: "prod only — bypass staging-first (emergency)"
-        required: false
-        type: boolean
-        default: false
       bootstrap:
         description: "staging/prod app only — allow version_ref not matching harness/repos.yaml"
         required: false
@@ -128,9 +113,6 @@ jobs:
           VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || '' }}
           IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || '' }}
           DOMAIN_INPUT: ${{ github.event.inputs.domain || '' }}
-          STAGING_VALIDATED_INPUT: ${{ github.event.inputs.staging_validated }}
-          CODE_REVIEWED_INPUT: ${{ github.event.inputs.code_reviewed }}
-          BREAK_GLASS_INPUT: ${{ github.event.inputs.break_glass }}
           BOOTSTRAP_INPUT: ${{ github.event.inputs.bootstrap }}
           TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
         run: |
@@ -148,9 +130,6 @@ jobs:
                 --timeout "$TIMEOUT_INPUT")
           [[ -n "$IAC_REF_INPUT" ]] && args+=(--iac-ref "$IAC_REF_INPUT")
           [[ -n "$DOMAIN_INPUT" ]] && args+=(--domain "$DOMAIN_INPUT")
-          [[ "$STAGING_VALIDATED_INPUT" == "true" ]] && args+=(--staging-validated)
-          [[ "$CODE_REVIEWED_INPUT" == "true" ]] && args+=(--code-reviewed)
-          [[ "$BREAK_GLASS_INPUT" == "true" ]] && args+=(--break-glass)
           [[ "$BOOTSTRAP_INPUT" == "true" ]] && args+=(--bootstrap)
           echo "deploy_v2 ${args[*]}"
           set +e
@@ -193,19 +172,12 @@ jobs:
           git fetch origin main && git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Configure SSH key for IaC Runner bootstrap update
-        env:
-          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
-            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required to update the IaC Runner bootstrap."
-            exit 1
-          fi
-
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
-          chmod 600 ~/.ssh/infra2_bootstrap
+        uses: ./.github/actions/ssh-setup
+        with:
+          private-key: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+          key-name: infra2_bootstrap
+          required: "true"
+          purpose: "IaC Runner bootstrap update"
 
       - name: Deploy IaC Runner bootstrap changes
         env:
@@ -226,7 +198,7 @@ jobs:
 
           ssh_port="${INFRA2_WATCHDOG_SSH_PORT:-22}"
           ssh \
-            -i ~/.ssh/infra2_bootstrap \
+            -i "${INFRA2_WATCHDOG_SSH_KEY_PATH}" \
             -p "$ssh_port" \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \

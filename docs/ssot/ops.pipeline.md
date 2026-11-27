@@ -703,24 +703,18 @@ git checkout main && git pull && git tag v1.3.1 && git push origin v1.3.1
 # staging soak 后,显式 promote 平台服务到 prod
 # (紧接着前,`uv run --locked python -m tools.harness prod-queue` 必须退出 0):
 gh workflow run reconcile-iac-inputs.yml -f after=v1.3.1 -f promote_prod=true
-# app 走统一前门、钉同一 tag(prod 仍 deny-by-default):
-gh workflow run deploy.yml -f service="finance_report/app" -f type="prod" \
-  -f version_ref="v1.3.1" -f iac_ref="v1.3.1" -f staging_validated=true -f code_reviewed=true
+# staging 环境按需单服务重放:
+gh workflow run deploy.yml -f service="finance_report/app" -f type="staging" \
+  -f version_ref="v1.3.1" -f iac_ref="v1.3.1"
 ```
 
 ### 7.1 单命令回滚 SOP (#569)
 
-当固定环境部署后需要立即回滚到上一个已知正常版本(`v<prev>`)时,执行单命令重新晋升该历史 release tag(无需重建镜像):
+当固定环境部署后需要立即回滚到上一个已知正常版本(`v<prev>`)时,执行 `reconcile-iac-inputs.yml` 重新晋升该历史 release tag(无需重建镜像):
 
 ```bash
-# 统一前门单命令回滚(将 <service>、<type>、v<prev> 替换为目标服务、环境与上一正常 tag):
-gh workflow run deploy.yml \
-  -f service="truealpha/app" \
-  -f type="prod" \
-  -f version_ref="v<prev>" \
-  -f iac_ref="v<prev>" \
-  -f staging_validated=true \
-  -f code_reviewed=true
+# 统一发布火车单命令回滚(将 v<prev> 替换为上一正常 release tag):
+gh workflow run reconcile-iac-inputs.yml -f after="v<prev>" -f promote_prod=true
 ```
 
 ---

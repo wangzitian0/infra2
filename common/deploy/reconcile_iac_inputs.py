@@ -46,7 +46,6 @@ from common.core.constants import (
     APP_SDK_LOCKS,
     APP_SOURCES,
     REPO_ROOT,
-    SERVICE_TO_SUBMODULE_PATH,
     load_app_sdk_locks,
 )
 from common.core.registry import domain_for_service, service_attrs
@@ -1079,7 +1078,6 @@ def sync_app_releases(
     *,
     services: Sequence[str] = (),
     apply_repos_yaml: bool = False,
-    sync_gitlinks: bool = False,
     create_pr: bool = False,
     pr_branch: str = "chore/sync-app-releases",
     dry_run: bool = False,
@@ -1161,7 +1159,6 @@ def sync_app_releases(
         }
 
     repos_yaml_updated = False
-    gitlinks_updated: list[str] = []
     manifests_updated: list[str] = []
     next_infra_tag = ""
     pr_created = False
@@ -1179,24 +1176,6 @@ def sync_app_releases(
                 root=repo_root,
                 fetcher=manifest_fetcher,
             )
-        if sync_gitlinks:
-            for service, sha in sorted(target_shas.items()):
-                sub_path = SERVICE_TO_SUBMODULE_PATH.get(service)
-                if not sub_path:
-                    continue
-                updated = runner(
-                    [
-                        "git",
-                        "update-index",
-                        "--cacheinfo",
-                        f"160000,{sha},{sub_path}",
-                    ],
-                    cwd=repo_root,
-                    capture_output=True,
-                    text=True,
-                )
-                if updated.returncode == 0:
-                    gitlinks_updated.append(sub_path)
 
     if updates:
         try:
@@ -1209,7 +1188,7 @@ def sync_app_releases(
             + ", ".join(f"{svc}={tag}" for svc, tag in sorted(updates.items()))
             + ")"
         )
-        paths_to_add = [HARNESS_REPOS_PATH, *manifests_updated, *gitlinks_updated]
+        paths_to_add = [HARNESS_REPOS_PATH, *manifests_updated]
         if create_pr and repos_yaml_updated and not dry_run:
             body_lines = [
                 "Automated pull-based App release train sync (#1416).",
@@ -1246,7 +1225,6 @@ def sync_app_releases(
         "updates": updates,
         "needs_update": bool(updates),
         "repos_yaml_updated": repos_yaml_updated,
-        "gitlinks_updated": gitlinks_updated,
         "manifests_updated": manifests_updated,
         "next_infra_tag": next_infra_tag,
         "pr_branch": pr_branch if create_pr else "",
@@ -4227,11 +4205,6 @@ def main(argv: list[str] | None = None) -> int:
         help="write updated release_tag values to harness/repos.yaml during --sync-app-releases",
     )
     parser.add_argument(
-        "--sync-gitlinks",
-        action="store_true",
-        help="update submodule gitlinks alongside harness/repos.yaml during --sync-app-releases",
-    )
-    parser.add_argument(
         "--create-pr",
         action="store_true",
         help="push updated harness/repos.yaml to a branch and open/update a PR (#1416)",
@@ -4329,7 +4302,6 @@ def main(argv: list[str] | None = None) -> int:
             repo_root,
             services=args.sync_service,
             apply_repos_yaml=args.apply_repos_yaml,
-            sync_gitlinks=args.sync_gitlinks,
             create_pr=args.create_pr,
             pr_branch=args.pr_branch,
             dry_run=args.dry_run,

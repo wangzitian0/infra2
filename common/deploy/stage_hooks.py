@@ -246,17 +246,46 @@ _WARNING_LINE_MARKERS = (
 )
 
 
+_DIAGNOSTIC_PREFIXES = (
+    "FAILED ",
+    "ERROR ",
+    "E   ",
+    "AssertionError",
+    "RuntimeError",
+)
+
+
 def _first_diagnostic_line(
     stderr: str | bytes | None, stdout: str | bytes | None, fallback: str
 ) -> str:
     """Return first non-warning diagnostic line for CheckVerdict.detail."""
-    raw = _strip_stream(stderr) or _strip_stream(stdout) or fallback
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    for line in lines:
-        if any(marker in line for marker in _WARNING_LINE_MARKERS):
-            continue
-        return line
-    return lines[0] if lines else fallback
+    candidates: list[str] = []
+    all_lines: list[str] = []
+    for stream in (stderr, stdout):
+        text = _strip_stream(stream)
+        in_warning = False
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            all_lines.append(line)
+            if any(marker in line for marker in _WARNING_LINE_MARKERS):
+                in_warning = "warnings.warn(" not in line
+                continue
+            if in_warning:
+                if line.startswith(_DIAGNOSTIC_PREFIXES) or line.startswith(
+                    "Traceback"
+                ):
+                    in_warning = False
+                else:
+                    continue
+            candidates.append(line)
+    for line in candidates:
+        if line.startswith(_DIAGNOSTIC_PREFIXES):
+            return line
+    if candidates:
+        return candidates[0]
+    return all_lines[0] if all_lines else fallback
 
 
 def _strip_stream(v: str | bytes | None) -> str:

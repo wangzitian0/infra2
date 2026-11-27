@@ -205,13 +205,13 @@ def _resolve_changed_test_targets(
                 if Path(candidate).name.startswith(f"test_{stem}_"):
                     selected.add(candidate)
 
-        if rel.startswith(("truealpha/", "contracts/truealpha/")):
+        if rel.startswith("truealpha/"):
             for candidate in all_tests:
                 if "truealpha" in Path(candidate).name:
                     selected.add(candidate)
             if "common/tests/test_deployer_contract_light.py" in all_tests_set:
                 selected.add("common/tests/test_deployer_contract_light.py")
-        elif rel.startswith(("finance_report/", "contracts/finance_report/")):
+        elif rel.startswith("finance_report/"):
             for candidate in all_tests:
                 if "finance_report" in Path(candidate).name:
                     selected.add(candidate)
@@ -257,20 +257,12 @@ def _select_changed_compose_targets(
     if {"tools/ci_runner.py", "common/gate/ci_runner.py"} & changed_set:
         return list(compose_files)
 
-    include_truealpha = any(c.startswith("contracts/truealpha/") for c in changed_set)
-    include_finance_report = any(
-        c.startswith("contracts/finance_report/") for c in changed_set
-    )
-
     selected: list[Path] = []
     for file in compose_files:
         rel_str = str(file.relative_to(ROOT))
         parent_prefix = f"{file.relative_to(ROOT).parent}/"
-        if (
-            rel_str in changed_set
-            or any(c.startswith(parent_prefix) for c in changed_set)
-            or (include_truealpha and rel_str.startswith("truealpha/"))
-            or (include_finance_report and rel_str.startswith("finance_report/"))
+        if rel_str in changed_set or any(
+            c.startswith(parent_prefix) for c in changed_set
         ):
             selected.append(file)
     return selected
@@ -703,8 +695,6 @@ def run_lint(verbose: bool = False) -> int:
     # 3. anti-tautology test linter
     print("  Running anti-tautology test linter...")
     targets = ["common/tests"]
-    if (ROOT / "repos/infra2-sdk/tests").is_dir():
-        targets.append("repos/infra2-sdk/tests")
     try:
         _run_cmd([sys.executable, "tools/lint_anti_tautology.py", *targets])
         print("  ✅ anti-tautology test linter passed.")

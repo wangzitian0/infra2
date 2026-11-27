@@ -7,11 +7,15 @@ inputs:
     required: false
     default: "false"
 
+outputs:
+  browsers-hit:
+    description: "Whether the Playwright browsers cache was restored."
+    value: ${{ steps.browsers.outputs.cache-hit }}
+
 runs:
   using: composite
   steps:
-    # The key is the hash of each App lockfile at the pinned `release_tag` from
-    # `harness/repos.yaml` (falling back to the submodule gitlink SHA when absent).
+    # The key is the hash of each App lockfile at the pinned `release_tag` from `harness/repos.yaml`.
     # When a file cannot be read, the key holds the run id so the cache misses.
     - name: Fingerprint App lockfiles
       id: keys
@@ -19,8 +23,8 @@ runs:
       run: |
         set -uo pipefail
         resolve_ref() {
-          local repo="$1" tag=""
-          tag="$(awk -v target="repos/${repo}" '
+          local repo="$1"
+          awk -v target="repos/${repo}" '
             /^[[:space:]]*- id:/ {
               if (cur_path == target && cur_tag != "") { print cur_tag; found=1; exit }
               cur_tag=""; cur_path=""
@@ -28,16 +32,10 @@ runs:
             $1 == "path:" { gsub(/["'\'']/, "", $2); cur_path=$2 }
             $1 == "release_tag:" { gsub(/["'\'']/, "", $2); cur_tag=$2 }
             END { if (!found && cur_path == target && cur_tag != "") print cur_tag }
-          ' harness/repos.yaml)"
-          if [[ -n "$tag" ]]; then
-            printf '%s' "$tag"
-          else
-            git ls-tree HEAD "repos/${repo}" | awk '{print $3}'
-          fi
+          ' harness/repos.yaml
         }
         fp() {
-          local repo="$1" path="$2" ref body
-          ref="$(resolve_ref "$repo")"
+          local repo="$1" path="$2" ref="$3" body
           if [[ -n "$ref" ]] && body="$(curl -fsSL --retry 3 --max-time 30 \
               "https://raw.githubusercontent.com/wangzitian0/${repo}/${ref}/${path}")"; then
             printf '%s' "$body" | sha256sum | cut -c1-16
@@ -45,22 +43,26 @@ runs:
             echo "unknown-${GITHUB_RUN_ID}"
           fi
         }
+        ta_ref="$(resolve_ref truealpha)"
+        fr_ref="$(resolve_ref finance_report)"
         {
-          echo "truealpha=$(fp truealpha apps/app-web/bun.lock)"
-          echo "finance=$(fp finance_report tests/e2e/requirements.txt)"
+          echo "ta_ref=${ta_ref}"
+          echo "fr_ref=${fr_ref}"
+          echo "truealpha=$(fp truealpha apps/app-web/bun.lock "$ta_ref")"
+          echo "finance=$(fp finance_report tests/e2e/requirements.txt "$fr_ref")"
         } >> "$GITHUB_OUTPUT"
 
     # Each action is fixed to a commit SHA because the job env of `post` holds secrets.
     - name: Restore Playwright browsers
       id: browsers
-      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}-fr-${{ steps.keys.outputs.finance }}
 
     - name: Restore bun cache
       id: bun
-      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
       with:
         path: ~/.bun/install/cache
         key: bun-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}
@@ -70,28 +72,14 @@ runs:
     - name: Fill the caches
       if: ${{ inputs.warm == 'true' && (steps.browsers.outputs.cache-hit != 'true' || steps.bun.outputs.cache-hit != 'true') && !startsWith(steps.keys.outputs.truealpha, 'unknown') && !startsWith(steps.keys.outputs.finance, 'unknown') }}
       shell: bash
+      env:
+        TA_REF: ${{ steps.keys.outputs.ta_ref }}
+        FR_REF: ${{ steps.keys.outputs.fr_ref }}
       run: |
         set -euo pipefail
-        resolve_ref() {
-          local repo="$1" tag=""
-          tag="$(awk -v target="repos/${repo}" '
-            /^[[:space:]]*- id:/ {
-              if (cur_path == target && cur_tag != "") { print cur_tag; found=1; exit }
-              cur_tag=""; cur_path=""
-            }
-            $1 == "path:" { gsub(/["'\'']/, "", $2); cur_path=$2 }
-            $1 == "release_tag:" { gsub(/["'\'']/, "", $2); cur_tag=$2 }
-            END { if (!found && cur_path == target && cur_tag != "") print cur_tag }
-          ' harness/repos.yaml)"
-          if [[ -n "$tag" ]]; then
-            printf '%s' "$tag"
-          else
-            git ls-tree HEAD "repos/${repo}" | awk '{print $3}'
-          fi
-        }
         base="https://raw.githubusercontent.com/wangzitian0"
-        ta_ref="$(resolve_ref truealpha)"
-        fr_ref="$(resolve_ref finance_report)"
+        ta_ref="${TA_REF}"
+        fr_ref="${FR_REF}"
         work="$(mktemp -d)"
         mkdir -p "$work/ta" "$work/fr"
         curl -fsSL --retry 3 -o "$work/ta/package.json" "$base/truealpha/${ta_ref}/apps/app-web/package.json"
@@ -104,14 +92,14 @@ runs:
 
     - name: Save Playwright browsers
       if: ${{ inputs.warm == 'true' && steps.browsers.outputs.cache-hit != 'true' && !startsWith(steps.keys.outputs.truealpha, 'unknown') && !startsWith(steps.keys.outputs.finance, 'unknown') }}
-      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}-fr-${{ steps.keys.outputs.finance }}
 
     - name: Save bun cache
       if: ${{ inputs.warm == 'true' && steps.bun.outputs.cache-hit != 'true' && !startsWith(steps.keys.outputs.truealpha, 'unknown') }}
-      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
       with:
         path: ~/.bun/install/cache
         key: bun-${{ runner.os }}-ta-${{ steps.keys.outputs.truealpha }}

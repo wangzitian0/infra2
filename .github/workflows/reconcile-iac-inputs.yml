@@ -168,7 +168,7 @@ jobs:
           INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           set -euo pipefail
-          sync_args=(--sync-app-releases --apply-repos-yaml --sync-gitlinks --output-json sync-app-releases.json)
+          sync_args=(--sync-app-releases --apply-repos-yaml --output-json sync-app-releases.json)
           if [[ "$INPUT_DRY_RUN" == "true" ]]; then
             sync_args+=(--dry-run)
           else
