@@ -63,15 +63,13 @@ DEPLOY_ENV=staging invoke ta-data_engine.shared.status
 ## Proof
 
 ```bash
-docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-code-server-staging
 docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check
 docker exec truealpha-dagster-code-server-staging dagster api grpc-health-check --socket /var/lib/dagster/code-server.sock
-ssh -L 13001:127.0.0.1:13001 <vps>  # then open http://127.0.0.1:13001
 ```
 
-The three image references must be byte-identical and digest-pinned. A missing digest,
+Both image references must be byte-identical and digest-pinned. A missing digest,
 release manifest, approval, source credential, daemon heartbeat, code-server health, or
 runtime image match blocks deployment.
 

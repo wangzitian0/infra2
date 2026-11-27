@@ -85,13 +85,12 @@ from common.deploy.github_api import API as GITHUB_API, github_headers
 from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
 from common.deploy.canary_pin import (
     APP_SDK_RANGE,
-    CANARY_COMPOSE_RELS,
     CanaryImageMissing,
     canary_sdk_unit,
     canary_sdk_version,
     in_app_sdk_range,
     resolve_canary_digest,
-    rewrite_canary_pin,
+    sync_canary_pin_files,
 )
 from common.deploy.stage_record_reader import verified_sdk_versions
 from common.deploy.yaml_text import safe_load_text
@@ -1516,14 +1515,7 @@ def sync_sdk_pins(
                 f"::notice::infra2-canary-todo:v{target_sdk} is not on ghcr.io yet; no pin PR"
             )
     if needs_canary_bump and create_pr and image_published:
-        for rel in CANARY_COMPOSE_RELS:
-            path = repo_root / rel
-            path.write_text(
-                rewrite_canary_pin(
-                    path.read_text(encoding="utf-8"), target_sdk, digest
-                ),
-                encoding="utf-8",
-            )
+        updated_paths = sync_canary_pin_files(repo_root, target_sdk, digest)
         commit_msg = f"chore(todo): pin the Canary image to infra2-sdk v{target_sdk}"
         pr_body = (
             f"Move the Canary image pin from `v{current_sdk}` to `v{target_sdk}@{digest}` "
@@ -1537,7 +1529,7 @@ def sync_sdk_pins(
             pr_branch=pr_branch,
             commit_msg=commit_msg,
             pr_body=pr_body,
-            paths_to_add=list(CANARY_COMPOSE_RELS),
+            paths_to_add=updated_paths,
             runner=runner,
         )
         pr_created = bool(pr_result["pr_created"])

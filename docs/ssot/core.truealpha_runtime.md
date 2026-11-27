@@ -64,7 +64,6 @@ production run mix. Staging has the lower CPU weight (`512`; Production `1024`).
 
 ```bash
 DEPLOY_ENV=staging invoke ta-data_engine.shared.status
-docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-code-server-staging
 docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' truealpha-dagster-code-server-staging
@@ -72,10 +71,10 @@ docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.
 
 Required assertions:
 
-1. All three image references equal the accepted digest.
+1. Both image references equal the accepted digest.
 2. The daemon heartbeat is current, code-server is healthy, and schedule metadata persists after restart.
 3. Postgres contains Dagster runtime tables only in `dagster`, never `public`.
-4. OpenD, Postgres, and Dagster UI are unreachable on non-loopback host interfaces.
+4. OpenD and Postgres remain unreachable on non-loopback host interfaces.
 5. A missing digest/release/approval/credential or wrong `ENVIRONMENT` blocks execution.
 
 ## 7. Telemetry & Ops Surface Split (L0–L4)

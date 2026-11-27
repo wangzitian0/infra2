@@ -6431,7 +6431,7 @@ def test_run_canary_reality_gate_blocks_prod_marker_and_fails_staging(
 
     def fake_verify(environment="production", **kwargs):
         seen_envs.append(environment)
-        assert kwargs.get("require_llm") is True
+        assert kwargs.get("require_llm") is False
         assert kwargs.get("require_app_peer") is True
         assert kwargs.get("require_platform_deps") is True
         return fail_report if "fail" in environment or fail_mode[0] else pass_report

@@ -49,7 +49,6 @@ CI_COMPOSE_ENV: dict[str, str] = {
     "INFRA_IAC_REF": "0" * 40,
     "CAPTURE_APPROVED_BY": "ci:compose-validation",
     "TA_POSTGRES_PORT": "15432",
-    "DAGSTER_WEBSERVER_PORT": "13001",
     "OP_CONNECT_TOKEN": "dummy-op-connect-token",
     "OP_VAULT_ID": "dummy-op-vault-id",
     "OP_ITEM_ID": "dummy-op-item-id",

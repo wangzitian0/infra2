@@ -1390,6 +1390,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Canary minor slot id (e.g. v4-11, v4-13; default: primary slot)",
     )
     parser.add_argument(
+        "--all-slots",
+        action="store_true",
+        help="Verify primary slot with full flags and secondary active slots with non-LLM fast checks",
+    )
+    parser.add_argument(
         "--require-llm",
         "--deep",
         dest="require_llm",
@@ -1417,6 +1422,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
+    def _emit_report(rep: CanaryRealityReport) -> None:
+        if args.json:
+            print(json.dumps(asdict(rep), indent=2))
+            return
+        print(f"=== Canary Todo Reality Verification [{rep.environment}] ===")
+        print(f"Overall Status: {'PASS' if rep.all_ok else 'FAIL'}")
+        print(
+            f"Installed SDK:  {rep.installed_sdk} (expected: {rep.expected_sdk or 'any'})"
+        )
+        print(f"1. SDK:         {'[OK]' if rep.sdk.ok else '[FAIL]'} {rep.sdk.summary}")
+        print(
+            f"2. Tracking:    {'[OK]' if rep.tracking.ok else '[FAIL]'} {rep.tracking.summary}"
+        )
+        print(
+            f"3. Logs:        {'[OK]' if rep.logs.ok else '[FAIL]'} {rep.logs.summary}"
+        )
+        print(
+            f"4. Monitoring:  {'[OK]' if rep.monitoring.ok else '[FAIL]'} {rep.monitoring.summary}"
+        )
+        print(
+            f"5. Alerts:      {'[OK]' if rep.alerts.ok else '[FAIL]'} {rep.alerts.summary}"
+        )
+        print(f"6. LLM:         {'[OK]' if rep.llm.ok else '[FAIL]'} {rep.llm.summary}")
+        print(
+            f"7. App-Peer:    {'[OK]' if rep.app_peer.ok else '[FAIL]'} {rep.app_peer.summary}"
+        )
+
     report = verify_canary(
         args.env,
         expected_sdk=args.expected_sdk,
@@ -1428,38 +1460,36 @@ def main(argv: list[str] | None = None) -> int:
         expected_version=args.expected_version,
         slot=args.slot,
     )
+    all_passed = report.all_ok
+    reports = [report]
 
-    if args.json:
-        print(json.dumps(asdict(report), indent=2))
+    if args.all_slots and args.slot is None:
+        from common.deploy.canary_pin import load_canary_slots
+
+        for item in load_canary_slots():
+            if item.primary:
+                continue
+            slot_report = verify_canary(
+                args.env,
+                expected_sdk=args.expected_sdk,
+                check_sdk=not args.skip_sdk_check,
+                max_age_seconds=args.max_age_seconds,
+                require_llm=False,
+                require_app_peer=args.require_app_peer,
+                require_platform_deps=args.require_platform_deps,
+                expected_version=args.expected_version,
+                slot=item.slot,
+            )
+            reports.append(slot_report)
+            all_passed = all_passed and slot_report.all_ok
+
+    if args.json and len(reports) > 1:
+        print(json.dumps([asdict(r) for r in reports], indent=2))
     else:
-        print(f"=== Canary Todo Reality Verification [{report.environment}] ===")
-        print(f"Overall Status: {'PASS' if report.all_ok else 'FAIL'}")
-        print(
-            f"Installed SDK:  {report.installed_sdk} (expected: {report.expected_sdk or 'any'})"
-        )
-        print(
-            f"1. SDK:         {'[OK]' if report.sdk.ok else '[FAIL]'} {report.sdk.summary}"
-        )
-        print(
-            f"2. Tracking:    {'[OK]' if report.tracking.ok else '[FAIL]'} {report.tracking.summary}"
-        )
-        print(
-            f"3. Logs:        {'[OK]' if report.logs.ok else '[FAIL]'} {report.logs.summary}"
-        )
-        print(
-            f"4. Monitoring:  {'[OK]' if report.monitoring.ok else '[FAIL]'} {report.monitoring.summary}"
-        )
-        print(
-            f"5. Alerts:      {'[OK]' if report.alerts.ok else '[FAIL]'} {report.alerts.summary}"
-        )
-        print(
-            f"6. LLM:         {'[OK]' if report.llm.ok else '[FAIL]'} {report.llm.summary}"
-        )
-        print(
-            f"7. App-Peer:    {'[OK]' if report.app_peer.ok else '[FAIL]'} {report.app_peer.summary}"
-        )
+        for rep in reports:
+            _emit_report(rep)
 
-    return 0 if report.all_ok else 1
+    return 0 if all_passed else 1
 
 
 if __name__ == "__main__":

@@ -241,14 +241,13 @@ def test_only_the_llm_service_exports_telemetry(stack: str) -> None:
 
 
 def test_data_engine_exports_telemetry_via_host_loopback_collector() -> None:
-    """All three Dagster roles run with network_mode: host for OpenD, so the Docker DNS
+    """Both active Dagster roles run with network_mode: host for OpenD, so the Docker DNS
     name cannot resolve from them. Issue #1231 publishes the collector OTLP HTTP port on
-    host loopback 127.0.0.1:14318 and wires all three roles to export via that loopback
+    host loopback 127.0.0.1:14318 and wires both roles to export via that loopback
     endpoint with deployment-issued identity."""
     compose = ROOT / "truealpha/truealpha/20.data_engine/compose.yaml"
     services = compose_services(compose)
     expected_roles = {
-        "dagster-webserver",
         "dagster-daemon",
         "dagster-code-server",
     }

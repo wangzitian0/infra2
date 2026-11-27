@@ -142,6 +142,17 @@ def load_canary_slots(repo_root: Path = REPO_ROOT) -> tuple[CanarySlot, ...]:
                     f"{CANARY_COMPOSE_REL} service {s.compose_service!r} image "
                     f"{svc.get('image')!r} != {s.image!r} from {CANARY_SLOTS_REL}"
                 )
+            raw_cmd = svc.get("command") or ""
+            cmd_text = (
+                " ".join(str(part) for part in raw_cmd)
+                if isinstance(raw_cmd, list)
+                else str(raw_cmd)
+            )
+            expected_sv = f'SERVICE_VERSION="v{s.version}"'
+            if expected_sv not in cmd_text:
+                raise CanaryPinError(
+                    f"{CANARY_COMPOSE_REL} service {s.compose_service!r} command missing {expected_sv}"
+                )
     return slots
 
 
@@ -268,8 +279,13 @@ def rewrite_canary_pin(text: str, version: str, digest: str) -> str:
     )
     series_matches = series_pattern.findall(text)
     if len(series_matches) == 1:
-        return series_pattern.sub(
+        updated = series_pattern.sub(
             f"{CANARY_IMAGE_REPOSITORY}:v{version}@{digest}", text
+        )
+        return re.sub(
+            rf'SERVICE_VERSION="v{re.escape(major)}\.{re.escape(minor)}\.\d+"',
+            f'SERVICE_VERSION="v{version}"',
+            updated,
         )
     pattern = re.compile(
         rf"{re.escape(CANARY_IMAGE_REPOSITORY)}:v\d+\.\d+\.\d+@sha256:[0-9a-f]{{64}}"
@@ -277,7 +293,278 @@ def rewrite_canary_pin(text: str, version: str, digest: str) -> str:
     found = pattern.findall(text)
     if len(found) != 1:
         raise CanaryPinError(f"expected one Canary image pin, found {len(found)}")
-    return pattern.sub(f"{CANARY_IMAGE_REPOSITORY}:v{version}@{digest}", text)
+    updated = pattern.sub(f"{CANARY_IMAGE_REPOSITORY}:v{version}@{digest}", text)
+    return re.sub(
+        r'SERVICE_VERSION="v\d+\.\d+\.\d+"',
+        f'SERVICE_VERSION="v{version}"',
+        updated,
+    )
+
+
+def _rewrite_slot_manifest(
+    slots_path: Path,
+    version: str,
+    digest: str,
+    *,
+    existing_slot: CanarySlot | None,
+) -> list[dict]:
+    """Return updated slot entries for ``slots.yaml`` after a patch or minor bump."""
+    data = safe_load_text(yaml, slots_path.read_text(encoding="utf-8")) or {}
+    raw_slots = list(data.get("slots") or [])
+    major, minor, _ = version.split(".")
+    slot_id = f"v{major}-{minor}"
+    if existing_slot is not None:
+        for entry in raw_slots:
+            if isinstance(entry, dict) and entry.get("slot") == slot_id:
+                entry["version"] = version
+                entry["digest"] = digest
+        return raw_slots
+
+    for entry in raw_slots:
+        if isinstance(entry, dict):
+            entry["primary"] = False
+    raw_slots.append(
+        {
+            "slot": slot_id,
+            "version": version,
+            "digest": digest,
+            "database": f"todo_{major}_{minor}",
+            "pg_role": f"todo_{major}_{minor}_app",
+            "primary": True,
+        }
+    )
+    return raw_slots
+
+
+def _promote_minor_compose_slot(
+    compose_path: Path,
+    *,
+    old_primary: CanarySlot,
+    version: str,
+    digest: str,
+) -> None:
+    """Demote ``old_primary`` and add the new promoted ``todo-v<major>-<minor>`` service."""
+    import copy
+
+    major, minor, _ = version.split(".")
+    new_slot = f"v{major}-{minor}"
+    new_service_name = f"todo-{new_slot}"
+    new_pg_role = f"todo_{major}_{minor}_app"
+    new_db = f"todo_{major}_{minor}"
+    new_otel_var = f"OTEL_SERVICE_NAME_V{major}_{minor}"
+    old_otel_var = f"OTEL_SERVICE_NAME_{old_primary.slot.upper().replace('-', '_')}"
+
+    doc = safe_load_text(yaml, compose_path.read_text(encoding="utf-8")) or {}
+    services = doc.get("services") or {}
+    template = copy.deepcopy(services[old_primary.compose_service])
+
+    # Demote previous primary slot to its slot-specific subdomain only.
+    old_svc = services[old_primary.compose_service]
+    old_env = old_svc.get("environment") or {}
+    if isinstance(old_env, dict):
+        old_env["CANARY_DOMAIN"] = (
+            f"todo-{old_primary.slot}${{ENV_DOMAIN_SUFFIX}}.${{INTERNAL_DOMAIN}}"
+        )
+    old_x_routes = old_svc.get("x-routes") or {}
+    if isinstance(old_x_routes, dict):
+        old_x_routes["service"] = f"platform-todo-{old_primary.slot}"
+        old_x_routes["routes"] = [
+            {
+                "name": f"platform-todo-{old_primary.slot}-public",
+                "rule": f"Host(`todo-{old_primary.slot}${{ENV_DOMAIN_SUFFIX}}.${{INTERNAL_DOMAIN}}`) && Path(`/api/health`)",
+                "tls": True,
+                "priority": 100,
+            },
+            {
+                "name": f"platform-todo-{old_primary.slot}",
+                "rule": f"Host(`todo-{old_primary.slot}${{ENV_DOMAIN_SUFFIX}}.${{INTERNAL_DOMAIN}}`)",
+                "tls": True,
+                "priority": 10,
+                "sso": f"todo-{old_primary.slot}-auth",
+            },
+        ]
+
+    # Configure new primary slot from template.
+    template["image"] = f"{CANARY_IMAGE_REPOSITORY}:v{version}@{digest}"
+    template["container_name"] = f"platform-todo-{new_slot}${{ENV_SUFFIX}}"
+    cmd = template.get("command")
+    if isinstance(cmd, list):
+        template["command"] = [
+            str(part)
+            .replace(old_primary.pg_role, new_pg_role)
+            .replace(f"/{old_primary.database}", f"/{new_db}")
+            .replace(
+                f'SERVICE_VERSION="v{old_primary.version}"',
+                f'SERVICE_VERSION="v{version}"',
+            )
+            for part in cmd
+        ]
+    caps = template.get("x-capabilities") or {}
+    if isinstance(caps, dict) and isinstance(caps.get("otel"), dict):
+        caps["otel"]["service_name"] = f"platform-todo-{new_slot}"
+        if "service_name_var" in caps["otel"]:
+            caps["otel"]["service_name_var"] = (
+                str(caps["otel"]["service_name_var"]).replace(
+                    old_otel_var, new_otel_var
+                )
+                if old_otel_var in str(caps["otel"]["service_name_var"])
+                else new_otel_var
+            )
+    env = template.get("environment") or {}
+    if isinstance(env, dict):
+        env["S3_KEY_PREFIX"] = f"canary/{new_slot}/"
+        env["REDIS_KEY_PREFIX"] = f"canary:{new_slot}:probe:"
+        env["CANARY_SERVICE_NAME"] = f"platform-todo-{new_slot}"
+        env["CANARY_DOMAIN"] = "todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}"
+    x_routes = template.get("x-routes") or {}
+    if isinstance(x_routes, dict):
+        x_routes["service"] = "platform-todo"
+        x_routes["routes"] = [
+            {
+                "name": "platform-todo-public",
+                "rule": (
+                    f"(Host(`todo${{ENV_DOMAIN_SUFFIX}}.${{INTERNAL_DOMAIN}}`) || "
+                    f"Host(`todo-{new_slot}${{ENV_DOMAIN_SUFFIX}}.${{INTERNAL_DOMAIN}}`)) && Path(`/api/health`)"
+                ),
+                "tls": True,
+                "priority": 100,
+            },
+            {
+                "name": "platform-todo",
+                "rule": (
+                    f"Host(`todo${{ENV_DOMAIN_SUFFIX}}.${{INTERNAL_DOMAIN}}`) || "
+                    f"Host(`todo-{new_slot}${{ENV_DOMAIN_SUFFIX}}.${{INTERNAL_DOMAIN}}`)"
+                ),
+                "tls": True,
+                "priority": 10,
+                "sso": "todo-auth",
+            },
+        ]
+    services[new_service_name] = template
+    compose_path.write_text(
+        yaml.safe_dump(doc, sort_keys=False, width=10**6), encoding="utf-8"
+    )
+
+
+def _add_minor_deploy_facets(
+    deploy_path: Path, *, old_primary: CanarySlot, version: str
+) -> None:
+    """Register ProbeFacet and SecretsFacet container for a newly promoted minor slot."""
+    if not deploy_path.is_file():
+        return
+    major, minor, _ = version.split(".")
+    new_slot = f"v{major}-{minor}"
+    text = deploy_path.read_text(encoding="utf-8")
+    old_target = (
+        f"http://platform-todo-{old_primary.slot}${{ENV_SUFFIX}}:8000/api/canary/status"
+    )
+    new_target = (
+        f"http://platform-todo-{new_slot}${{ENV_SUFFIX}}:8000/api/canary/status"
+    )
+    if old_target in text:
+        text = text.replace(old_target, new_target, 1)
+    secondary_probe = (
+        "        ProbeFacet(\n"
+        f'            name="todo-{new_slot}-canary-status",\n'
+        '            kind="http",\n'
+        f'            target="{new_target}",\n'
+        '            expected="200",\n'
+        '            severity="error",\n'
+        "            timeout_seconds=15,\n"
+        "        ),\n"
+    )
+    if f'name="todo-{new_slot}-canary-status"' not in text:
+        anchor = "    signals = ("
+        idx = text.find(anchor)
+        if idx != -1:
+            close_idx = text.rfind("    )", 0, idx)
+            if close_idx != -1:
+                text = text[:close_idx] + secondary_probe + text[close_idx:]
+    new_container = f'"platform-todo-{new_slot}${{ENV_SUFFIX}}"'
+    old_container = f'"platform-todo-{old_primary.slot}${{ENV_SUFFIX}}"'
+    if new_container not in text and old_container in text:
+        text = text.replace(
+            old_container, f"{old_container},\n                {new_container}", 1
+        )
+    deploy_path.write_text(text, encoding="utf-8")
+
+
+def sync_canary_pin_files(repo_root: Path, version: str, digest: str) -> list[str]:
+    """Update Canary pin files across compose, preview compose, and ``slots.yaml``.
+
+    Handles patch bumps to an active minor slot and promotions of a new minor series.
+    Returns repository-relative paths modified on disk.
+    """
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", digest
+    ):
+        raise CanaryPinError(f"invalid pin v{version}@{digest}")
+
+    slots_path = repo_root / CANARY_SLOTS_REL
+    if not slots_path.is_file():
+        for rel in CANARY_COMPOSE_RELS:
+            path = repo_root / rel
+            path.write_text(
+                rewrite_canary_pin(path.read_text(encoding="utf-8"), version, digest),
+                encoding="utf-8",
+            )
+        return list(CANARY_COMPOSE_RELS)
+
+    slots = load_canary_slots(repo_root)
+    major, minor, _ = version.split(".")
+    slot_id = f"v{major}-{minor}"
+    existing = next((s for s in slots if s.slot == slot_id), None)
+    updated_slots = _rewrite_slot_manifest(
+        slots_path, version, digest, existing_slot=existing
+    )
+    slots_path.write_text(
+        yaml.safe_dump({"slots": updated_slots}, sort_keys=False, width=10**6),
+        encoding="utf-8",
+    )
+
+    compose_path = repo_root / CANARY_COMPOSE_REL
+    preview_rel = "platform/30.todo/preview.compose.yaml"
+    preview_path = repo_root / preview_rel
+    updated_paths = [CANARY_SLOTS_REL, CANARY_COMPOSE_REL]
+
+    if existing is not None:
+        compose_path.write_text(
+            rewrite_canary_pin(
+                compose_path.read_text(encoding="utf-8"), version, digest
+            ),
+            encoding="utf-8",
+        )
+        if existing.primary and preview_path.is_file():
+            preview_path.write_text(
+                rewrite_canary_pin(
+                    preview_path.read_text(encoding="utf-8"), version, digest
+                ),
+                encoding="utf-8",
+            )
+            updated_paths.append(preview_rel)
+    else:
+        old_primary = next(s for s in slots if s.primary)
+        _promote_minor_compose_slot(
+            compose_path, old_primary=old_primary, version=version, digest=digest
+        )
+        if preview_path.is_file():
+            preview_path.write_text(
+                rewrite_canary_pin(
+                    preview_path.read_text(encoding="utf-8"), version, digest
+                ),
+                encoding="utf-8",
+            )
+            updated_paths.append(preview_rel)
+        deploy_rel = "platform/30.todo/deploy.py"
+        deploy_path = repo_root / deploy_rel
+        if deploy_path.is_file():
+            _add_minor_deploy_facets(
+                deploy_path, old_primary=old_primary, version=version
+            )
+            updated_paths.append(deploy_rel)
+
+    load_canary_slots(repo_root)
+    return updated_paths
 
 
 _UV_SDK_VERSION_RE = re.compile(

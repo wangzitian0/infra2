@@ -1908,3 +1908,24 @@ def test_restart_grace_seconds_is_45() -> None:
         beyond_grace, environment="production", container_started_at=started_iso
     )
     assert fail_report.monitoring.ok is False
+
+
+def test_all_slots_cli_verifies_primary_and_secondary_slots() -> None:
+    pass_report = CanaryRealityReport(
+        environment="staging",
+        all_ok=True,
+        tracking=PillarResult(ok=True, summary="t"),
+        logs=PillarResult(ok=True, summary="l"),
+        monitoring=PillarResult(ok=True, summary="m"),
+        alerts=PillarResult(ok=True, summary="a"),
+        installed_sdk="4.13.0",
+    )
+    with patch(
+        "common.observability.canary_verify.verify_canary", return_value=pass_report
+    ) as mock_verify:
+        assert main(["--env", "staging", "--deep", "--all-slots"]) == 0
+    assert len(mock_verify.call_args_list) == 2
+    assert mock_verify.call_args_list[0].kwargs["slot"] is None
+    assert mock_verify.call_args_list[0].kwargs["require_llm"] is True
+    assert mock_verify.call_args_list[1].kwargs["slot"] == "v4-11"
+    assert mock_verify.call_args_list[1].kwargs["require_llm"] is False
