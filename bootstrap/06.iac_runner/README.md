@@ -138,12 +138,9 @@ authoritative version of all three.
 
 2. **Cut a release tag** when the change should reach staging:
    ```bash
-   # Mirror semantics, the same ones the runner's workspace uses: plain `--tags`
-   # REFUSES to move a tag that already exists locally, which is precisely how a
-   # re-cut tag wedges a checkout.
-   git fetch --tags --force --prune --prune-tags
-   git tag -a v1.2.4 -m "postgres config" origin/main
-   git push origin v1.2.4
+   # The tool tags the head of origin/main with the next patch version (here v1.2.4).
+   # It prints `wait` while a train runs and in the 30 minutes after the newest tag train.
+   uv run python tools/release_tag.py --push -m "postgres config"
    ```
    `reconcile-iac-inputs.yml` diffs `v1.2.3..v1.2.4`, fans the changed services out
    through `deploy_v2`, and each service's config hash decides deploy vs no-op.
