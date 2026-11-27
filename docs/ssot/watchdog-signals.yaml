@@ -836,7 +836,7 @@ signals:
     tier: day
     type: report
 
-  # #1648: the daily "Runner health" step of ops-checks.yml `watchdog` reads the same
+  # #1648: the daily "Runner health" step of watchdog.yml `watchdog` reads the same
   # /health as the 60 s probe production.iac-runner-http, which pages. The step keeps its
   # check, goes red and records its verdict for the issue trail; it sends no Feishu message.
   - signal_id: global.infra2.iac-runner-health

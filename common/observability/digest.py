@@ -37,7 +37,7 @@ from common.observability.delivery_section import delivery_lines, summarize_deli
 _DEFAULT_URLOPEN = urlopen
 _SKIPPED_RUN_EVENTS = frozenset({"push", "pull_request", "pull_request_target"})
 
-WORKFLOW_FILE = "ops-checks.yml"
+WORKFLOW_FILE = "watchdog.yml"
 WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
 DEFAULT_REPOSITORY = "wangzitian0/infra2"
 DIGEST_WINDOW_DAYS = 7

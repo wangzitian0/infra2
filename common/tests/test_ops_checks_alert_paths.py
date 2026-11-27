@@ -13,6 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ops-checks.yml"
+WATCHDOG_WORKFLOW = ROOT / ".github" / "workflows" / "watchdog.yml"
 
 
 def _steps(job: dict) -> dict[str, dict]:
@@ -20,7 +21,7 @@ def _steps(job: dict) -> dict[str, dict]:
 
 
 def test_the_weekly_digest_pages_when_it_fails() -> None:
-    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    jobs = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     digest = jobs["digest"]
     steps = _steps(digest)
     alert = steps["Alert on failure"]
@@ -42,7 +43,7 @@ def test_the_weekly_digest_pages_when_it_fails() -> None:
 def test_the_nightly_watchdog_reads_the_runner_health_and_fails_on_a_dead_prerequisite() -> (
     None
 ):
-    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    jobs = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     watchdog = jobs["watchdog"]
     steps = _steps(watchdog)
     health = steps["Runner health — 1Password service account and deploy prerequisites"]
@@ -56,7 +57,7 @@ def test_the_nightly_watchdog_reads_the_runner_health_and_fails_on_a_dead_prereq
 
 def test_watchdog_daily_positive_stability_report_has_no_ssh_key_if_guard() -> None:
     """Verify daily stability report step has no if condition gating on SSH key."""
-    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    jobs = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     watchdog = jobs["watchdog"]
     steps = _steps(watchdog)
     report_step = steps["Build and send daily positive stability report"]
@@ -67,9 +68,9 @@ def test_watchdog_daily_positive_stability_report_has_no_ssh_key_if_guard() -> N
 
 def test_the_daily_report_runs_only_after_a_successful_watchdog() -> None:
     """Daily positive stability report runs only when watchdog and prior steps succeed."""
-    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["watchdog"][
-        "steps"
-    ]
+    steps = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "watchdog"
+    ]["steps"]
     names = [step.get("name") for step in steps]
     report_name = "Build and send daily positive stability report"
     assert names.index("Run watchdog") < names.index(report_name)
@@ -257,11 +258,11 @@ def test_ops_checks_audit_job_timeouts_and_artifact_uploads() -> None:
 
 
 def _ops_checks_scheduler_ping_step() -> tuple[dict, str]:
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    workflow = yaml.safe_load(WATCHDOG_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["watchdog"]["steps"]
     names = [step.get("name") for step in steps]
     step_name = "Ping Cloudflare watchdog scheduler heartbeat (#1448)"
-    assert step_name in names, f"{step_name!r} missing from ops-checks.yml watchdog"
+    assert step_name in names, f"{step_name!r} missing from watchdog.yml watchdog"
     assert names.index(step_name) < names.index("Record the verdicts as GitHub issues")
     ping_step = steps[names.index(step_name)]
     # #1877: the step runs the module, which records a verdict on each run.

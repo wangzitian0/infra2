@@ -35,8 +35,6 @@ GATED_JOBS: dict[tuple[str, str], str | None] = {
 # Jobs that read a production credential and do not need owner approval, with the reason.
 UNGATED_JOBS: dict[tuple[str, str], str] = {
     ("ops-checks.yml", "audit"): "scheduled read-only audit",
-    ("ops-checks.yml", "watchdog"): "scheduled read-only probe",
-    ("ops-checks.yml", "digest"): "scheduled read-only report",
     ("watchdog.yml", "watchdog"): "scheduled read-only probe",
     ("watchdog.yml", "digest"): "scheduled read-only report",
     (
@@ -114,22 +112,6 @@ UNGATED_SECRET_LIMITS: dict[tuple[str, str], frozenset[str]] = {
     ),
     ("ops-checks.yml", "scheduled-app-audit"): (
         _ALERT_SECRETS | _WATCHDOG_SSH_SECRETS | _TA_HOOK_SECRETS
-    ),
-    ("ops-checks.yml", "watchdog"): (
-        frozenset(
-            {
-                "DOKPLOY_API_KEY",
-                "INFRA2_WATCHDOG_HEARTBEAT_TOKEN",
-                "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN",
-            }
-        )
-        | _ALERT_SECRETS
-        | _WATCHDOG_SSH_SECRETS
-    ),
-    ("ops-checks.yml", "digest"): (
-        frozenset({"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN"})
-        | _ALERT_SECRETS
-        | _WATCHDOG_SSH_SECRETS
     ),
     ("ops-checks.yml", "preview-leak-check"): (
         frozenset({"DOKPLOY_API_KEY", "PREVIEW_LEAK_GH_TOKEN"}) | _OOB_ALERT_SECRETS

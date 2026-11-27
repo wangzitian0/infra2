@@ -644,6 +644,7 @@ def test_every_uv_sync_or_run_step_locks_the_lockfile() -> None:
     """Every `uv sync` or `uv run` command in GitHub workflows/actions must pass `--locked`."""
     uv_steps = 0
     ops_syncs = 0
+    watchdog_syncs = 0
     for name, code in _steps():
         for line in code.splitlines():
             stripped = line.strip()
@@ -657,7 +658,14 @@ def test_every_uv_sync_or_run_step_locks_the_lockfile() -> None:
                 r"\buv\s+sync\b", stripped
             ):
                 ops_syncs += 1
+            elif name == "workflows/watchdog.yml" and re.search(
+                r"\buv\s+sync\b", stripped
+            ):
+                watchdog_syncs += 1
     assert uv_steps >= 10, f"expected >= 10 locked uv steps, found {uv_steps}"
-    assert ops_syncs >= 9, (
-        f"expected >= 9 locked uv sync steps in ops-checks.yml, found {ops_syncs}"
+    assert ops_syncs >= 7, (
+        f"expected >= 7 locked uv sync steps in ops-checks.yml, found {ops_syncs}"
+    )
+    assert watchdog_syncs >= 2, (
+        f"expected >= 2 locked uv sync steps in watchdog.yml, found {watchdog_syncs}"
     )

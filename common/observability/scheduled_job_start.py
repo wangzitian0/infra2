@@ -18,13 +18,14 @@ daily, so the window covers one day plus the delay GitHub allows scheduled runs.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
 REPOSITORY = "wangzitian0/infra2"
 WORKFLOW = "ops-checks.yml"
+WORKFLOWS = ("ops-checks.yml", "watchdog.yml")
 #: One daily watchdog run to the next, plus the delay GitHub allows scheduled runs.
 WINDOW = timedelta(hours=26)
 RUNS_PAGE = 100
@@ -96,15 +97,21 @@ def evaluate(
     *,
     now: datetime,
     repository: str = REPOSITORY,
-    workflow: str = WORKFLOW,
+    workflow: str | Sequence[str] = WORKFLOW,
     window: timedelta = WINDOW,
 ) -> StartVerdict:
     """The verdict over the scheduled runs created in the last ``window``."""
     hours = int(window.total_seconds() // 3600)
+    workflows = (workflow,) if isinstance(workflow, str) else tuple(workflow)
+    workflow_label = ", ".join(workflows)
     try:
-        runs = scheduled_runs(
-            get, now=now, repository=repository, workflow=workflow, window=window
-        )
+        runs: list[dict] = []
+        for wf in workflows:
+            runs.extend(
+                scheduled_runs(
+                    get, now=now, repository=repository, workflow=wf, window=window
+                )
+            )
         found: list[str] = []
         names: set[str] = set()
         for run in runs:
@@ -129,11 +136,11 @@ def evaluate(
         )
         return StartVerdict(
             NEVER_STARTED,
-            f"{len(found)} scheduled job(s) of {workflow} failed before starting "
+            f"{len(found)} scheduled job(s) of {workflow_label} failed before starting "
             f"in the last {hours} h, so their own alert never ran: {shown}{more}",
             tuple(sorted(names)),
         )
     return StartVerdict(
         OK,
-        f"{len(runs)} scheduled run(s) of {workflow} in the last {hours} h; every failed job started",
+        f"{len(runs)} scheduled run(s) of {workflow_label} in the last {hours} h; every failed job started",
     )

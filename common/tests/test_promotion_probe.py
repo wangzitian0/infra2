@@ -181,7 +181,7 @@ def test_workflows_run_the_probe_on_guard_prs_and_on_a_report_only_schedule() ->
     # (v3.1.177, #1988), because the refusal came from that staging failure, not the PR.
     assert "--only-if-changed" in run and "--report-only" in run
     assert ci["permissions"]["actions"] == "read"
-    ops = yaml.safe_load((ROOT / ".github/workflows/ops-checks.yml").read_text())
+    ops = yaml.safe_load((ROOT / ".github/workflows/watchdog.yml").read_text())
     step = next(
         s
         for s in ops["jobs"]["digest"]["steps"]
