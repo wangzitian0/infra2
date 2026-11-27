@@ -584,12 +584,14 @@ def test_refresh_role_consumers_fails_when_a_redeploy_fails(monkeypatch) -> None
     assert tasks._refresh_role_consumers("role-1", "secret-new") is False
 
 
-def _policy_paths() -> set[str]:
-    """Extract the `path "..."` globs granted by the IaC Runner Vault policy."""
+def _policy_paths(env: str = "production") -> set[str]:
+    """Extract the `path "..."` globs granted by the rendered IaC Runner Vault policy."""
     import re
 
-    policy = (ROOT / "bootstrap" / "06.iac_runner" / "vault-policy.hcl").read_text(
-        encoding="utf-8"
+    policy = (
+        (ROOT / "bootstrap" / "06.iac_runner" / "vault-policy.hcl")
+        .read_text(encoding="utf-8")
+        .replace("{{env}}", env)
     )
     return set(re.findall(r'path\s+"([^"]+)"', policy))
 
@@ -609,15 +611,28 @@ def _policy_matches(glob: str, path: str) -> bool:
 
 def test_policy_grants_metadata_list_for_service_secrets():
     """KV v2 LIST resolves to secret/metadata/, so a `list` on secret/data/ is a no-op;
-    the policy must grant metadata for the service trees the runner enumerates."""
-    paths = _policy_paths()
+    the policy must grant metadata for the service trees the runner enumerates in its own env."""
+    prod_paths = _policy_paths("production")
     for svc in (
         "secret/metadata/finance_report/production/app",
         "secret/metadata/platform/production/alerting",
     ):
-        assert any(_policy_matches(g, svc) for g in paths), (
+        assert any(_policy_matches(g, svc) for g in prod_paths), (
             f"no metadata list grant for {svc}"
         )
+    assert not any(
+        _policy_matches(g, "secret/metadata/finance_report/staging/app")
+        for g in prod_paths
+    )
+    staging_paths = _policy_paths("staging")
+    assert any(
+        _policy_matches(g, "secret/metadata/finance_report/staging/app")
+        for g in staging_paths
+    )
+    assert not any(
+        _policy_matches(g, "secret/metadata/finance_report/production/app")
+        for g in staging_paths
+    )
 
 
 def _consumers_fixture(monkeypatch, envs: dict[str, str], deploy=None):
