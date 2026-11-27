@@ -420,8 +420,9 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
 - **Delivery section (#1645).** The weekly and monthly digest has a section "Delivery". For each env (`preview`, `staging`,
   `prod`) and each change kind (`app`, `sdk`, `infra`, `harness`) it gives the runs, the pass rate with a Wilson 95% interval,
   p50 and p90 of the `operation` and `post` seconds, and the 3 check ids that fail most. A run is the records of one env
-  that one workflow run wrote; it passes when every record passes and it has a `post` record. A production promotion
-  writes no `post` record: it passes on the `production_marker` check of its `operation` record. The source is
+  that one workflow run wrote; it passes when every record passes and it has a `post` record. The `operation` job of a
+  production promotion uploads only its `operation` record, so the reader gets no `post` record of that run: such a run
+  passes on the `production_marker` check of its `operation` record. The source is
   `tools/stage_records.py list` (reader: `common/deploy/stage_record_reader.py`; artifacts `stage-<env>-<phase>-<subject>`; see `ops.pipeline.md` §4.3), passed to
   `common/observability/digest.py` by `tools/watchdog_weekly_digest.py`; the maths is `common/observability/delivery_section.py`.
   A failed read shows as one line "stage records unavailable" and the digest still goes out.

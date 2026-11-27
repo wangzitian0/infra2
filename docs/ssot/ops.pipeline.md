@@ -483,11 +483,12 @@ Each staging soak and each production promotion writes three records: `pre`, `op
   secrets and is classified in `common/gate/production_contract.py`.
 - **Delivery board (#1644 Q1).** In the same job (`digest` of `watchdog.yml`) and at the same time, `tools/delivery_board.py` runs before the reminder.
   It computes the five numbers of section 2.0 from the run list of `reconcile-iac-inputs.yml`, the `production/` markers,
-  the merged PRs and the tracked Python files. It reads no stage record: it needs about 10 API calls. It sends one card to
+  the merged PRs and the tracked Python files. It reads no stage record: it needs about 40 API calls. It sends one card to
   the reports chat. It posts one OTLP log record to the public ingest `https://otel.${INTERNAL_DOMAIN}/v1/logs`. In SigNoz
   the record has `service.name = infra2-delivery-board`, `deployment.environment.name = ci` and one `delivery.*` attribute
-  for each measured number. The card states whether SigNoz took the record. A failed send prints `::warning::` and the run
-  does not fail. It dispatches nothing.
+  for each measured number. The card states whether SigNoz took the record. A board that cannot be computed sends a card
+  that names the reason. A failed send prints `::warning::`. No failure of the board fails the run, so the reminder and
+  the probe still run. It dispatches nothing.
 
 ---
 

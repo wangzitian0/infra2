@@ -261,8 +261,10 @@ jobs:
 
       # The delivery board: five numbers, one Lark card and one SigNoz log record (#1644 Q1).
       # It reads the run list, the merged PRs and the tree, and dispatches nothing. It runs
-      # first: it needs about 10 API calls, and the two steps below read stage records.
+      # first: it needs about 40 API calls, and the two steps below read stage records.
+      # A failure of the board never fails the step, so the reminder and the probe still run.
       - name: Send the delivery board
+        timeout-minutes: 3
         if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'promotion-reminder' || inputs.task == 'all' }}
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}

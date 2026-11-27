@@ -6,6 +6,8 @@ import io
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from common.observability import delivery_board as db
 
 NOW = datetime(2026, 11, 27, 9, 0, tzinfo=timezone.utc)
@@ -102,7 +104,14 @@ def test_lead_times_cover_the_promotions_of_the_window_and_the_queue() -> None:
         "queue_prs": 2,
         "queue_oldest_hours": 5.0,
     }
-    assert db.lead_times(merged, [], now=NOW)["lead_p90_hours"] is None
+    # One promotion in the lookback: its PRs count. The merge commit of the head PR has
+    # the commit time of the tag.
+    single = db.lead_times([hours_ago(30), hours_ago(20)], released[-1:], now=NOW)
+    assert (single["lead_prs"], single["lead_p90_hours"]) == (2, 20.0)
+    # No promotion in the lookback: each PR waits. The queue is never empty by default.
+    none = db.lead_times(merged, [], now=NOW)
+    assert (none["lead_p90_hours"], none["queue_prs"]) == (None, 7)
+    assert none["queue_oldest_hours"] == 500.0
 
 
 def test_the_card_names_each_number_its_goal_and_the_signoz_state() -> None:
@@ -145,13 +154,17 @@ def test_collect_board_reads_the_runs_the_markers_the_prs_and_the_tree(
         run = _run("main", "success", done, event="workflow_dispatch")
         return {**run, "display_title": f"Reconcile IaC Inputs (PROD {tag})"}
 
-    def pr(merged: str, *paths: str) -> dict:
+    def pr(merged: str, *paths: str, commit: str = "") -> dict:
         files = {"totalCount": len(paths), "nodes": [{"path": p} for p in paths]}
-        return {"mergedAt": merged, "updatedAt": merged, "files": files}
+        node = {"mergedAt": merged, "updatedAt": merged, "files": files}
+        return {**node, "mergeCommit": {"committedDate": commit}} if commit else node
 
     prs = [
         pr("2026-11-27T08:00:00Z", "harness/repos.yaml", "repos/truealpha"),
-        pr("2026-11-26T08:00:00Z", "common/deploy/v2.py"),
+        # The head PR of v3.2.1: GitHub sets mergedAt 2 s after the merge commit.
+        pr(
+            "2026-11-26T09:00:02Z", "common/deploy/v2.py", commit="2026-11-26T09:00:00Z"
+        ),
         pr("2026-11-01T00:00:00Z", "uv.lock"),  # older than the lookback: ends the scan
     ]
     replies = {
@@ -193,7 +206,7 @@ def test_collect_board_reads_the_runs_the_markers_the_prs_and_the_tree(
     board = db.collect_board("o/r", "token", now=NOW, opener=opener)
 
     assert (board.staging_passed, board.staging_runs) == (1, 1)
-    assert (board.lead_prs, board.lead_p90_hours) == (1, 2.0)
+    assert (board.lead_prs, board.lead_p90_hours) == (1, 1.0)
     assert (board.queue_prs, board.queue_oldest_hours) == (1, 1.0)
     assert (board.merged_prs, board.version_only_prs) == (2, 1)
     assert (board.test_lines, board.code_lines) == (128, 100)
@@ -218,3 +231,52 @@ def test_python_lines_split_the_tracked_files_into_test_and_code(tmp_path) -> No
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
     assert db.python_lines(tmp_path) == (6, 3)
+
+
+def test_a_scan_that_does_not_reach_the_lookback_raises() -> None:
+    node = {"mergedAt": "2026-11-27T08:00:00Z", "updatedAt": "2026-11-27T08:00:00Z"}
+    page = {
+        "pageInfo": {"hasNextPage": True, "endCursor": "c"},
+        "nodes": [{**node, "files": None}],
+    }
+    reply = json.dumps({"data": {"repository": {"pullRequests": page}}}).encode()
+    calls = []
+
+    def opener(request, timeout=0):
+        calls.append(request.full_url)
+        return io.BytesIO(reply)
+
+    with pytest.raises(RuntimeError, match="more than 1000 PRs"):
+        db.fetch_merged_prs(
+            "o/r", "token", since=NOW - timedelta(days=21), opener=opener
+        )
+    assert len(calls) == db.MAX_PAGES
+
+
+def test_a_board_that_cannot_be_computed_sends_a_card_and_does_not_fail(
+    monkeypatch,
+) -> None:
+    from tools import delivery_board as tool
+
+    sent = []
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.delenv("DELIVERY_BOARD_DRY_RUN", raising=False)
+    monkeypatch.setattr(
+        tool, "deliver_report_card", lambda env, card, **kw: sent.append(card)
+    )
+
+    def refused(*args, **kwargs):
+        raise RuntimeError("GitHub GraphQL: rate limited")
+
+    monkeypatch.setattr(tool, "collect_board", refused)
+    assert tool.main() == 0
+    assert "未能计算" in sent[0]["header"]["title"]["content"]
+    assert "RuntimeError: GitHub GraphQL: rate limited" in json.dumps(
+        sent[0], ensure_ascii=False
+    )
+
+    monkeypatch.setattr(tool, "collect_board", lambda *a, **kw: _board())
+    monkeypatch.setattr(tool, "write_signoz", lambda board, env: "")
+    assert tool.main() == 0
+    assert "SigNoz 记录：已写入" in json.dumps(sent[1], ensure_ascii=False)

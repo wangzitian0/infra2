@@ -16,7 +16,8 @@ The board reports. It gates nothing. Each number has one source:
 5. Test lines divided by code lines of the tracked Python files.
 
 The board reads no stage record: one record is one artifact download, and a daily read of
-three weeks does not fit a 10-minute job. ``GOALS`` holds the goal of each number.
+three weeks does not fit a 10-minute job. A run makes about 40 API calls (37 measured on
+2026-11-27): the run list, the markers, one commit for each promoted tag, and the PR pages. ``GOALS`` holds the goal of each number.
 ``docs/ssot/ops.pipeline.md`` section 2.0 names the board; ``tools/delivery_board.py`` is
 the entry point.
 """
@@ -77,7 +78,8 @@ _PRS_QUERY = (
     "pullRequests(states:MERGED,first:50,after:$after,"
     "orderBy:{field:UPDATED_AT,direction:DESC}){"
     "pageInfo{hasNextPage endCursor} "
-    "nodes{mergedAt updatedAt files(first:50){totalCount nodes{path}}}}}}"
+    "nodes{mergedAt updatedAt mergeCommit{committedDate} "
+    "files(first:50){totalCount nodes{path}}}}}}"
 )
 
 
@@ -158,7 +160,11 @@ def staging_trains(
 def promotions(
     runs: Iterable[Mapping[str, Any]], marker_tags: Iterable[str]
 ) -> dict[str, datetime]:
-    """Tag to the end of its first green production run. The tag must have a marker."""
+    """Tag to the end of its first green production run. The tag must have a marker.
+
+    The run list does not name the phase of a run. A green ``phase=pre`` run before the
+    promotion of the same tag gives an end that is too early; a later replay does not.
+    """
     marked = {tag.removeprefix(PRODUCTION_MARKER_PREFIX) for tag in marker_tags}
     found: dict[str, datetime] = {}
     for run in runs:
@@ -178,21 +184,24 @@ def lead_times(
 ) -> dict[str, Any]:
     """Merge-to-production hours and the queue.
 
-    ``released`` holds one (commit time of the tag, end of the promotion) pair for each
-    promoted tag. A PR is in the first promoted tag whose commit is not older than its
-    merge. A PR that is not newer than the oldest known tag is left out: an older
-    promotion can contain it. The p50 and p90 cover the promotions of the window.
+    ``merged`` holds the commit time of each merge. ``released`` holds one (commit time of
+    the tag, end of the promotion) pair for each promoted tag. A PR is in the first promoted
+    tag whose commit is not older than its merge commit. Both lists cover the same lookback,
+    and a promotion follows the merges that it contains, so each promotion of a listed PR
+    is in ``released``. A PR with no such tag waits; with no promotion, each PR waits. The
+    p50 and p90 cover the promotions of the window. A PR that is older than the lookback
+    is in neither list.
     """
     cuts = sorted(released)
     since = now - timedelta(days=window_days)
     hours: list[float] = []
+    waiting: list[datetime] = []
     for at in merged:
-        if not cuts or at <= cuts[0][0]:
-            continue
         hit = next(((cut, done) for cut, done in cuts if cut >= at), None)
-        if hit and hit[1] >= since:
+        if hit is None:
+            waiting.append(at)
+        elif hit[1] >= since:
             hours.append((hit[1] - at).total_seconds() / 3600)
-    waiting = [at for at in merged if cuts and at > cuts[-1][0]]
     return {
         "lead_p50_hours": round(percentile(hours, 0.5), 1) if hours else None,
         "lead_p90_hours": round(percentile(hours, 0.9), 1) if hours else None,
@@ -276,9 +285,12 @@ def fetch_train_runs(
 def fetch_merged_prs(
     repo: str, token: str, *, since: datetime, opener: Callable = open_url
 ) -> list[tuple[datetime, tuple[str, ...] | None]]:
-    """(merge time, changed paths) of each PR merged since ``since``.
+    """(commit time of the merge, changed paths) of each PR merged since ``since``.
 
-    The paths are ``None`` when the PR changes more files than one page holds.
+    The time is the commit date of the merge commit: GitHub sets ``mergedAt`` 1 to 2
+    seconds later, and the tag of a train points at that commit. The paths are ``None``
+    when the PR changes more files than one page holds. A scan that does not reach
+    ``since`` in ``MAX_PAGES`` pages raises: a short list gives wrong numbers.
     """
     owner, _, name = repo.partition("/")
     found: list[tuple[datetime, tuple[str, ...] | None]] = []
@@ -297,19 +309,24 @@ def fetch_merged_prs(
             raise RuntimeError(f"GitHub GraphQL: {reply['errors'][0].get('message')}")
         page = reply["data"]["repository"]["pullRequests"]
         for node in page["nodes"]:
-            merged_at = _time(node["mergedAt"])
-            if merged_at >= since:
+            if _time(node["mergedAt"]) >= since:
+                commit = node.get("mergeCommit") or {}
                 files = node["files"] or {"totalCount": 0, "nodes": []}
                 paths = tuple(f["path"] for f in files["nodes"])
                 complete = files["totalCount"] == len(paths)
-                found.append((merged_at, paths if complete else None))
+                found.append(
+                    (
+                        _time(commit.get("committedDate") or node["mergedAt"]),
+                        paths if complete else None,
+                    )
+                )
         # The order is the update time. A page that ends before ``since`` ends the scan.
         if not page["nodes"] or _time(page["nodes"][-1]["updatedAt"]) < since:
-            break
+            return found
         if not page["pageInfo"]["hasNextPage"]:
-            break
+            return found
         after = page["pageInfo"]["endCursor"]
-    return found
+    raise RuntimeError(f"more than {MAX_PAGES * 50} PRs since {since:%Y-%m-%d}")
 
 
 def collect_board(
@@ -450,6 +467,16 @@ def board_card(board: Board, *, repo: str, signoz_error: str) -> dict[str, Any]:
                 "default",
             ),
         ],
+    )
+
+
+def failure_card(reason: str, *, now: datetime) -> dict[str, Any]:
+    """The card of a day with no board: the owner sees the gap and its reason."""
+    return build_feishu_report_card(
+        title=f"交付日报 {now.astimezone(UTC8):%Y-%m-%d %H:%M} UTC+8：未能计算",
+        template="orange",
+        kpi_fields=[("原因", reason)],
+        sections=["今天没有交付数字。明天的日报会重新计算。"],
     )
 
 

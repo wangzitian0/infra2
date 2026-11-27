@@ -26,8 +26,9 @@ MARKER_CHECK = "production_marker"
 def run_passes(run: Iterable[Mapping[str, Any]]) -> bool:
     """True when the run reached its last step and every record of it passes.
 
-    The last step is the ``post`` record. A production promotion writes no ``post``
-    record: its last step is the ``production_marker`` check of the ``operation`` record.
+    The last step is the ``post`` record. The ``operation`` job of a production promotion
+    uploads only its ``operation`` record, so the reader gets no ``post`` record of that
+    run. Its last step is the ``production_marker`` check of the ``operation`` record.
     """
     records = list(run)
     done = any(r["phase"] == "post" for r in records) or any(
