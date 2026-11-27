@@ -4,9 +4,10 @@
 
 The logic is in ``common.observability.delivery_board``. This tool reads the train run list,
 the production markers, the merged PRs and the tree. It writes the record to SigNoz and sends
-the card to the reports chat. It dispatches nothing. The board is a report: a failure never
-fails the run, so the steps after it still run. A board that cannot be computed sends a card
-that names the reason. A failed write shows on the card. A failed send prints a warning.
+the card to the reports chat. It dispatches nothing. A board that cannot be computed sends a
+card that names the reason, and the tool returns 1: the step shows the failure. The step has
+`continue-on-error`, so the steps after it still run. A failed write shows on the card. A
+failed send prints a warning.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def main() -> int:
         print(f"::warning::delivery board not computed: {reason}")
         if not dry_run:
             _send(env, failure_card(reason, now=datetime.now(timezone.utc)), reason)
-        return 0
+        return 1
     text = "\n".join(board_lines(board))
     print(text)
     if dry_run:

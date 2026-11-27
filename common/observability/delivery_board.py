@@ -49,9 +49,13 @@ TRAIN_WORKFLOW = "reconcile-iac-inputs.yml"
 PROD_TITLE = re.compile(r"\(PROD (v[0-9]+\.[0-9]+\.[0-9]+)\)")
 LAST_TRAINS = 20
 WINDOW_DAYS = 7
-#: A promotion can contain a PR that is older than the window.
-LOOKBACK_DAYS = 21
+#: A promotion can contain a PR that is older than the window. The longest measured wait
+#: is 5 days (2026-11); a PR that waits longer than the lookback is in no number.
+LOOKBACK_DAYS = 14
+#: Pages of 100 runs for one event.
 MAX_PAGES = 20
+#: Pages of 50 PRs: 3,000 PRs updated in the lookback (about 450 measured on 2026-11-27).
+MAX_PR_PAGES = 60
 PIN_PATHS = frozenset({"harness/repos.yaml", "pyproject.toml", "uv.lock"})
 PIN_PREFIX = "repos/"
 #: Set by the PR that records the first timed run of a new App (#1644 Q4).
@@ -290,12 +294,12 @@ def fetch_merged_prs(
     The time is the commit date of the merge commit: GitHub sets ``mergedAt`` 1 to 2
     seconds later, and the tag of a train points at that commit. The paths are ``None``
     when the PR changes more files than one page holds. A scan that does not reach
-    ``since`` in ``MAX_PAGES`` pages raises: a short list gives wrong numbers.
+    ``since`` in ``MAX_PR_PAGES`` pages raises: a short list gives wrong numbers.
     """
     owner, _, name = repo.partition("/")
     found: list[tuple[datetime, tuple[str, ...] | None]] = []
     after: str | None = None
-    for _ in range(MAX_PAGES):
+    for _ in range(MAX_PR_PAGES):
         reply = _post_json(
             f"{API}/graphql",
             {
@@ -326,7 +330,7 @@ def fetch_merged_prs(
         if not page["pageInfo"]["hasNextPage"]:
             return found
         after = page["pageInfo"]["endCursor"]
-    raise RuntimeError(f"more than {MAX_PAGES * 50} PRs since {since:%Y-%m-%d}")
+    raise RuntimeError(f"more than {MAX_PR_PAGES * 50} PRs since {since:%Y-%m-%d}")
 
 
 def collect_board(

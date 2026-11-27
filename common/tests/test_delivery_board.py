@@ -211,7 +211,7 @@ def test_collect_board_reads_the_runs_the_markers_the_prs_and_the_tree(
     assert (board.merged_prs, board.version_only_prs) == (2, 1)
     assert (board.test_lines, board.code_lines) == (128, 100)
     assert sum("graphql" in url for url in seen) == 1
-    assert any("created=%3E%3D2026-11-06" in url for url in seen)
+    assert any("created=%3E%3D2026-11-13" in url for url in seen)
 
 
 def test_python_lines_split_the_tracked_files_into_test_and_code(tmp_path) -> None:
@@ -246,14 +246,14 @@ def test_a_scan_that_does_not_reach_the_lookback_raises() -> None:
         calls.append(request.full_url)
         return io.BytesIO(reply)
 
-    with pytest.raises(RuntimeError, match="more than 1000 PRs"):
+    with pytest.raises(RuntimeError, match="more than 3000 PRs"):
         db.fetch_merged_prs(
-            "o/r", "token", since=NOW - timedelta(days=21), opener=opener
+            "o/r", "token", since=NOW - timedelta(days=14), opener=opener
         )
-    assert len(calls) == db.MAX_PAGES
+    assert len(calls) == db.MAX_PR_PAGES
 
 
-def test_a_board_that_cannot_be_computed_sends_a_card_and_does_not_fail(
+def test_a_board_that_cannot_be_computed_sends_a_card_and_returns_1(
     monkeypatch,
 ) -> None:
     from tools import delivery_board as tool
@@ -270,7 +270,7 @@ def test_a_board_that_cannot_be_computed_sends_a_card_and_does_not_fail(
         raise RuntimeError("GitHub GraphQL: rate limited")
 
     monkeypatch.setattr(tool, "collect_board", refused)
-    assert tool.main() == 0
+    assert tool.main() == 1
     assert "未能计算" in sent[0]["header"]["title"]["content"]
     assert "RuntimeError: GitHub GraphQL: rate limited" in json.dumps(
         sent[0], ensure_ascii=False

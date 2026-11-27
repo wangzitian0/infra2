@@ -458,7 +458,8 @@ environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the 
 
 ### 4.2 Stage records and the stage card (#1645)
 
-Each staging soak and each production promotion writes three records: `pre`, `operation`, `post`. A record is a
+Each staging soak and each production promotion writes three records: `pre`, `operation`, `post`. The `operation` job of a
+production promotion does not upload its `post` record (#2123). A record is a
 `common.deploy.stage_record.StageRecord`. `common/deploy/stage_record.py::write_stage_record` is the only writer.
 
 - **Writers.** `tools/reconcile_iac_inputs.py --phase pre|operation|post` writes one record in each job of a release tag (`--phase all` writes the three in one process). The job `record` of
@@ -487,8 +488,8 @@ Each staging soak and each production promotion writes three records: `pre`, `op
   the reports chat. It posts one OTLP log record to the public ingest `https://otel.${INTERNAL_DOMAIN}/v1/logs`. In SigNoz
   the record has `service.name = infra2-delivery-board`, `deployment.environment.name = ci` and one `delivery.*` attribute
   for each measured number. The card states whether SigNoz took the record. A board that cannot be computed sends a card
-  that names the reason. A failed send prints `::warning::`. No failure of the board fails the run, so the reminder and
-  the probe still run. It dispatches nothing.
+  that names the reason, and the step shows the failure. The step has `continue-on-error` and a 3-minute limit, so the
+  reminder and the probe still run. A failed send prints `::warning::`. It dispatches nothing.
 
 ---
 
