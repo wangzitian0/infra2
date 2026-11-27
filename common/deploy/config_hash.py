@@ -699,6 +699,23 @@ def _resolve_repo_module(
     return None
 
 
+def _iter_top_level_import_nodes(nodes: list[ast.stmt]) -> Iterable[ast.AST]:
+    """Yield module-level imports (including top-level if/try guards) without function bodies."""
+    for node in nodes:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            yield node
+        elif isinstance(node, (ast.If, ast.With)):
+            yield from _iter_top_level_import_nodes(node.body)
+            if isinstance(node, ast.If):
+                yield from _iter_top_level_import_nodes(node.orelse)
+        elif isinstance(node, ast.Try):
+            yield from _iter_top_level_import_nodes(node.body)
+            for handler in node.handlers:
+                yield from _iter_top_level_import_nodes(handler.body)
+            yield from _iter_top_level_import_nodes(node.orelse)
+            yield from _iter_top_level_import_nodes(node.finalbody)
+
+
 def _runner_ast_closure(repo_root: Path, ref: str | None) -> set[str]:
     closure: set[str] = set()
     frontier = list(_RUNNER_SEED_MODULES)
@@ -714,7 +731,7 @@ def _runner_ast_closure(repo_root: Path, ref: str | None) -> set[str]:
             tree = ast.parse(raw.decode("utf-8", errors="replace"))
         except SyntaxError:
             continue
-        for node in ast.walk(tree):
+        for node in _iter_top_level_import_nodes(tree.body):
             candidates: list[str] = []
             if isinstance(node, ast.Import):
                 candidates.extend(alias.name for alias in node.names)

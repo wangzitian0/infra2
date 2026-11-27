@@ -557,3 +557,27 @@ def test_the_bootstrap_script_builds_then_waits_then_recreates() -> None:
 def test_the_sourced_helper_defines_the_wait_function() -> None:
     assert HELPER.is_file()
     assert re.search(r"^wait_for_runner_idle\(\) \{$", HELPER.read_text(), re.MULTILINE)
+
+
+def test_wait_for_runner_idle_honors_iac_runner_container_override(
+    tmp_path, health_server
+) -> None:
+    sequence = health_server([(200, {"in_flight_deploys": 0})])
+    proc, docker_calls = _run_helper(
+        tmp_path,
+        {
+            "IAC_RUNNER_HEALTH_URL": sequence.url,
+            "IAC_RUNNER_CONTAINER": "iac-runner-staging",
+        },
+        later_lines='export IAC_RUNNER_CONTAINER="iac-runner-staging"\n',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert any(
+        "inspect --format {{.State.Running}} iac-runner-staging" in c
+        for c in docker_calls
+    )
+    assert any("exec -i iac-runner-staging" in c for c in docker_calls)
+    script = BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+    assert script.index(
+        'export IAC_RUNNER_CONTAINER="$target_container"'
+    ) < script.index('. "$code_dir/bootstrap/06.iac_runner/wait_for_idle.sh"')

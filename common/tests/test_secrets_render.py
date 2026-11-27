@@ -69,7 +69,7 @@ def test_runner_policy_is_the_writer_identity_and_stays_hand_written() -> None:
     runner = next(s for s in secrets_render.SERVICES if s.service == "iac_runner")
     assert runner.policy is False
     policy = (ROOT / runner.directory / "vault-policy.hcl").read_text(encoding="utf-8")
-    assert 'path "secret/data/platform/+/*"' in policy and '"create"' in policy
+    assert 'path "secret/data/platform/{{env}}/*"' in policy and '"create"' in policy
 
 
 def test_merged_manifest_rejects_conflicting_declarations(

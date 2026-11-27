@@ -63,8 +63,8 @@ class IaCRunnerDeployer(Deployer):
     # instance).
     secrets = (
         SecretsFacet(
-            vault_agent_container="iac-runner-vault-agent",
-            app_containers=("iac-runner",),
+            vault_agent_container="iac-runner-vault-agent${ENV_SUFFIX}",
+            app_containers=("iac-runner${ENV_SUFFIX}",),
             auth_method="approle",
         ),
     )

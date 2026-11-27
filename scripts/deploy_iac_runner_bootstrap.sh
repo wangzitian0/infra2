@@ -5,7 +5,6 @@ set -euo pipefail
 
 target_env="${IAC_RUNNER_TARGET_ENV:-production}"
 runner_input_sha="${RUNNER_INPUT_SHA256:-}"
-control_container="iac-runner"
 
 case "$target_env" in
   production)
@@ -15,7 +14,6 @@ case "$target_env" in
     allowed_envs="production"
     data_path="/data/bootstrap/iac-runner"
     subdomain="iac"
-    image_repo="bootstrap-iac_runner-bkewyn-iac-runner"
     ;;
   staging)
     target_container="iac-runner-staging"
@@ -24,7 +22,6 @@ case "$target_env" in
     allowed_envs="staging"
     data_path="/data/bootstrap/iac-runner-staging"
     subdomain="iac-staging"
-    image_repo="bootstrap-iac_runner-staging-iac-runner"
     ;;
   *)
     echo "Unsupported IAC_RUNNER_TARGET_ENV='$target_env' (expected production or staging)" >&2
@@ -36,6 +33,11 @@ project="$(
   docker inspect "$target_container" \
     --format '{{ index .Config.Labels "com.docker.compose.project" }}' 2>/dev/null || true
 )"
+
+control_container="$target_container"
+if [ -z "$project" ] || [ "$project" = "<no value>" ]; then
+  control_container="iac-runner"
+fi
 
 control_project="$(
   docker inspect iac-runner \
@@ -87,7 +89,6 @@ dokploy_update_output="$(
   -e "INFRA2_ALLOWED_ENVS=$allowed_envs" \
   -e "INFRA2_DATA_PATH=$data_path" \
   -e "INFRA2_SUBDOMAIN=$subdomain" \
-  -e "INFRA2_IMAGE_REPO=$image_repo" \
   -i "$control_container" \
   sh -lc 'if [ -f /secrets/.env ]; then set -a; . /secrets/.env; set +a; fi; python -' <<'PY'
 import base64
@@ -106,7 +107,6 @@ env_suffix = os.environ.get("INFRA2_ENV_SUFFIX", "")
 allowed_envs = os.environ.get("INFRA2_ALLOWED_ENVS", "")
 data_path = os.environ.get("INFRA2_DATA_PATH", "/data/bootstrap/iac-runner")
 subdomain = os.environ.get("INFRA2_SUBDOMAIN", "iac")
-image_repo = os.environ.get("INFRA2_IMAGE_REPO", "")
 api_key = os.environ.get("DOKPLOY_API_KEY", "")
 internal_domain = os.environ.get("INTERNAL_DOMAIN", "")
 
@@ -168,24 +168,27 @@ def select_api_base():
 def find_iac_runner_compose(projects):
     matches = []
     prod_compose = None
+    prod_env_id = None
     bootstrap_env_id = None
     for project in projects:
         if project.get("name") != "bootstrap":
             continue
         for environment in project.get("environments", []):
+            env_id = environment.get("environmentId")
             if bootstrap_env_id is None:
-                bootstrap_env_id = environment.get("environmentId")
+                bootstrap_env_id = env_id
             for compose in environment.get("compose", []):
                 if target_app_name and compose.get("appName") == target_app_name:
-                    return compose, prod_compose, environment.get("environmentId")
+                    return compose, prod_compose, env_id
                 if compose.get("name") == "iac_runner":
                     prod_compose = compose
+                    prod_env_id = env_id
                 if compose.get("name") == target_name:
-                    matches.append((compose, environment.get("environmentId")))
+                    matches.append((compose, env_id))
     if len(matches) == 1:
         return matches[0][0], prod_compose, matches[0][1]
-    if target_env == "staging" and prod_compose and bootstrap_env_id:
-        return None, prod_compose, bootstrap_env_id
+    if target_env == "staging" and prod_compose and (prod_env_id or bootstrap_env_id):
+        return None, prod_compose, prod_env_id or bootstrap_env_id
     raise SystemExit(
         f"Could not uniquely resolve bootstrap/{target_name} compose in Dokploy"
     )
@@ -240,10 +243,13 @@ def provision_staging_vault(prod_details):
                 text=True,
             )
         )["data"]["data"]
-        args = ["vault", "kv", "put", "secret/bootstrap/staging/iac_runner"] + [
-            f"{k}={v}" for k, v in prod_kv.items()
-        ]
-        subprocess.run(args, env=vault_env, check=True)
+        subprocess.run(
+            ["vault", "kv", "put", "secret/bootstrap/staging/iac_runner", "-"],
+            input=json.dumps(prod_kv),
+            text=True,
+            env=vault_env,
+            check=True,
+        )
     policy = """path "auth/token/renew-self" { capabilities = ["update"] }
 path "auth/token/lookup-self" { capabilities = ["read"] }
 path "secret/data/bootstrap/staging/iac_runner" { capabilities = ["read", "list"] }
@@ -396,8 +402,6 @@ next_env = set_env_value(next_env, "ENV", target_env)
 next_env = set_env_value(next_env, "ENV_SUFFIX", env_suffix)
 next_env = set_env_value(next_env, "DATA_PATH", data_path)
 next_env = set_env_value(next_env, "IAC_RUNNER_ALLOWED_ENVS", allowed_envs)
-if image_repo:
-    next_env = set_env_value(next_env, "IAC_RUNNER_IMAGE_REPO", image_repo)
 if runner_input_sha:
     next_env = set_env_value(next_env, "RUNNER_INPUT_SHA256", runner_input_sha)
 
@@ -424,6 +428,7 @@ print(
     f"git_sha={get_env_value(confirmed_env, 'GIT_SHA')}"
 )
 print(f"INFRA2_TARGET_PROJECT={resolved_app_name}")
+print(f"INFRA2_INTERNAL_DOMAIN={get_env_value(confirmed_env, 'INTERNAL_DOMAIN') or internal_domain or 'zitian.party'}")
 print(
     "INFRA2_CONFIRMED_ENV_B64="
     + base64.b64encode(confirmed_env.encode()).decode()
@@ -432,8 +437,13 @@ PY
 )"
 
 printf '%s\n' "$dokploy_update_output" \
-  | sed '/^INFRA2_CONFIRMED_ENV_B64=/d;/^INFRA2_TARGET_PROJECT=/d'
+  | sed '/^INFRA2_CONFIRMED_ENV_B64=/d;/^INFRA2_TARGET_PROJECT=/d;/^INFRA2_INTERNAL_DOMAIN=/d'
 
+resolved_domain="$(
+  printf '%s\n' "$dokploy_update_output" \
+    | sed -n 's/^INFRA2_INTERNAL_DOMAIN=//p' \
+    | tail -n1
+)"
 resolved_project="$(
   printf '%s\n' "$dokploy_update_output" \
     | sed -n 's/^INFRA2_TARGET_PROJECT=//p' \
@@ -463,7 +473,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
-      - traefik.http.routers.${project}-websecure.rule=Host(\`${subdomain}.${INTERNAL_DOMAIN:-zitian.party}\`)
+      - traefik.http.routers.${project}-websecure.rule=Host(\`${subdomain}.${resolved_domain:-zitian.party}\`)
       - traefik.http.routers.${project}-websecure.entrypoints=websecure
       - traefik.http.routers.${project}-websecure.tls.certresolver=letsencrypt
       - traefik.http.services.${project}.loadbalancer.server.port=8080
@@ -492,9 +502,9 @@ git -C "$code_dir" fetch --tags --prune origin '+refs/heads/*:refs/remotes/origi
 git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner uv.lock tools/sdk_requirement.py
 echo "IaC Runner bootstrap source HEAD: $(git -C "$code_dir" rev-parse --short HEAD)"
 
+export IAC_RUNNER_CONTAINER="$target_container"
 # shellcheck source=SCRIPTDIR/../bootstrap/06.iac_runner/wait_for_idle.sh
 . "$code_dir/bootstrap/06.iac_runner/wait_for_idle.sh"
-export IAC_RUNNER_CONTAINER="$target_container"
 
 confirmed_env_b64="$(
   printf '%s\n' "$dokploy_update_output" \

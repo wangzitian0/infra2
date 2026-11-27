@@ -305,7 +305,7 @@ jobs:
             live_runner_hash=""
             if [[ -n "$target_runner_hash" && -n "${IAC_RUNNER_URL:-}" ]]; then
               live_runner_hash="$(
-                curl -sf --connect-timeout 5 --max-time 10 "${IAC_RUNNER_URL%/}/health" 2>/dev/null \
+                curl -sS --connect-timeout 5 --max-time 10 "${IAC_RUNNER_URL%/}/health" 2>/dev/null \
                   | python -c 'import json,sys; print(json.load(sys.stdin).get("runner_input_sha256",""))' 2>/dev/null || true
               )"
             fi

@@ -3,7 +3,7 @@ services:
     mem_limit: 128m
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
-    container_name: iac-runner-vault-agent${ENV_SUFFIX:-}
+    container_name: iac-runner-vault-agent${ENV_SUFFIX}
     restart: always
     logging:
       driver: json-file
@@ -73,8 +73,8 @@ services:
     # Always rebuild from source when deploying (no image caching)
     # This ensures webhook_server.py and other source files are always up-to-date
     pull_policy: build
-    image: ${IAC_RUNNER_IMAGE_REPO:-bootstrap-iac_runner-bkewyn-iac-runner}:${GIT_SHA:-}
-    container_name: iac-runner${ENV_SUFFIX:-}
+    image: bootstrap-iac_runner-bkewyn-iac-runner:${GIT_SHA:-}
+    container_name: iac-runner${ENV_SUFFIX}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -163,7 +163,7 @@ services:
       - IAC_RUNNER_ALLOWED_ENVS=${IAC_RUNNER_ALLOWED_ENVS:-}
     volumes:
       - secrets:/secrets:ro
-      - ${DATA_PATH:-/data/bootstrap/iac-runner${ENV_SUFFIX:-}}/workspace:/workspace
+      - ${DATA_PATH:-/data/bootstrap/iac-runner${ENV_SUFFIX}}/workspace:/workspace
       - ${SSH_DIR_PATH:-/root/.ssh}:/host_ssh:ro
       - /etc/dokploy/logs:/etc/dokploy/logs:ro
     networks:
