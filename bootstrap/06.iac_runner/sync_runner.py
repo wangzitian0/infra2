@@ -873,8 +873,6 @@ def run_invoke_task(
         env_vars["IAC_DEPLOY_REF"] = deploy_ref.lower()
     if version_ref:
         env_vars["DEPLOY_VERSION_REF"] = version_ref
-    if action and action != "sync":
-        env_vars["DEPLOY_ACTION"] = action
     if vault_root_token := resolve_vault_token(env_vars):
         # The bounded AppRole token travels as VAULT_TOKEN (common.env, infra2-sdk); the old
         # name is kept for one release so a child at an older iac_ref still finds it.

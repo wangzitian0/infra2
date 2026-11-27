@@ -1,5 +1,7 @@
 """Unified fixed-compose app rollout, verification, and rollback steps."""
 
+# alert-delivery-exempt: event-driven production rollback card; review=2027-05-01
+
 from __future__ import annotations
 
 import base64
