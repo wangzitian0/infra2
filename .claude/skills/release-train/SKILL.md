@@ -21,19 +21,18 @@ uv run python -m tools.harness status --fetch --online
 - The `train_gate:` summary names `total_unpromoted_prs`, `oldest_unpromoted_age` and `prod_gatekeeper`.
 - `docs/ssot/ops.pipeline.md` defines the production release process.
 
-## 2. Staging train batching (after each merge)
+## 2. Staging train (after each merge)
 
-- Batch at most 4 PRs on `main` ahead of Staging. This keeps fault localization within 4 PRs.
-- With fewer than 4 pending PRs and another sub-goal, return to `init`.
-- With 4 pending PRs, push the release tag `vX.Y.Z` on `origin/main`. The tag push runs the staging train.
-  A dispatch with `after=vX.Y.Z` only replays the same tag.
-- Wait for that run and its health and log checks before you start a fifth PR.
-- Before `close`, always push the release tag for 1 to 4 unpromoted PRs.
+- Cut a release tag only with `uv run python tools/release_tag.py --push -m "<message>"`. It tags the head of `origin/main`.
+- The tool prints `wait` while a tag train runs or waits, and in the 30 minutes after the start of the newest tag train.
+- On `wait`, do other work and run the tool again. The pull requests that merge in that time ride the next tag.
+- A dispatch with `after=vX.Y.Z` only replays the same tag.
+- After a red train, read its log before the next tag. Name each cause that the log shows, and fix each one in the same tag.
 - Verify Staging logs, `output_invariants`, alert and report completeness, and VPS resource health.
 
 ## 3. Failure
 
-- A failed Preview or Staging train gets one forward-fix round of 15 minutes through `init`.
+- A failed Preview or Staging train gets one forward-fix round through `init`. The round ends with the next free tag of `tools/release_tag.py`.
 - After that round, revert the poison-pill PR on `main` and reopen its issue.
 
 ## 4. Preview teardown
