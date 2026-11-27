@@ -1280,6 +1280,51 @@ def test_cli_down_via_iac_runner_fails_closed_when_runner_fails_or_empty(
     assert json.loads(capsys.readouterr().out)["containers_cleared"] is False
 
 
+def test_run_sync_spec_fixed_summarizes_real_app_rollout_plan(monkeypatch):
+    from common.deploy.steps.app_rollout import AppRolloutPlan
+    import common.deploy.sync_pipeline as sp
+
+    real_plan = AppRolloutPlan(
+        env="staging",
+        sha="a" * 40,
+        compose_id="cmp-123",
+        data="strict-app-image",
+        env_vars={"SECRET_TEMPLATE": "huge-secret-blob"},
+        rollback_class="A",
+        force_promote=False,
+        pause_rollback=False,
+        max_rollback_attempts=2,
+    )
+    monkeypatch.setattr(sp, "_supply_fixed_service_secrets", lambda svc, env: None)
+    monkeypatch.setattr(
+        sp.SyncPipeline, "run_fixed", classmethod(lambda cls, *a, **kw: real_plan)
+    )
+    out = sp.run_sync_spec(
+        {
+            "mode": "fixed",
+            "action": "up",
+            "service": "finance_report/app",
+            "env": "staging",
+            "code": "v1.0.0",
+        },
+        client=object(),
+        expected_env="staging",
+    )
+    assert out == {
+        "mode": "fixed",
+        "action": "up",
+        "env": "staging",
+        "sha": "a" * 40,
+        "compose_id": "cmp-123",
+        "data": "strict-app-image",
+        "rollback_class": "A",
+        "force_promote": False,
+        "pause_rollback": False,
+        "max_rollback_attempts": 2,
+    }
+    assert "env_vars" not in out
+
+
 def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     # --down resolves the SAME alias (kind from --type, value from --version-ref) and
     # routes to the preview backend's down(); it never resolves a ref or deploys.

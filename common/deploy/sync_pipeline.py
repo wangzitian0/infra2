@@ -747,10 +747,9 @@ def run_sync_spec(
                 "compose_id": plan.compose_id,
                 "data": plan.data,
                 "rollback_class": plan.rollback_class,
-                "rollback_attempted": plan.rollback_attempted,
-                "rollback_succeeded": plan.rollback_succeeded,
-                "rollback_error": plan.rollback_error,
-                "rollback_skipped_reason": plan.rollback_skipped_reason,
+                "force_promote": plan.force_promote,
+                "pause_rollback": plan.pause_rollback,
+                "max_rollback_attempts": plan.max_rollback_attempts,
             }
 
         if mode == "preview":
