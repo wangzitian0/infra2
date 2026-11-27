@@ -218,11 +218,24 @@ def get_env_value(env_text, key):
 
 
 def provision_staging_vault(prod_details):
-    root_token = subprocess.check_output(
-        ["op", "read", "op://Infra2/bootstrap/vault/Root Token/Root Token"],
-        text=True,
-        timeout=30,
-    ).strip()
+    item = json.loads(
+        subprocess.check_output(
+            ["op", "item", "get", "bootstrap/vault/Root Token", "--vault=Infra2", "--format=json"],
+            text=True,
+            timeout=30,
+        )
+    )
+    root_token = next(
+        (
+            str(field.get("value") or "").strip()
+            for field in item.get("fields", [])
+            if field.get("label") in ("Root Token", "Token")
+            and str(field.get("value") or "").strip()
+        ),
+        "",
+    )
+    if not root_token:
+        raise SystemExit("1Password item 'bootstrap/vault/Root Token' missing Root Token value")
     vault_addr = get_env_value(prod_details.get("env") or "", "VAULT_ADDR") or (
         f"https://vault.{internal_domain}" if internal_domain else "http://vault:8200"
     )
@@ -464,7 +477,7 @@ traefik_override="$compose_root/traefik.override.yml"
 
 mkdir -p "$compose_root" "$data_path/workspace"
 if [ ! -e "$code_dir/.git" ] && [ -n "$control_code_dir" ] && [ -d "$control_code_dir/.git" ]; then
-  cp -a "$control_code_dir" "$code_dir"
+  mkdir -p "$code_dir" && cp -a "$control_code_dir/." "$code_dir/"
 fi
 if [ ! -e "$traefik_override" ]; then
   cat > "$traefik_override" <<YAML
