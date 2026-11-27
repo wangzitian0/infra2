@@ -193,7 +193,15 @@ def test_sync_canary_pin_files_patch_and_minor_bump(tmp_path) -> None:
     assert [s.primary for s in slots] == [False, False, True]
     assert primary_canary_slot(tmp_path).version == "4.14.0"
     deploy_text = (todo_dir / "deploy.py").read_text(encoding="utf-8")
-    assert 'name="todo-v4-14-canary-status"' in deploy_text
+    assert 'name="todo-v4-13-canary-status"' in deploy_text
+    assert (
+        'target="http://platform-todo-v4-13${ENV_SUFFIX}:8000/api/canary/status"'
+        in deploy_text
+    )
+    assert (
+        'target="http://platform-todo-v4-14${ENV_SUFFIX}:8000/api/canary/status"'
+        in deploy_text
+    )
     assert '"platform-todo-v4-14${ENV_SUFFIX}"' in deploy_text
 
 

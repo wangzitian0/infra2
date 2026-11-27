@@ -465,15 +465,15 @@ def _add_minor_deploy_facets(
         text = text.replace(old_target, new_target, 1)
     secondary_probe = (
         "        ProbeFacet(\n"
-        f'            name="todo-{new_slot}-canary-status",\n'
+        f'            name="todo-{old_primary.slot}-canary-status",\n'
         '            kind="http",\n'
-        f'            target="{new_target}",\n'
+        f'            target="{old_target}",\n'
         '            expected="200",\n'
         '            severity="error",\n'
         "            timeout_seconds=15,\n"
         "        ),\n"
     )
-    if f'name="todo-{new_slot}-canary-status"' not in text:
+    if f'name="todo-{old_primary.slot}-canary-status"' not in text:
         anchor = "    signals = ("
         idx = text.find(anchor)
         if idx != -1:
