@@ -23,8 +23,8 @@ def _git(root, *argv: str) -> str:
 
 @pytest.fixture
 def checkout(tmp_path, monkeypatch):
-    """A repository whose base commit pins v0.3.9 and v0.3.25, with v0.3.26 in the work tree."""
-    tags = {"finance_report/app": "v0.3.9", "truealpha/app": "v0.3.25"}
+    """A repository whose base commit holds the tags fr-1 and ta-1, with ta-2 in the work tree."""
+    tags = {"finance_report/app": "fr-1", "truealpha/app": "ta-1"}
     monkeypatch.setattr(
         "common.deploy.reconcile_iac_inputs._parse_repos_yaml_release_tags",
         lambda text: {
@@ -40,7 +40,7 @@ def checkout(tmp_path, monkeypatch):
     )
     _git(tmp_path, "add", ".")
     _git(tmp_path, "commit", "-qm", "base")
-    tags["truealpha/app"] = "v0.3.26"
+    tags["truealpha/app"] = "ta-2"
     (harness / "repos.yaml").write_text(
         " ".join(f"{svc}={tag}" for svc, tag in tags.items())
     )
@@ -48,7 +48,7 @@ def checkout(tmp_path, monkeypatch):
 
 
 def test_moved_pins_names_only_the_pin_that_differs_from_the_base(checkout) -> None:
-    assert app_pin_check.moved_pins(checkout, "HEAD") == {"truealpha/app": "v0.3.26"}
+    assert app_pin_check.moved_pins(checkout, "HEAD") == {"truealpha/app": "ta-2"}
 
 
 def test_an_unreadable_base_is_an_error_and_not_no_pin_moved(checkout, capsys) -> None:
@@ -73,7 +73,7 @@ def test_a_pin_whose_sdk_has_no_canary_pass_fails_before_the_merge(
     checkout, capsys, monkeypatch
 ) -> None:
     """Release v3.2.64: truealpha/app@v0.3.24 locked 4.14.0; the train refused it in ``pre``."""
-    refusal = UnverifiedSdkError("truealpha/app@v0.3.26 pins infra2-sdk 4.14.0")
+    refusal = UnverifiedSdkError("truealpha/app@ta-2 locks an SDK with no Canary pass")
     monkeypatch.setattr(
         app_pin_check,
         "check_pins",
@@ -83,18 +83,18 @@ def test_a_pin_whose_sdk_has_no_canary_pass_fails_before_the_merge(
     )
     assert app_pin_check.main(["--base", "HEAD"], root=checkout) == 1
     out = capsys.readouterr().out
-    assert "the Staging train refuses this pin: truealpha/app@v0.3.26 pins" in out
+    assert "the Staging train refuses this pin: truealpha/app@ta-2 locks" in out
     assert app_pin_check.CANARY_FIRST in out
 
 
 def test_a_tag_that_is_off_the_app_main_fails(checkout) -> None:
     refusals, unread = _original(
-        {"truealpha/app": "v0.3.26"},
+        {"truealpha/app": "ta-2"},
         root=checkout,
-        on_main=_raise(ValueError("version_ref 'v0.3.26' is not on main")),
+        on_main=_raise(ValueError("version_ref 'ta-2' is not on main")),
         sdk_verified=_passes,
     )
-    assert refusals == ["truealpha/app@v0.3.26: version_ref 'v0.3.26' is not on main"]
+    assert refusals == ["truealpha/app@ta-2: version_ref 'ta-2' is not on main"]
     assert unread == []
 
 
@@ -102,7 +102,7 @@ def test_a_tag_that_is_off_the_app_main_fails(checkout) -> None:
     "error",
     [
         RuntimeError("stage_records: GitHub rate limit"),
-        ValueError("failed to fetch wangzitian0/truealpha:uv.lock@v0.3.26"),
+        ValueError("failed to fetch wangzitian0/truealpha:uv.lock@ta-2"),
         OSError("network is unreachable"),
     ],
 )
@@ -123,7 +123,7 @@ def test_an_unreadable_source_prints_skipped_and_passes(
         f"::warning::app pin check: SKIPPED, a source is not readable: infra2-sdk versions: {error}"
         in out
     )
-    assert "app pin check: SKIPPED (truealpha/app@v0.3.26)" in out
+    assert "app pin check: SKIPPED (truealpha/app@ta-2)" in out
     assert "app pin check: ok" not in out
 
 
@@ -145,10 +145,10 @@ def test_each_moved_pin_goes_to_both_train_checks(
     )
     assert app_pin_check.main(["--base", "HEAD"], root=checkout) == 0
     assert seen == [
-        ("truealpha/app", "v0.3.26", "staging"),
-        [("truealpha/app", "v0.3.26")],
+        ("truealpha/app", "ta-2", "staging"),
+        [("truealpha/app", "ta-2")],
     ]
-    assert "app pin check: ok (truealpha/app@v0.3.26)" in capsys.readouterr().out
+    assert "app pin check: ok (truealpha/app@ta-2)" in capsys.readouterr().out
 
 
 _original = app_pin_check.check_pins
