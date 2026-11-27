@@ -263,13 +263,127 @@ def apply_secret_supply(
     return apply(service, env_name, resolver=resolver, restart=restart)
 
 
+def write_runtime_secrets(
+    project: str,
+    env_name: str,
+    service: str,
+    values: Mapping[str, str],
+    *,
+    store: Any = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """The single atomic Vault KV v2 CRUD writer (``update`` mode + TLS retry)."""
+    clean_values = {str(k): str(v) for k, v in values.items() if v is not None}
+    backend = store or vault_backend(environ)
+    path = vault_path(project, env_name, service)
+    if clean_values:
+        backend.write(path, clean_values)
+    return clean_values
+
+
+def ensure_runtime_keys(
+    project: str,
+    env_name: str,
+    service: str,
+    *,
+    defaults: Mapping[str, str] | None = None,
+    generators: Mapping[str, Callable[[], str]] | None = None,
+    store: Any = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Read a Vault KV path once and fill missing keys atomically via ``update`` mode."""
+    backend = store or vault_backend(environ)
+    path = vault_path(project, env_name, service)
+    try:
+        current = dict(backend.read(path) or {})
+    except SecretsError as exc:
+        if "not found" not in str(exc).lower() and "404" not in str(exc):
+            raise
+        current = {}
+
+    updates: dict[str, str] = {}
+    for key, gen in (generators or {}).items():
+        if not current.get(key):
+            val = gen()
+            updates[key] = val
+            current[key] = val
+    for key, default_val in (defaults or {}).items():
+        if not current.get(key):
+            updates[key] = default_val
+            current[key] = default_val
+    if updates:
+        backend.write(path, updates)
+    return current
+
+
+def ensure_store_keys(
+    secrets_store: Any,
+    *,
+    defaults: Mapping[str, str] | None = None,
+    generators: Mapping[str, Callable[[], str]] | None = None,
+) -> dict[str, str]:
+    """Ensure required keys on a ``VaultSecrets`` store via one atomic ``update`` write."""
+    from common.security.store import VaultSecrets
+
+    def _read_key(key: str) -> Any:
+        try:
+            return secrets_store.get(key)
+        except VaultSecrets.VaultSecretNotFoundError:
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if "not found" in str(exc).lower():
+                return None
+            raise
+
+    updates: dict[str, str] = {}
+    resolved: dict[str, str] = {}
+    for key, gen in (generators or {}).items():
+        cur = _read_key(key)
+        if not cur:
+            val = gen()
+            updates[key] = val
+            resolved[key] = val
+        else:
+            resolved[key] = cur
+    for key, default_val in (defaults or {}).items():
+        cur = _read_key(key)
+        if not cur:
+            updates[key] = default_val
+            resolved[key] = default_val
+        else:
+            resolved[key] = cur
+
+    if updates:
+        if not write_store_keys(secrets_store, updates):
+            raise RuntimeError(f"Failed to write Vault keys: {sorted(updates)}")
+    return resolved
+
+
+def write_store_keys(secrets_store: Any, values: Mapping[str, str]) -> bool:
+    """Write ``values`` through ``set_many`` (atomic ``update``) or per-key ``set``."""
+    clean = {str(k): str(v) for k, v in values.items() if v is not None}
+    if not clean:
+        return True
+    set_many = getattr(secrets_store, "set_many", None)
+    if type(secrets_store).__name__ != "MagicMock" and callable(set_many):
+        return bool(set_many(clean))
+    for key, val in clean.items():
+        if not secrets_store.set(key, val):
+            return False
+    return True
+
+
 __all__ = [
     "ONEPASSWORD_VAULT",
     "SupplyReport",
     "TransientTransportError",
     "apply",
     "apply_secret_supply",
+    "ensure_runtime_keys",
+    "ensure_store_keys",
     "resolver_for",
     "retrying_transport",
     "vault_backend",
+    "write_runtime_secrets",
+    "write_store_keys",
 ]

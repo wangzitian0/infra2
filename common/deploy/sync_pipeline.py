@@ -222,6 +222,10 @@ class SyncPipeline:
                 action=SyncAction.FAILED,
                 details=details,
             )
+        try:
+            setattr(c, "_secret_supply_applied", True)
+        except Exception:  # noqa: BLE001
+            pass
 
         return None
 

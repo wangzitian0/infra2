@@ -26,7 +26,7 @@ import secrets as _secrets
 import string
 import subprocess
 import sys
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Mapping, Optional
 
 from common.security.backends import (
     OnePasswordBackend,
@@ -164,7 +164,14 @@ class VaultSecrets:
                     "(`vault token create -ttl=1h`, bootstrap/05.vault README) and export "
                     "it as VAULT_TOKEN."
                 )
-            self._backend = VaultKvBackend(self.addr, token=self.token)
+            from common.security.supply import retrying_transport
+
+            self._backend = VaultKvBackend(
+                self.addr,
+                token=self.token,
+                write_mode="update",
+                transport=retrying_transport(),
+            )
         return self._backend
 
     def _translate(self, error: SecretsError, verb: str) -> VaultError:
@@ -199,6 +206,18 @@ class VaultSecrets:
     def set(self, key: str, value: str) -> bool:
         try:
             self._client().write(self.path, {key: value})
+        except SecretsError as error:
+            raise self._translate(error, "write") from error
+        self._cache = None
+        return True
+
+    def set_many(self, values: Mapping[str, str]) -> bool:
+        """Atomically write multiple keys to this Vault path in one ``update`` call."""
+        clean = {str(k): str(v) for k, v in values.items() if v is not None}
+        if not clean:
+            return True
+        try:
+            self._client().write(self.path, clean)
         except SecretsError as error:
             raise self._translate(error, "write") from error
         self._cache = None

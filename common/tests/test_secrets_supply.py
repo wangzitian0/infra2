@@ -532,3 +532,61 @@ def test_apply_prunes_orphan_keys_on_non_preview_service() -> None:
     ]
     assert "LLM_MODEL" not in store.items[path]
     assert "pruned orphan keys: ['LLM_MODEL']" in report.notes
+
+
+def test_ensure_store_keys_uses_atomic_set_many_and_s3_uses_minio_lookup(
+    monkeypatch,
+) -> None:
+    """Real VaultSecrets batch-writes via atomic update set_many; S3Deployer looks up minio."""
+    from common.security.store import VaultSecrets
+    import common.security.registry as reg
+
+    store = VaultSecrets(
+        path="platform/staging/minio", addr="https://vault.test", token="tok"
+    )
+    writes: list[tuple[str, dict[str, str]]] = []
+
+    class _FakeClient:
+        def read(self, _p: str) -> dict[str, str]:
+            return {}
+
+        def write(self, p: str, values: dict[str, str]) -> None:
+            writes.append((p, dict(values)))
+
+    monkeypatch.setattr(store, "_client", lambda: _FakeClient())
+    resolved = secrets_supply.ensure_store_keys(
+        store,
+        defaults={"access_label": "minio_admin"},
+        generators={"generated_field": lambda: "generated_example"},
+    )
+    assert resolved == {
+        "access_label": "minio_admin",
+        "generated_field": "generated_example",
+    }
+    assert writes == [
+        (
+            "platform/staging/minio",
+            {"access_label": "minio_admin", "generated_field": "generated_example"},
+        )
+    ]
+
+    looked_up: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        reg,
+        "lookup",
+        lambda project, service: looked_up.append((project, service)) or None,
+    )
+
+    class _S3Like(deployer_module.Deployer):
+        service = "s3"
+        vault_service_name = "minio"
+        project = "platform"
+        secret_key = "root_password"
+
+    monkeypatch.setattr(
+        _S3Like,
+        "env",
+        classmethod(lambda cls: {"ENV": "staging", "PROJECT": "platform"}),
+    )
+    assert _S3Like.apply_secret_supply(object(), env="staging") is True
+    assert looked_up == [("platform", "minio")]

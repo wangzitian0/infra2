@@ -9,6 +9,20 @@ import re
 import time
 
 from invoke import task
+
+from common.security.approle import (
+    APPROLE_TOKEN_MAX_TTL,
+    APPROLE_TOKEN_TTL,
+    default_approle_policy,
+    destroy_secret_ids,
+    list_secret_id_accessors,
+    list_token_accessors,
+    reconcile_approle,
+    render_policy_hcl,
+    revoke_earlier_role_tokens,
+)
+
+# AppRole auth setup (replaces token_file periodic tokens; see infra2 #257)
 from common.security.backends import (
     VaultTokenTarget,
     normalize_selector,
@@ -553,10 +567,9 @@ def setup(c):
 
 
 def _read_policy_file(policy_path: str, env_name: str) -> str:
-    """Read a service's vault-policy.hcl, substituting ``{{env}}``. The one bit shared by
-    the AppRole setup path (setup_approle); substitutes the ``{{env}}`` placeholder."""
+    """Read a service's vault-policy.hcl, substituting ``{{env}}`` via ``common.security.approle``."""
     with open(policy_path) as f:
-        return f.read().replace("{{env}}", env_name)
+        return render_policy_hcl(f.read(), env_name)
 
 
 def _redeploy_with_vault_creds(
@@ -609,15 +622,7 @@ def _deploy_compose_with_record_check(client: Any, compose_id: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # AppRole auth setup (replaces token_file periodic tokens; see infra2 #257)
-# ---------------------------------------------------------------------------
-
-# The AppRole-issued token is renewed within token_ttl and re-authenticated
-# (fresh login) at token_max_ttl, so it never decays the way the old token_file
-# periodic tokens did.
-APPROLE_TOKEN_TTL = "24h"
-APPROLE_TOKEN_MAX_TTL = "168h"
 
 
 @task(
@@ -638,8 +643,6 @@ def setup_approle(c, project=None, service=None, deploy=True):
     compose of the role run the new secret id, the task destroys each secret id that
     existed before the run. A failed step destroys nothing and the task exits 1.
     """
-    import io
-
     header("Vault AppRole Setup", "Enabling approle + per-service roles")
 
     root_token = os.getenv("VAULT_ROOT_TOKEN")
@@ -702,72 +705,47 @@ def setup_approle(c, project=None, service=None, deploy=True):
         if os.path.exists(policy_path):
             policy_rules = _read_policy_file(policy_path, env_name)
         else:
-            policy_rules = (
-                f'path "secret/data/{target.project}/{env_name}/{target.service}" {{\n'
-                f'  capabilities = ["read", "list"]\n}}'
+            policy_rules = default_approle_policy(
+                target.project, env_name, target.service
             )
             warning(f"No policy file for {target.service}, using default read-only")
 
-        if not c.run(
-            f"vault policy write {policy} -",
-            env=venv,
-            in_stream=io.StringIO(policy_rules),
-            hide=True,
-            warn=True,
-        ).ok:
-            error(f"Failed to write policy {policy}")
-            failed.append((target.project, target.service, "policy_write_failed"))
-            continue
-
-        if not c.run(
-            f"vault write auth/approle/role/{role} "
-            f"token_policies={policy} token_no_default_policy=true "
-            f"token_ttl={APPROLE_TOKEN_TTL} token_max_ttl={APPROLE_TOKEN_MAX_TTL} "
-            f"secret_id_num_uses=0 secret_id_ttl=0",
-            env=venv,
-            hide=True,
-            warn=True,
-        ).ok:
-            error(f"Failed to write approle role {role}")
-            failed.append((target.project, target.service, "role_write_failed"))
+        try:
+            app_role = reconcile_approle(
+                c,
+                venv,
+                project=target.project,
+                env_name=env_name,
+                service=target.service,
+                policy_rules=policy_rules,
+                issue_credentials=bool(deploy),
+                token_ttl=APPROLE_TOKEN_TTL,
+                token_max_ttl=APPROLE_TOKEN_MAX_TTL,
+                list_prior_accessors=_secret_id_accessors,
+            )
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "policy" in msg.lower():
+                reason = "policy_write_failed"
+            elif "approle" in msg.lower():
+                reason = "role_write_failed"
+            elif "secret ids" in msg.lower():
+                reason = "secret_id_list_failed"
+            else:
+                reason = "credential_failed"
+            error(msg)
+            failed.append((target.project, target.service, reason))
             continue
 
         if not deploy:
-            # Nothing would store or print a secret id issued here, so it would only
-            # add one more valid credential that no service uses (#1070).
             info(f"   Role {role}: policy and role written; no secret id issued")
             continue
 
-        # The accessors from before this run. They are destroyed only after every
-        # consumer of the role runs the new secret id (#1070).
-        prior_accessors = _secret_id_accessors(c, venv, role)
-        if prior_accessors is None:
-            error(f"Failed to list the existing secret ids of {role}")
-            failed.append((target.project, target.service, "secret_id_list_failed"))
-            continue
-
-        role_id_res = c.run(
-            f"vault read -format=json auth/approle/role/{role}/role-id",
-            env=venv,
-            hide=True,
-            warn=True,
-        )
-        issue_tag = str(time.time_ns())
-        secret_id_res = c.run(
-            f"vault write -format=json auth/approle/role/{role}/secret-id "
-            f'metadata=\'{{"secret_id_issue":"{issue_tag}"}}\'',
-            env=venv,
-            hide=True,
-            warn=True,
-        )
-        if not role_id_res.ok or not secret_id_res.ok:
-            error(f"Failed to obtain role-id/secret-id for {role}")
-            failed.append((target.project, target.service, "credential_failed"))
-            continue
-        role_id = json.loads(role_id_res.stdout)["data"]["role_id"]
-        issued = json.loads(secret_id_res.stdout)["data"]
-        secret_id = issued["secret_id"]
-        new_accessor = issued["secret_id_accessor"]
+        role_id = app_role.role_id
+        secret_id = app_role.secret_id
+        new_accessor = app_role.new_accessor
+        prior_accessors = list(app_role.prior_accessors)
+        issue_tag = app_role.issue_tag
         success(f"   Role {role}: role_id + secret_id ready")
 
         if not _configure_dokploy_approle(
@@ -828,30 +806,8 @@ _ACCESSOR_RE = re.compile(r"^[0-9A-Za-z-]{1,64}$")
 
 
 def _secret_id_accessors(c, venv: dict[str, str], role: str) -> list[str] | None:
-    """The accessors of every secret id of ``role``, or None when Vault did not answer.
-
-    ``vault list -format=json`` prints ``{}`` and exits 2 when the role has no secret
-    id; any other failure prints no JSON.
-    """
-    res = c.run(
-        f"vault list -format=json auth/approle/role/{role}/secret-id",
-        env=venv,
-        hide=True,
-        warn=True,
-    )
-    try:
-        data = json.loads(res.stdout or "")
-    except ValueError:
-        return None
-    if data == {}:
-        return []
-    if (
-        res.ok
-        and isinstance(data, list)
-        and all(isinstance(a, str) and _ACCESSOR_RE.match(a) for a in data)
-    ):
-        return data
-    return None
+    """Return every secret id accessor of ``role``, or None when Vault did not answer."""
+    return list_secret_id_accessors(c, venv, role)
 
 
 def _env_value(env_str: str, key: str) -> str:
@@ -955,90 +911,20 @@ def _destroy_secret_ids(
     c, venv: dict[str, str], role: str, accessors: list[str]
 ) -> bool:
     """Destroy each listed secret id of ``role``. True only when all are gone."""
-    ok = True
-    for accessor in accessors:
-        if not c.run(
-            f"vault write auth/approle/role/{role}/secret-id-accessor/destroy "
-            f"secret_id_accessor={accessor}",
-            env=venv,
-            hide=True,
-            warn=True,
-        ).ok:
-            error(f"   {role}: failed to destroy secret id accessor {accessor}")
-            ok = False
-    if ok:
-        success(f"   {role}: destroyed {len(accessors)} earlier secret id(s)")
-    return ok
+    return destroy_secret_ids(
+        c, venv, role, accessors, on_error=error, on_success=success
+    )
 
 
 def _token_accessors(c, venv: dict[str, str]) -> list[str] | None:
     """Return every token accessor from Vault, or None when Vault fails."""
-    res = c.run(
-        "vault list -format=json auth/token/accessors",
-        env=venv,
-        hide=True,
-        warn=True,
-    )
-    try:
-        data = json.loads(res.stdout or "")
-    except ValueError:
-        return None
-    if data == {}:
-        return []
-    if (
-        res.ok
-        and isinstance(data, list)
-        and all(isinstance(a, str) and _ACCESSOR_RE.match(a) for a in data)
-    ):
-        return data
-    return None
+    return list_token_accessors(c, venv)
 
 
 def _revoke_earlier_role_tokens(
     c, venv: dict[str, str], role: str, issue_tag: str
 ) -> bool:
     """Revoke every token of ``role`` whose ``secret_id_issue`` metadata tag differs."""
-    accessors = _token_accessors(c, venv)
-    if accessors is None:
-        error(f"   {role}: failed to list token accessors")
-        return False
-    ok = True
-    revoked = 0
-    for accessor in accessors:
-        lookup = c.run(
-            f"vault write -format=json auth/token/lookup-accessor accessor={accessor}",
-            env=venv,
-            hide=True,
-            warn=True,
-        )
-        if not lookup.ok:
-            # A token that expired between list and lookup is already gone.
-            if "invalid accessor" in (lookup.stderr or "").lower():
-                continue
-            error(f"   {role}: failed to inspect token accessor {accessor}")
-            ok = False
-            continue
-        try:
-            data = json.loads(lookup.stdout or "")["data"]
-        except (ValueError, KeyError, TypeError):
-            error(f"   {role}: unreadable token lookup for accessor {accessor}")
-            ok = False
-            continue
-        meta = data.get("meta")
-        if not isinstance(meta, dict) or meta.get("role_name") != role:
-            continue
-        if meta.get("secret_id_issue") == issue_tag:
-            continue
-        if not c.run(
-            f"vault write auth/token/revoke-accessor accessor={accessor}",
-            env=venv,
-            hide=True,
-            warn=True,
-        ).ok:
-            error(f"   {role}: failed to revoke token accessor {accessor}")
-            ok = False
-        else:
-            revoked += 1
-    if ok:
-        success(f"   {role}: revoked {revoked} earlier token(s)")
-    return ok
+    return revoke_earlier_role_tokens(
+        c, venv, role, issue_tag, on_error=error, on_success=success
+    )

@@ -51,11 +51,12 @@ def offboard_service(
     clean_service = _clean_ident(service)
     clean_project = _clean_ident(project)
     env_name = (
-        env
-        or os.environ.get("DEPLOY_ENV")
-        or os.environ.get("INFRA_ENVIRONMENT")
-        or "production"
+        env or os.environ.get("DEPLOY_ENV") or os.environ.get("INFRA_ENVIRONMENT")
     )
+    if not env_name:
+        raise ValueError(
+            "Explicit environment is required (pass env=... or set DEPLOY_ENV)"
+        )
     e = get_env(env_name)
     domain = e.get("INTERNAL_DOMAIN") or infra_domain()
     vault_addr = e.get("VAULT_ADDR") or f"https://vault.{domain}"
@@ -239,8 +240,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--env",
-        default="production",
-        help="Deployment environment (default: production)",
+        required=True,
+        help="Deployment environment (staging or production)",
     )
     parser.add_argument(
         "--purge-data",

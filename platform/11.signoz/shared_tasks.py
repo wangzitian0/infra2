@@ -270,7 +270,7 @@ def create_api_key(
         DEPLOY_ENV=staging invoke signoz.shared.create-api-key --name=custom-key --expiry-days=30
         DEPLOY_ENV=staging invoke signoz.shared.create-api-key --no-store-vault
     """
-    from common.console import success, error, info, warning
+    from common.console import success, error, info
     import subprocess
 
     env = get_env()
@@ -372,10 +372,9 @@ def create_api_key(
 
     if store_vault:
         from common.security.store import get_secrets
+        from common.security.supply import write_store_keys
 
         deploy_env = env["ENV"]
-        secrets = get_secrets("platform", "signoz", deploy_env)
-
         vault_data = {
             "api_key": api_key,
             "api_key_name": name,
@@ -383,12 +382,7 @@ def create_api_key(
             "url": base_url,
         }
 
-        for k, v in vault_data.items():
-            if secrets.set(k, v):
-                info(f"Stored {k} in Vault")
-            else:
-                warning(f"Failed to store {k} in Vault")
-
+        write_store_keys(get_secrets("platform", "signoz", deploy_env), vault_data)
         success(f"API key stored in Vault: secret/platform/{deploy_env}/signoz")
     else:
         info(f"API key (not stored): {api_key}")

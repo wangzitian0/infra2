@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import io
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -22,7 +20,17 @@ from typing import Any, Mapping
 
 from invoke import Context, task
 
+from common.security.approle import (
+    default_approle_policy,
+    destroy_secret_ids,
+    reconcile_approle,
+    revoke_earlier_role_tokens,
+)
 from common.security.backends import policy_name
+from common.security.supply import (
+    vault_backend as build_vault_backend,
+    write_runtime_secrets,
+)
 
 from common.console import error, header, info, success, warning
 from common.core.environ import get_env, infra_domain, with_env_suffix
@@ -93,6 +101,14 @@ def get_or_create_db_credentials(
     return new_password, True
 
 
+def _default_onboard_policy(
+    project: str, env_name: str, service: str, custom_policy_hcl: str | None = None
+) -> str:
+    if custom_policy_hcl:
+        return custom_policy_hcl
+    return default_approle_policy(project, env_name, service)
+
+
 def provision_vault_approle(
     c: Context,
     project: str,
@@ -102,111 +118,31 @@ def provision_vault_approle(
     root_token: str,
     *,
     custom_policy_hcl: str | None = None,
+    cleanup_stale: bool = True,
 ) -> tuple[str, str, str]:
-    """Write Vault policy and AppRole role, issuing role_id and secret_id."""
-    role_name = policy_name(project, env_name, service)
+    """Write Vault policy and AppRole role using ``common.security.approle`` (24h/168h TTL)."""
     venv = dict(os.environ)
     venv["VAULT_ADDR"] = vault_addr
     venv["VAULT_TOKEN"] = root_token
 
-    if custom_policy_hcl:
-        policy_rules = custom_policy_hcl.replace("{{env}}", env_name)
-    else:
-        policy_rules = f"""
-path "secret/data/{env_name}/common" {{
-  capabilities = ["read", "list"]
-}}
-path "secret/data/{project}/{env_name}/{service}" {{
-  capabilities = ["read", "list"]
-}}
-path "secret/data/{project}/{env_name}/postgres" {{
-  capabilities = ["read", "list"]
-}}
-path "auth/token/renew-self" {{
-  capabilities = ["update"]
-}}
-path "auth/token/lookup-self" {{
-  capabilities = ["read"]
-}}
-""".strip()
-
-    # 1. Write policy
-    res = c.run(
-        f"vault policy write {role_name} -",
-        env=venv,
-        in_stream=io.StringIO(policy_rules),
-        hide=True,
-        warn=True,
+    policy_rules = _default_onboard_policy(
+        project, env_name, service, custom_policy_hcl
     )
-    if not res.ok:
-        raise RuntimeError(f"Failed to write Vault policy {role_name}: {res.stderr}")
-
-    # 2. Write AppRole role
-    res = c.run(
-        f"vault write auth/approle/role/{role_name} "
-        f"token_policies={role_name} token_no_default_policy=true "
-        f"token_ttl=1h token_max_ttl=24h "
-        f"secret_id_num_uses=0 secret_id_ttl=0",
-        env=venv,
-        hide=True,
-        warn=True,
+    res = reconcile_approle(
+        c,
+        venv,
+        project=project,
+        env_name=env_name,
+        service=service,
+        policy_rules=policy_rules,
+        issue_credentials=True,
     )
-    if not res.ok:
-        raise RuntimeError(f"Failed to write Vault AppRole {role_name}: {res.stderr}")
-
-    # 3. Read role_id
-    role_id_res = c.run(
-        f"vault read -format=json auth/approle/role/{role_name}/role-id",
-        env=venv,
-        hide=True,
-        warn=True,
-    )
-    if not role_id_res.ok:
-        raise RuntimeError(
-            f"Failed to read role-id for {role_name}: {role_id_res.stderr}"
-        )
-    role_id = json.loads(role_id_res.stdout)["data"]["role_id"]
-
-    # 4. Mint secret_id
-    secret_id_res = c.run(
-        f"vault write -f -format=json auth/approle/role/{role_name}/secret-id",
-        env=venv,
-        hide=True,
-        warn=True,
-    )
-    if not secret_id_res.ok:
-        raise RuntimeError(
-            f"Failed to issue secret-id for {role_name}: {secret_id_res.stderr}"
-        )
-    secret_data = json.loads(secret_id_res.stdout)["data"]
-    secret_id = secret_data["secret_id"]
-    new_accessor = secret_data.get("secret_id_accessor")
-
-    # 5. Clean up stale secret-ids for role (defense-in-depth against credential accumulation)
-    if new_accessor:
-        list_res = c.run(
-            f"vault list -format=json auth/approle/role/{role_name}/secret-id",
-            env=venv,
-            hide=True,
-            warn=True,
-        )
-        if list_res.ok and list_res.stdout:
-            try:
-                accessors = json.loads(list_res.stdout)
-                if isinstance(accessors, list):
-                    for acc in accessors:
-                        if acc != new_accessor and isinstance(acc, str):
-                            c.run(
-                                f"vault write auth/approle/role/{role_name}/secret-id-accessor/destroy "
-                                f"secret_id_accessor={acc}",
-                                env=venv,
-                                hide=True,
-                                warn=True,
-                            )
-            except (ValueError, TypeError):
-                pass
-
-    return role_name, role_id, secret_id
+    if cleanup_stale:
+        stale = [a for a in res.prior_accessors if a != res.new_accessor]
+        if stale:
+            destroy_secret_ids(c, venv, res.role_name, stale)
+        revoke_earlier_role_tokens(c, venv, res.role_name, res.issue_tag)
+    return res.role_name, res.role_id, res.secret_id
 
 
 def sync_vault_secrets(
@@ -219,12 +155,15 @@ def sync_vault_secrets(
     *,
     vault_backend: Any = None,
 ) -> None:
-    """Idempotently sync secrets dictionary into Vault KV v2."""
-    from common.security.backends import VaultKvBackend, vault_path
-
-    backend = vault_backend or VaultKvBackend(vault_addr, token=token)
-    path = vault_path(project, env_name, service)
-    backend.write(path, secrets)
+    """Idempotently sync secrets dictionary into Vault KV v2 via ``supply`` (``update`` mode)."""
+    write_runtime_secrets(
+        project,
+        env_name,
+        service,
+        secrets,
+        store=vault_backend,
+        environ={**os.environ, "VAULT_ADDR": vault_addr, "VAULT_TOKEN": token},
+    )
 
 
 def onboard_service(
@@ -255,11 +194,12 @@ def onboard_service(
     clean_service = _clean_ident(service)
     clean_project = _clean_ident(project)
     env_name = (
-        env
-        or os.environ.get("DEPLOY_ENV")
-        or os.environ.get("INFRA_ENVIRONMENT")
-        or "production"
+        env or os.environ.get("DEPLOY_ENV") or os.environ.get("INFRA_ENVIRONMENT")
     )
+    if not env_name:
+        raise ValueError(
+            "Explicit environment is required (pass env=... or set DEPLOY_ENV)"
+        )
     e = get_env(env_name)
     domain = e.get("INTERNAL_DOMAIN") or infra_domain()
     vault_addr = e.get("VAULT_ADDR") or f"https://vault.{domain}"
@@ -369,9 +309,21 @@ def onboard_service(
             }
         )
     if redis:
+        if dry_run or not token:
+            redis_password = "DRY_RUN_REDIS_PASSWORD"
+        else:
+            redis_store = vault_backend or build_vault_backend(
+                {**os.environ, "VAULT_ADDR": vault_addr, "VAULT_TOKEN": token}
+            )
+            redis_data = redis_store.read(f"platform/{env_name}/redis") or {}
+            redis_password = redis_data.get("password")
+            if not redis_password:
+                raise RuntimeError(
+                    f"platform/redis password not found in Vault for env={env_name!r}"
+                )
         vault_secrets.update(
             {
-                "REDIS_URL": f"redis://{redis_host}:6379/0",
+                "REDIS_URL": f"redis://:{redis_password}@{redis_host}:6379/0",
                 "REDIS_HOST": redis_host,
                 "REDIS_PORT": "6379",
             }
@@ -391,22 +343,31 @@ def onboard_service(
             f"Runtime secrets synced to secret/data/{clean_project}/{env_name}/{clean_service}"
         )
 
-    # Step 4: Vault Policy & AppRole Provisioning
+    # Step 4: Vault Policy & AppRole Provisioning (do NOT destroy prior secret_ids until
+    # Dokploy env / consumers are updated!)
     info("Step 4: Provisioning Vault Policy and AppRole credentials...")
+    approle_res = None
     if dry_run or not token:
         role_name = policy_name(clean_project, env_name, clean_service)
         role_id = "mock_role_id"
         secret_id = "mock_secret_id"
         info(f"[DRY RUN] Would provision AppRole '{role_name}'")
     else:
-        role_name, role_id, secret_id = provision_vault_approle(
+        venv = {**os.environ, "VAULT_ADDR": vault_addr, "VAULT_TOKEN": token}
+        approle_res = reconcile_approle(
             c,
-            clean_project,
-            env_name,
-            clean_service,
-            vault_addr,
-            token,
+            venv,
+            project=clean_project,
+            env_name=env_name,
+            service=clean_service,
+            policy_rules=_default_onboard_policy(
+                clean_project, env_name, clean_service
+            ),
+            issue_credentials=True,
         )
+        role_name = approle_res.role_name
+        role_id = approle_res.role_id
+        secret_id = approle_res.secret_id
         success(f"Vault AppRole '{role_name}' active with fresh role_id and secret_id")
 
     result_summary["vault_approle"] = {
@@ -444,6 +405,14 @@ def onboard_service(
             )
             result_summary["dokploy_env_updated"] = True
             success(f"Injected AppRole into Dokploy compose '{compose.get('name')}'")
+            if approle_res is not None:
+                stale = [
+                    a
+                    for a in approle_res.prior_accessors
+                    if a != approle_res.new_accessor
+                ]
+                if stale:
+                    destroy_secret_ids(c, venv, approle_res.role_name, stale)
         except Exception as exc:
             warning(f"Dokploy env update failed: {exc}")
     else:
@@ -496,8 +465,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--env",
-        default="production",
-        help="Deployment environment (default: production)",
+        required=True,
+        help="Deployment environment (staging or production)",
     )
     parser.add_argument(
         "--db", choices=["postgres", "none"], default="postgres", help="Database engine"
