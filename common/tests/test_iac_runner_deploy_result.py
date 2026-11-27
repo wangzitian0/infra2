@@ -2252,6 +2252,7 @@ def test_run_sync_pipeline_spec_passes_env_and_executes_module(
         "IAC_SYNC_SPEC",
     ]
     assert json.loads(captured["env"]["IAC_SYNC_SPEC"]) == spec
+    assert captured["env"]["PYTHONPATH"].split(":")[0] == str(tmp_path)
 
 
 def test_async_up_action_response_id_matches_the_status_lookup(
