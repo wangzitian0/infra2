@@ -121,7 +121,8 @@ flowchart TB
 2. 操作身份是完整的五元组 `(env, exact_ref, normalized_service_set, version_ref, action)`
    （`webhook_server.py::_deployment_key`）→ `deployment_id`。服务集合是身份的一部分（不同服务集合不得互相命中
    cache / in-flight / status）；`version_ref`（app 镜像 pin，平台服务为空）区分同一 `iac_ref` 上两次不同 app release 的
-   晋升；`action`（默认 `sync`）保证 secrets-supply 请求绝不被同坐标的缓存 sync 结果回答（#649）。
+   `version_ref`（app 镜像 pin，平台服务为空）区分同一 `iac_ref` 上两次不同 app release 的晋升；`action`
+   （`sync` / `up` / `down`，默认 `sync`）区分固定栈同步与预览槽位生命周期，不再使用 `secrets-supply`。
    空 `version_ref` / 默认 `action` 不进入 id 种子，旧客户端按原 id 轮询仍能命中。
 3. 是否真的重启由 `sync` 的 config-hash gate 决定（§3.3）；hash 未变即 no-op。
 4. `main` 领先于最新 tag = **未发布**，是正常状态，不是 drift。

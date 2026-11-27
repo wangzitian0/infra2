@@ -1045,7 +1045,7 @@ def test_promote_secret_self_heal_needs_no_process_environment(
     target env, and the REAL truealpha deployer must provision that env's store from
     there (#1039: get_env() has no production default to lean on)."""
     from common.deploy.deployer import load_deployer_class
-    from common.deploy.promote import ensure_generated_secrets
+    from common.deploy.steps.app_rollout import ensure_generated_secrets
 
     deployer_cls = load_deployer_class("truealpha/app")
     stores = {

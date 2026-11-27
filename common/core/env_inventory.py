@@ -2854,7 +2854,7 @@ def _is_ephemeral_preview_db_password(key: str, val: str, path: str) -> bool:
         and str(val).strip().lower() in ("preview", "ephemeral")
         and (
             "/preview/" in path
-            or path.endswith("preview.py")
+            or path.endswith("preview_slot.py")
             or path == "common/deploy/compose_rules.py"
         )
     )

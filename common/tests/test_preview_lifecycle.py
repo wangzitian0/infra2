@@ -13,8 +13,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from common.deploy import preview as pl
-from common.deploy.preview import PreviewDeps, PreviewOptions
+from common.deploy.steps import preview_slot as pl
+from common.deploy.steps.preview_slot import (
+    PreviewSlotDeps as PreviewDeps,
+    PreviewSlotOptions as PreviewOptions,
+)
 from common.tests.compose_env import container_env
 
 COMPOSE_PATH = (
@@ -151,7 +154,7 @@ def test_up_fast_fails_when_dokploy_reports_deploy_error():
         return 0, "down"
 
     with pytest.raises(RuntimeError, match="rollout entered error"):
-        pl.up(
+        pl.execute_preview_up(
             "pr",
             5,
             code="main",
@@ -181,7 +184,7 @@ def test_up_recreates_existing_compose_with_delete_volumes_on_rollout_error():
             return records
 
     client = WedgedVolumeDokploy(existing={"composeId": "cmp-wedged"})
-    result = pl.up(
+    result = pl.execute_preview_up(
         "branch",
         "main",
         code="main",
@@ -209,7 +212,7 @@ def test_up_waits_for_own_terminal_rollout_before_public_readiness():
         assert client.deployment_queries >= 2
         return _ok_get(url, timeout)
 
-    result = pl.up(
+    result = pl.execute_preview_up(
         "branch",
         "main",
         code="main",
@@ -231,7 +234,7 @@ def test_finance_preview_requires_exact_version_on_backend_and_frontend():
         return 200, '{"git_sha":"old0000","version":"old0000"}'
 
     with pytest.raises(TimeoutError, match="requested deployment identity"):
-        pl.up(
+        pl.execute_preview_up(
             "branch",
             "main",
             code="main",
@@ -260,7 +263,7 @@ def test_preview_backend_health_budget_covers_measured_cold_start():
 
 def test_up_creates_compose_when_absent_and_deploys():
     client = FakeDokploy(existing=None)
-    result = pl.up(
+    result = pl.execute_preview_up(
         "pr",
         5,
         code="main",
@@ -310,7 +313,7 @@ def test_up_adopts_deterministic_compose_after_create_timeout():
             raise httpx.ReadTimeout("response lost after create")
 
     client = CreateTimedOutAfterCommit(existing=None)
-    result = pl.up(
+    result = pl.execute_preview_up(
         "pr",
         5,
         code="main",
@@ -343,7 +346,7 @@ def test_up_retries_alias_read_after_ambiguous_create_until_commit_is_visible():
 
     sleeps: list[int] = []
     client = EventuallyVisibleCreate(existing=None)
-    result = pl.up(
+    result = pl.execute_preview_up(
         "pr",
         5,
         code="main",
@@ -364,7 +367,7 @@ def test_up_preserves_create_timeout_when_alias_did_not_appear():
 
     client = CreateTimedOutBeforeCommit(existing=None)
     with pytest.raises(httpx.ReadTimeout, match="create never committed"):
-        pl.up(
+        pl.execute_preview_up(
             "pr",
             5,
             code="main",
@@ -379,7 +382,7 @@ def test_up_preserves_create_timeout_when_alias_did_not_appear():
 
 def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     client = FakeDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "branch",
         "feat/test-branch",
         code="abc1234",
@@ -430,7 +433,7 @@ def test_up_app_domain_override_does_not_leak_into_the_otel_endpoint():
     # bug (silently no-op telemetry on a throwaway preview, never observed like
     # promote's crash-looping prod symptom).
     client = FakeDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "branch",
         "feat/test-branch",
         code="abc1234",
@@ -455,7 +458,7 @@ def test_truealpha_preview_llm_container_receives_the_collector_and_the_alias_id
     and production by deployment.environment.name rather than by a separate collector.
     The compose is resolved against the env the preview actually pushes."""
     client = FakeDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "branch",
         "feat/test-branch",
         code="abc1234",
@@ -490,7 +493,7 @@ def test_up_self_provisions_the_preview_environment():
     # The dynamic preview env is created-if-absent (idempotent) so a first-ever preview on
     # a fresh box needs no out-of-band env-ensure step.
     client = FakeDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "pr",
         5,
         code="main",
@@ -504,7 +507,7 @@ def test_up_fails_closed_when_source_env_app_compose_missing():
     # never deploy a preview whose vault-agent would crash-loop.
     client = FakeDokploy(existing=None, source_app=False)
     with pytest.raises(RuntimeError, match="cannot source preview Vault creds"):
-        pl.up(
+        pl.execute_preview_up(
             "pr",
             5,
             code="main",
@@ -517,7 +520,7 @@ def test_up_fails_closed_when_source_env_has_no_vault_creds():
     # The source compose exists but carries no VAULT_ROLE_ID/SECRET_ID -> fail closed.
     client = FakeDokploy(existing=None, source_creds=False)
     with pytest.raises(RuntimeError, match="missing Vault creds"):
-        pl.up(
+        pl.execute_preview_up(
             "pr",
             5,
             code="main",
@@ -530,7 +533,7 @@ def test_up_injects_source_env_vault_creds():
     # The preview vault-agent logs in with the SOURCE env's AppRole creds (the same role
     # staging runs with), read off that env's app compose and merged into the preview env.
     client = FakeDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "pr",
         5,
         code="main",
@@ -549,7 +552,7 @@ def test_up_injects_source_env_vault_creds():
 
 def test_up_updates_existing_compose_in_place():
     client = FakeDokploy(existing={"composeId": "cmp-existing"})
-    result = pl.up(
+    result = pl.execute_preview_up(
         "branch",
         "main",
         code="main",
@@ -586,7 +589,7 @@ def test_up_updates_existing_compose_in_place():
 
 def test_up_looks_up_compose_by_deterministic_preview_name():
     client = FakeDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "pr",
         7,
         code="main",
@@ -603,7 +606,7 @@ def test_up_looks_up_compose_by_deterministic_preview_name():
 def test_up_no_wait_skips_health_check():
     called = []
     client = FakeDokploy(existing=None)
-    result = pl.up(
+    result = pl.execute_preview_up(
         "pr",
         5,
         code="main",
@@ -622,7 +625,7 @@ def test_up_no_wait_skips_health_check():
 def test_up_raises_when_health_never_passes():
     client = FakeDokploy(existing=None)
     with pytest.raises(TimeoutError, match="requested deployment identity"):
-        pl.up(
+        pl.execute_preview_up(
             "pr",
             5,
             code="main",
@@ -642,7 +645,7 @@ def test_up_raises_when_health_never_passes():
 def test_up_rejects_bad_domain_before_any_side_effect():
     client = FakeDokploy(existing=None)
     with pytest.raises(ValueError, match="invalid domain"):
-        pl.up(
+        pl.execute_preview_up(
             "pr",
             5,
             code="main",
@@ -655,7 +658,9 @@ def test_up_rejects_bad_domain_before_any_side_effect():
 def test_up_fails_closed_without_github_provider():
     client = FakeDokploy(existing=None, github_id=None)
     with pytest.raises(RuntimeError, match="no GitHub provider"):
-        pl.up("pr", 5, code="main", deps=PreviewDeps(client=client, domain="z.p"))
+        pl.execute_preview_up(
+            "pr", 5, code="main", deps=PreviewDeps(client=client, domain="z.p")
+        )
     assert client.created == []
     assert client.deployed == []
 
@@ -665,14 +670,18 @@ def test_up_fails_closed_if_environment_cannot_be_ensured():
     # never try to create a compose in a non-existent environment.
     client = FakeDokploy(existing=None, environment_id=None)
     with pytest.raises(RuntimeError, match="could not ensure"):
-        pl.up("pr", 5, code="main", deps=PreviewDeps(client=client, domain="z.p"))
+        pl.execute_preview_up(
+            "pr", 5, code="main", deps=PreviewDeps(client=client, domain="z.p")
+        )
     assert client.created == []
 
 
 def test_up_invalid_alias_makes_no_calls():
     client = FakeDokploy(existing=None)
     with pytest.raises(ValueError, match="positive PR number"):
-        pl.up("pr", "0", code="main", deps=PreviewDeps(client=client, domain="z.p"))
+        pl.execute_preview_up(
+            "pr", "0", code="main", deps=PreviewDeps(client=client, domain="z.p")
+        )
     assert client.created == []
     assert client.deployed == []
 
@@ -680,7 +689,7 @@ def test_up_invalid_alias_makes_no_calls():
 def test_up_signature_collapsed_rejects_flat_legacy_kwargs():
     import inspect
 
-    sig = inspect.signature(pl.up)
+    sig = inspect.signature(pl.execute_preview_up)
     assert list(sig.parameters) == ["kind", "value", "code", "options", "deps"]
     client = FakeDokploy(existing=None)
     for bad_kw in (
@@ -690,7 +699,7 @@ def test_up_signature_collapsed_rejects_flat_legacy_kwargs():
         {"service": "truealpha/app"},
     ):
         with pytest.raises(TypeError, match="unexpected keyword argument"):
-            pl.up("pr", 5, code="main", **bad_kw)
+            pl.execute_preview_up("pr", 5, code="main", **bad_kw)
 
 
 # --- down: teardown destroys the ephemeral DB volume -----------------------------
@@ -698,7 +707,7 @@ def test_up_signature_collapsed_rejects_flat_legacy_kwargs():
 
 def test_down_deletes_compose_with_volumes():
     client = FakeDokploy(existing={"composeId": "cmp-existing"})
-    result = pl.down("pr", 5, domain="zitian.party", client=client)
+    result = pl.execute_preview_down("pr", 5, domain="zitian.party", client=client)
     assert client.deleted == [("cmp-existing", True)]  # delete_volumes=True
     assert result.action == "down"
     assert result.alias == "pr-5"
@@ -707,7 +716,9 @@ def test_down_deletes_compose_with_volumes():
 
 def test_down_is_idempotent_when_alias_absent():
     client = FakeDokploy(existing=None)
-    result = pl.down("branch", "feat/test-branch", domain="zitian.party", client=client)
+    result = pl.execute_preview_down(
+        "branch", "feat/test-branch", domain="zitian.party", client=client
+    )
     assert client.deleted == []  # nothing to delete -> no call
     assert result.compose_id is None
     assert result.url == "https://report-branch-feat-test-branch.zitian.party"
@@ -728,7 +739,7 @@ def test_down_ignores_legacy_bare_pr_compose_in_test_env():
             return None
 
     fake = LegacyTestEnvDokploy(existing=None)
-    result = pl.down("pr", 2656, domain="zitian.party", client=fake)
+    result = pl.execute_preview_down("pr", 2656, domain="zitian.party", client=fake)
 
     assert fake.found == [
         ("finance-report-preview-pr-2656", "finance_report", "preview")
@@ -755,7 +766,7 @@ def test_down_fails_when_container_remains_after_second_read(monkeypatch):
             return [{"name": "/finance-report-pr-5"}]
 
     unit_client = SecondReadSurvivorDokploy()
-    res = pl.down(
+    res = pl.execute_preview_down(
         "pr",
         5,
         domain="zitian.party",
@@ -872,7 +883,7 @@ def test_up_image_ref_overrides_short_sha_for_releases():
         version = "v1.2.3" if url.endswith("/api/health") else SHORT_SHA
         return 200, f'{{"git_sha":"{version}","version":"{version}"}}'
 
-    pl.up(
+    pl.execute_preview_up(
         "branch",
         "main",
         code="main",

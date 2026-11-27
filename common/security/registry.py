@@ -189,19 +189,11 @@ SERVICES: tuple[Service, ...] = (
         "truealpha",
         "data_engine",
         ("truealpha/truealpha/20.data_engine/env.manifest.json",),
-        # The deploy identity the Deployer reads at compose time (pin_release writes the
-        # digest; the release id and the capture approval are governance values). They
-        # move to the release/decision plane with truealpha#781 and this line goes away.
-        # S3_BUCKET joins them for a different reason: the template stopped rendering it
-        # (the bucket reaches the container another way) but
-        # DataEngineDeployer._REQUIRED_SECRET_KEYS still reads it from this path and
-        # fails the deploy when it is absent — so a prune that removed it would break
-        # the next data-engine deploy, not the running one.
+        # Capture governance approval and bucket name remain in Vault until migrated
+        # to the release/decision plane; immutable release coordinates (IMAGE_DIGEST,
+        # GIT_COMMIT_SHA, RELEASE_ID) resolve at deploy time from DEPLOY_VERSION_REF.
         store_only_keys=(
             "CAPTURE_APPROVED_BY",
-            "GIT_COMMIT_SHA",
-            "IMAGE_DIGEST",
-            "RELEASE_ID",
             "S3_BUCKET",
         ),
     ),

@@ -9,8 +9,8 @@ gates. It builds + validates the :class:`~common.deploy.contract.DeployTarget` (
 illegal target reaches a backend), enforces the gates + data-lane red lines, then routes
 to the existing, already-tested backend — passing the resolved ``image_ref``:
 
-    app + preview/*       -> common.deploy.preview.up   (iac_ref pins the source ref)
-    app + staging|prod    -> common.deploy.promote.deploy (fixed-compose promote path)
+    app + preview/*       -> SyncPipeline.run_preview_up (iac_ref pins the source ref)
+    app + staging|prod    -> SyncPipeline.run_fixed      (fixed-compose sync path)
     iac_pinned + fixed env -> iac_runner /deploy webhook (platform/backing services)
 
 This module performs the routing only. Side effects live in the backends, so tests
@@ -70,10 +70,13 @@ from common.deploy.preflight import (
 from common.deploy.env_config import env_config, preview_service_config
 from common.core.registry import domain_for_service
 from common.deploy.app_contract import encode_rendered_templates, verify_app_manifests
-from common.deploy.promote import PromoteDeps, PromoteOptions, deploy as _deploy_fixed
-from common.deploy.preview import PreviewDeps, PreviewOptions, _validate_domain
-from common.deploy.preview import down as _preview_down
-from common.deploy.preview import up as _preview_up
+from common.deploy.steps.app_rollout import AppRolloutDeps, AppRolloutOptions
+from common.deploy.steps.preview_slot import (
+    PreviewSlotDeps,
+    PreviewSlotOptions,
+    validate_domain as _validate_domain,
+)
+from common.deploy.sync_pipeline import SyncPipeline
 from common.deploy.git_refs import (
     ResolvedRef,
     classify_ref,
@@ -214,8 +217,44 @@ def _normalize_expected_sha(expected_sha: str | None) -> str | None:
 class DeployV2Result:
     target: DeployTarget
     data_lane: str
-    backend: str  # "preview-lifecycle" | "deploy-primitive" | "iac-runner"
+    backend: str  # "sync-pipeline" | "iac-runner"
     detail: dict
+
+
+_deploy_fixed = SyncPipeline.run_fixed
+_preview_up = SyncPipeline.run_preview_up
+_preview_down = SyncPipeline.run_preview_down
+
+
+def _should_route_via_runner(dep: DeployDeps | None) -> bool:
+    return (
+        dep is not None
+        and dep.client is None
+        and bool(
+            (dep.iac_runner_url or "").strip()
+            or os.getenv("IAC_WEBHOOK_SECRET", "").strip()
+        )
+    )
+
+
+def _runner_sync_detail(final: dict | None) -> dict:
+    """Parse optional JSON summary emitted by SyncPipeline CLI inside iac-runner."""
+    if not isinstance(final, dict):
+        return {}
+    results = (final.get("result") or {}).get("results") or []
+    for entry in results:
+        if not isinstance(entry, dict):
+            continue
+        for line in reversed(str(entry.get("stdout") or "").splitlines()):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except ValueError:
+                    pass
+    return {}
 
 
 def _deploy_platform_preview(
@@ -227,16 +266,10 @@ def _deploy_platform_preview(
     client,
     domain: str,
     opt: DeployOptions,
+    dep: DeployDeps | None = None,
 ) -> DeployV2Result:
-    """Deploy a platform unit into its Preview slot through the one Preview lifecycle.
-
-    The unit's Preview compose is rendered with throwaway secrets (``preview.up``), so the
-    slot reads no Vault. ``version_ref`` names the slot only (a PR number or a branch);
-    the code is the infra2 ``iac_ref``. Capability is registry membership.
-    """
-    preview_service_config(
-        service
-    )  # fails before side effects for an unregistered unit
+    """Deploy a platform unit into its Preview slot via SyncPipeline v2."""
+    preview_service_config(service)
     spec = resolve_deploy_type_for_ref(deploy_type, version_ref)
     alias_value = (
         _default_main(version_ref)
@@ -253,19 +286,82 @@ def _deploy_platform_preview(
     )
     validate_deploy_target(target, service_spec(service))
     data_lane = enforce_data_lane_red_lines(target, code_reviewed=opt.code_reviewed)
+    _validate_domain(domain)
+    if _should_route_via_runner(dep):
+        assert dep is not None
+        sync_spec = {
+            "mode": "preview",
+            "action": "up",
+            "service": service,
+            "alias_kind": spec.alias_kind,
+            "alias_value": alias_value,
+            "code": iac_sha,
+            "iac_ref": iac_sha,
+            "branch": iac_ref.strip(),
+            "domain": domain,
+            "repo": _INFRA2_REPO,
+            "wait": opt.wait,
+            "timeout": opt.timeout,
+        }
+        url = resolve_iac_runner_url("preview", dep.iac_runner_url)
+        sec = dep.iac_webhook_secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+        started = time.monotonic()
+        response, final = _trigger_and_poll(
+            env="preview",
+            ref=iac_sha,
+            services=[service],
+            url=url,
+            secret=sec,
+            triggered_by=opt.triggered_by,
+            wait=opt.wait,
+            timeout=opt.timeout,
+            started=started,
+            version_ref=str(alias_value),
+            action="up",
+            sync_spec=sync_spec,
+        )
+        parsed = _runner_sync_detail(final)
+        detail = {
+            "alias": parsed.get("alias")
+            or (
+                "main"
+                if spec.alias_kind == "main"
+                else f"{spec.alias_kind}-{alias_value}"
+            ),
+            "compose_id": parsed.get("compose_id"),
+            "sha": iac_sha,
+            "url": parsed.get("url"),
+            "healthy": parsed.get("healthy"),
+            "iac_runner": response,
+        }
+        if opt.wait:
+            detail["iac_runner_final"] = final
+            status = str((final or {}).get("status", "")).lower()
+            if status != "completed":
+                raise RuntimeError(
+                    f"platform preview deploy of {service} ended {status!r}: "
+                    f"{(final or {}).get('details') or final}"
+                )
+        return DeployV2Result(target, data_lane, "iac-runner", detail)
+
+    effective_client = client
+    if effective_client is None:
+        from common.deploy.dokploy_client import get_dokploy
+
+        effective_client = get_dokploy(host=f"cloud.{infra_domain()}")
     result = _preview_up(
         spec.alias_kind,
         alias_value,
         code=iac_sha,
-        options=PreviewOptions(
+        options=PreviewSlotOptions(
             service=service,
             iac_ref=iac_sha,
             branch=iac_ref.strip(),
             wait=opt.wait,
             health_timeout=opt.timeout,
         ),
-        deps=PreviewDeps(
-            client=client,
+        deps=PreviewSlotDeps(
+            client=effective_client,
             domain=domain,
             repo=_INFRA2_REPO,
         ),
@@ -277,7 +373,7 @@ def _deploy_platform_preview(
         "url": result.url,
         "healthy": result.healthy,
     }
-    return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
+    return DeployV2Result(target, data_lane, "sync-pipeline", detail)
 
 
 def _deploy_platform(
@@ -427,27 +523,19 @@ def _trigger_and_poll(
     started: float,
     version_ref: str | None = None,
     action: str | None = None,
+    sync_spec: dict[str, Any] | None = None,
 ) -> tuple[dict, dict | None]:
-    """Fire the signed ``/deploy`` request and, when ``wait``, poll it to a terminal status.
-
-    The one place deploy_v2 sends a runner request and awaits it, so the lost-request
-    rule below holds on every path (#666). Returns ``(trigger response, final status)``;
-    the final status is ``None`` when ``wait`` is false.
-
-    A runner recreated between the request and the first poll has no record of the
-    deploy (:class:`RunnerLostDeploymentError`). The runner de-duplicates a repeated
-    ``/deploy``, and a sync of an unchanged configuration is a no-op (SSOT ops.pipeline
-    section 5), so a ``staging`` deploy sends the request once more. A ``production``
-    deploy raises the original error at once: a person decides. A second loss raises with
-    both deployment ids. Every other error (a timeout, a failed deploy, a bad argument)
-    passes through, as the runner may still hold that deploy.
-    """
-    runner_args = {
+    """Fire the signed ``/deploy`` request and, when ``wait``, poll it to terminal status."""
+    runner_args: dict[str, Any] = {
         key: value
-        for key, value in (("version_ref", version_ref), ("action", action))
+        for key, value in (
+            ("version_ref", version_ref),
+            ("action", action),
+            ("sync_spec", sync_spec),
+        )
         if value is not None
     }
-    submissions = _STAGING_SUBMISSIONS if env == "staging" else 1
+    submissions = _STAGING_SUBMISSIONS if env in ("staging", "preview") else 1
     lost_ids: list[str] = []
     while True:
         response = trigger_platform_deploy(
@@ -492,58 +580,6 @@ def _trigger_and_poll(
             )
             continue
         return response, final
-
-
-def _supply_app_secrets(
-    service: str,
-    env: str,
-    iac_sha: str,
-    *,
-    runner_url: str | None,
-    secret: str | None,
-    triggered_by: str,
-    timeout: int,
-) -> dict:
-    """Run the deploy-time secret supply for an app stack through the iac-runner.
-
-    App stacks promote through Dokploy directly (``_deploy_fixed``), a path that never
-    enters their Deployer, so ``Deployer.apply_secret_supply`` (copy human values from
-    1Password, generate runtime ones, report what is missing) would never run for them.
-    The runner has the AppRole and the 1Password service account this needs; Actions has
-    neither. So the same signed ``/deploy`` webhook is fired with ``action=secrets-supply``
-    and awaited before the promote — fail closed on a store that still lacks a required
-    value (#649). Without runner credentials (a caller outside deploy.yml) the step is
-    skipped and says so; the daily reconcile still reports the drift.
-    """
-    url = resolve_iac_runner_url(env, runner_url)
-    sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
-    if not url or not sec:
-        return {
-            "status": "skipped",
-            "reason": "no iac-runner credentials in this context",
-        }
-    runner_env = "production" if env == "prod" else env
-    started = time.monotonic()
-    response, final = _trigger_and_poll(
-        env=runner_env,
-        ref=iac_sha,
-        services=[service],
-        url=url,
-        secret=sec,
-        triggered_by=triggered_by,
-        wait=True,
-        timeout=timeout,
-        started=started,
-        action="secrets-supply",
-    )
-    status = str(final.get("status", "")).lower()
-    _progress(f"secret supply for {service} in {runner_env}", status, started)
-    if status != "completed":
-        raise RuntimeError(
-            f"secret supply for {service} in {runner_env} ended {status!r}: "
-            f"{final.get('details') or final.get('error') or final}"
-        )
-    return {"status": "completed", "iac_runner": response, "iac_runner_final": final}
 
 
 def _deploy_platform_batch(
@@ -684,13 +720,12 @@ def _deploy_preview_v2(
     *,
     iac_ref: str = "main",
     opt: DeployOptions,
+    dep: DeployDeps | None = None,
 ) -> DeployV2Result:
-    preview_service_config(
-        service
-    )  # the registry is the capability; fails before side effects
-    previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
-    injected_template = False
-    if opt.verify_manifests and previous_template is None:
+    preview_service_config(service)
+    _validate_domain(domain)
+    encoded = ""
+    if opt.verify_manifests and os.environ.get("VAULT_SECRETS_TEMPLATE") is None:
         rendered = verify_app_manifests(
             service,
             source_sha=resolved.sha,
@@ -698,15 +733,83 @@ def _deploy_preview_v2(
             iac_ref=iac_ref,
         )
         encoded = encode_rendered_templates(rendered, service=service)
-        if encoded:
-            os.environ["VAULT_SECRETS_TEMPLATE"] = encoded
-            injected_template = True
+    if _should_route_via_runner(dep):
+        assert dep is not None
+        sync_spec = {
+            "mode": "preview",
+            "action": "up",
+            "service": service,
+            "alias_kind": spec.alias_kind,
+            "alias_value": alias_value,
+            "code": resolved.sha,
+            "image_ref": resolved.image_ref,
+            "iac_ref": target.iac_ref,
+            "branch": clone_ref,
+            "domain": domain,
+            "repo": dep.repo,
+            "wait": opt.wait,
+            "timeout": opt.timeout,
+            "vault_secrets_template": encoded
+            or os.environ.get("VAULT_SECRETS_TEMPLATE", ""),
+        }
+        url = resolve_iac_runner_url("preview", dep.iac_runner_url)
+        sec = dep.iac_webhook_secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+        started = time.monotonic()
+        response, final = _trigger_and_poll(
+            env="preview",
+            ref=target.iac_ref,
+            services=[service],
+            url=url,
+            secret=sec,
+            triggered_by=opt.triggered_by,
+            wait=opt.wait,
+            timeout=opt.timeout,
+            started=started,
+            version_ref=str(alias_value),
+            action="up",
+            sync_spec=sync_spec,
+        )
+        parsed = _runner_sync_detail(final)
+        detail = {
+            "alias": parsed.get("alias")
+            or (
+                "main"
+                if spec.alias_kind == "main"
+                else f"{spec.alias_kind}-{alias_value}"
+            ),
+            "compose_id": parsed.get("compose_id"),
+            "sha": resolved.sha,
+            "image_ref": resolved.image_ref,
+            "url": parsed.get("url"),
+            "healthy": parsed.get("healthy"),
+            "iac_runner": response,
+        }
+        if opt.wait:
+            detail["iac_runner_final"] = final
+            status = str((final or {}).get("status", "")).lower()
+            if status != "completed":
+                raise RuntimeError(
+                    f"preview deploy of {service} ended {status!r}: "
+                    f"{(final or {}).get('details') or final}"
+                )
+        return DeployV2Result(target, data_lane, "iac-runner", detail)
+
+    effective_client = client
+    if effective_client is None:
+        from common.deploy.dokploy_client import get_dokploy
+
+        effective_client = get_dokploy(host=f"cloud.{infra_domain()}")
+    previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
+    injected_template = False
+    if encoded and previous_template is None:
+        os.environ["VAULT_SECRETS_TEMPLATE"] = encoded
+        injected_template = True
     try:
         result = _preview_up(
             spec.alias_kind,
             alias_value,
             code=resolved.sha,
-            options=PreviewOptions(
+            options=PreviewSlotOptions(
                 service=service,
                 image_ref=resolved.image_ref,
                 iac_ref=target.iac_ref,
@@ -714,8 +817,8 @@ def _deploy_preview_v2(
                 wait=opt.wait,
                 health_timeout=opt.timeout,
             ),
-            deps=PreviewDeps(
-                client=client,
+            deps=PreviewSlotDeps(
+                client=effective_client,
                 domain=domain,
                 repo=_repo_for_service(service),
             ),
@@ -731,7 +834,7 @@ def _deploy_preview_v2(
         "url": result.url,
         "healthy": result.healthy,
     }
-    return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
+    return DeployV2Result(target, data_lane, "sync-pipeline", detail)
 
 
 def _deploy_fixed_v2(
@@ -747,9 +850,9 @@ def _deploy_fixed_v2(
     opt: DeployOptions,
     dep: DeployDeps,
 ) -> DeployV2Result:
-    previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
-    injected_template = False
-    if opt.verify_manifests and previous_template is None:
+    _validate_domain(domain)
+    encoded = ""
+    if opt.verify_manifests and os.environ.get("VAULT_SECRETS_TEMPLATE") is None:
         rendered = verify_app_manifests(
             service,
             source_sha=resolved.sha,
@@ -757,24 +860,94 @@ def _deploy_fixed_v2(
             iac_ref=iac_ref,
         )
         encoded = encode_rendered_templates(rendered, service=service)
-        if encoded:
-            os.environ["VAULT_SECRETS_TEMPLATE"] = encoded
-            injected_template = True
-    try:
-        secret_supply = _supply_app_secrets(
-            service,
-            target.env,
-            target.iac_ref,
-            runner_url=dep.iac_runner_url,
-            secret=dep.iac_webhook_secret,
+    if _should_route_via_runner(dep):
+        runner_env = "production" if target.env == "prod" else target.env
+        sync_spec = {
+            "mode": "fixed",
+            "action": "up",
+            "service": service,
+            "env": target.env,
+            "code": resolved.sha,
+            "image_ref": resolved.image_ref,
+            "iac_ref": target.iac_ref,
+            "branch": clone_ref,
+            "domain": domain,
+            "repo": dep.repo,
+            "staging_validated": opt.staging_validated,
+            "break_glass": opt.break_glass,
+            "force_promote": opt.force_promote,
+            "pause_rollback": opt.pause_rollback,
+            "max_rollback_attempts": opt.max_rollback_attempts,
+            "verify_config": opt.verify_config,
+            "verify_smoke": opt.verify_smoke,
+            "verify_ingestion": opt.verify_ingestion,
+            "wait": opt.wait,
+            "timeout": opt.timeout,
+            "vault_secrets_template": encoded
+            or os.environ.get("VAULT_SECRETS_TEMPLATE", ""),
+        }
+        url = resolve_iac_runner_url(runner_env, dep.iac_runner_url)
+        sec = dep.iac_webhook_secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+        started = time.monotonic()
+        response, final = _trigger_and_poll(
+            env=runner_env,
+            ref=target.iac_ref,
+            services=[service],
+            url=url,
+            secret=sec,
             triggered_by=opt.triggered_by,
+            wait=opt.wait,
             timeout=opt.timeout,
+            started=started,
+            version_ref=resolved.image_ref,
+            action="up",
+            sync_spec=sync_spec,
         )
+        parsed = _runner_sync_detail(final)
+        detail = {
+            "env": target.env,
+            "sha": resolved.sha,
+            "image_ref": resolved.image_ref,
+            "compose_id": parsed.get("compose_id"),
+            "data": parsed.get("data") or data_lane,
+            "iac_ref": target.iac_ref,
+            "rollback_class": parsed.get("rollback_class"),
+            "force_promote": opt.force_promote,
+            "pause_rollback": opt.pause_rollback,
+            "max_rollback_attempts": opt.max_rollback_attempts,
+            "iac_runner": response,
+        }
+        if opt.wait:
+            detail["iac_runner_final"] = final
+            status = str((final or {}).get("status", "")).lower()
+            _progress(
+                f"iac-runner SyncPipeline of {service} to {runner_env}",
+                status,
+                started,
+            )
+            if status != "completed":
+                raise RuntimeError(
+                    f"app deploy of {service} to {runner_env} ended {status!r}: "
+                    f"{(final or {}).get('details') or final}"
+                )
+        return DeployV2Result(target, data_lane, "iac-runner", detail)
+
+    effective_client = client
+    if effective_client is None:
+        from common.deploy.dokploy_client import get_dokploy
+
+        effective_client = get_dokploy(host=f"cloud.{infra_domain()}")
+    previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
+    injected_template = False
+    if encoded and previous_template is None:
+        os.environ["VAULT_SECRETS_TEMPLATE"] = encoded
+        injected_template = True
+    try:
         promote_started = time.monotonic()
         plan = _deploy_fixed(
             target.env,
             resolved.sha,
-            options=PromoteOptions(
+            options=AppRolloutOptions(
                 service=service,
                 image_ref=resolved.image_ref,
                 iac_ref=target.iac_ref,
@@ -790,8 +963,8 @@ def _deploy_fixed_v2(
                 verify_smoke=opt.verify_smoke,
                 verify_ingestion=opt.verify_ingestion,
             ),
-            deps=PromoteDeps(
-                client=client,
+            deps=AppRolloutDeps(
+                client=effective_client,
                 domain=domain,
                 repo=_repo_for_service(service),
             ),
@@ -800,7 +973,7 @@ def _deploy_fixed_v2(
         if injected_template:
             os.environ.pop("VAULT_SECRETS_TEMPLATE", None)
     _progress(
-        f"Dokploy promote of {service} to {target.env}",
+        f"SyncPipeline rollout of {service} to {target.env}",
         "in service" if opt.wait else "triggered",
         promote_started,
     )
@@ -811,13 +984,12 @@ def _deploy_fixed_v2(
         "compose_id": plan.compose_id,
         "data": plan.data,
         "iac_ref": target.iac_ref,
-        "secret_supply": secret_supply,
         "rollback_class": plan.rollback_class,
         "force_promote": opt.force_promote,
         "pause_rollback": opt.pause_rollback,
         "max_rollback_attempts": opt.max_rollback_attempts,
     }
-    return DeployV2Result(target, data_lane, "deploy-primitive", detail)
+    return DeployV2Result(target, data_lane, "sync-pipeline", detail)
 
 
 def _resolve_control_plane_iac_ref(
@@ -895,7 +1067,11 @@ def deploy_v2(
     validate_iac_ref_form(spec.key, classify_ref(effective_iac_ref))
     assert_iac_ref_on_main(effective_iac_ref, spec.key)
     effective_client = dep.client
-    if effective_client is None and (not svc_spec.iac_pinned or spec.env == "preview"):
+    if (
+        effective_client is None
+        and not _should_route_via_runner(dep)
+        and (not svc_spec.iac_pinned or spec.env == "preview")
+    ):
         from common.deploy.dokploy_client import get_dokploy
 
         effective_client = get_dokploy(host=f"cloud.{infra_domain()}")
@@ -912,6 +1088,7 @@ def deploy_v2(
                 client=effective_client,
                 domain=effective_domain,
                 opt=opt,
+                dep=dep,
             )
         return _deploy_platform(
             service,
@@ -993,6 +1170,7 @@ def deploy_v2(
             data_lane,
             iac_ref=effective_iac_ref,
             opt=opt,
+            dep=dep,
         )
 
     return _deploy_fixed_v2(
@@ -1140,11 +1318,54 @@ def _handle_teardown(args: argparse.Namespace) -> int:
         alias_value = _default_main(args.version_ref)
     else:
         alias_value = str(normalize_pr_number(args.version_ref))
-    from common.deploy.dokploy_client import get_dokploy
-
     domain = _validate_domain(
         domain_for_service(args.service) or args.domain or infra_domain()
     )
+    runner_url = resolve_iac_runner_url("preview")
+    runner_secret = os.getenv("IAC_WEBHOOK_SECRET", "").strip()
+    if runner_url and runner_secret:
+        iac_ref = (args.iac_ref or "").strip() or "main"
+        iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+        sync_spec = {
+            "mode": "preview",
+            "action": "down",
+            "service": args.service,
+            "alias_kind": spec.alias_kind,
+            "alias_value": alias_value,
+            "domain": domain,
+        }
+        started = time.monotonic()
+        _response, final = _trigger_and_poll(
+            env="preview",
+            ref=iac_sha,
+            services=[args.service],
+            url=runner_url,
+            secret=runner_secret,
+            triggered_by="deploy_v2",
+            wait=not args.no_wait,
+            timeout=args.timeout,
+            started=started,
+            version_ref=str(alias_value),
+            action="down",
+            sync_spec=sync_spec,
+        )
+        parsed = _runner_sync_detail(final)
+        cleared = bool(parsed.get("containers_cleared", True))
+        print(
+            json.dumps(
+                {
+                    "action": "down",
+                    "alias": parsed.get("alias") or alias_value,
+                    "compose_id": parsed.get("compose_id"),
+                    "url": parsed.get("url"),
+                    "containers_cleared": cleared,
+                }
+            )
+        )
+        return 0 if cleared else 1
+
+    from common.deploy.dokploy_client import get_dokploy
+
     down_result = _preview_down(
         spec.alias_kind,
         alias_value,
@@ -1205,7 +1426,7 @@ def main(argv: list[str] | None = None) -> int:
         if (
             not service_spec(args.service).iac_pinned
             or deploy_type_spec(args.deploy_type).env == "preview"
-        ):
+        ) and not os.getenv("IAC_WEBHOOK_SECRET", "").strip():
             from common.deploy.dokploy_client import get_dokploy
 
             client = get_dokploy(host=f"cloud.{infra_domain()}")

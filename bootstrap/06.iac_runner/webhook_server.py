@@ -331,9 +331,8 @@ def _normalize_services(services: list[str] | None) -> tuple[str, ...]:
     return tuple(sorted({service.strip() for service in services}))
 
 
-def validate_version_ref(value) -> str | None:
-    """Optional app release the platform deploy should pin (truealpha#712): a vX.Y.Z
-    tag or a commit sha, or None when absent. Anything else is a 400, never coerced."""
+def validate_version_ref(value, *, allow_preview_refs: bool = False) -> str | None:
+    """Validate optional version_ref (tag/sha by default, plus branch/pr when preview/rollout)."""
     if value is None or value == "":
         return None
     if not isinstance(value, str):
@@ -345,12 +344,22 @@ def validate_version_ref(value) -> str | None:
         raise ValueError(
             "version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha"
         ) from exc
-    if form not in ("tag", "sha"):
+    allowed = ("tag", "sha", "branch", "pr") if allow_preview_refs else ("tag", "sha")
+    if form not in allowed:
         raise ValueError("version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha")
     return cleaned.lower() if form == "sha" else cleaned
 
 
-DEPLOY_ACTIONS = ("sync", "secrets-supply")
+DEPLOY_ACTIONS = ("sync", "up", "down")
+
+
+def _sync_spec_digest(sync_spec: Mapping[str, Any] | None) -> str:
+    if not sync_spec:
+        return ""
+    encoded = json.dumps(
+        dict(sync_spec), sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()[:16]
 
 
 def _deployment_key(
@@ -359,18 +368,17 @@ def _deployment_key(
     services: list[str] | None = None,
     version_ref: str | None = None,
     action: str = "sync",
+    sync_spec: Mapping[str, Any] | None = None,
 ) -> DeploymentKey:
-    # version_ref is part of the key: two promotions of different app releases on the
-    # same iac_ref within RECENT_DEPLOY_TTL_SECONDS are different deployments.
-    # The action is part of the key too: a secrets-supply request must never be
-    # answered from a cached sync of the same coordinates (#649).
-    return (
+    base: tuple[Any, ...] = (
         env,
         ref,
         _normalize_services(services),
         version_ref or "",
         action or "sync",
     )
+    spec_digest = _sync_spec_digest(sync_spec)
+    return (*base, spec_digest) if spec_digest else base
 
 
 def _action_kwargs(action: str | None) -> dict:
@@ -378,16 +386,20 @@ def _action_kwargs(action: str | None) -> dict:
     return {"action": action} if action and action != "sync" else {}
 
 
+def _sync_spec_kwargs(sync_spec: Mapping[str, Any] | None) -> dict:
+    return {"sync_spec": dict(sync_spec)} if sync_spec is not None else {}
+
+
 def _deployment_id(key: DeploymentKey) -> str:
     service_identity = ",".join(key[2])
     version_identity = key[3] if len(key) > 3 and key[3] else ""
-    # Legacy ids (no version_ref) keep their exact formula so a client that polls by the
-    # id it was handed before this change still finds its deployment.
     seed = f"{key[0]}:{key[1]}:{service_identity}"
     if version_identity:
         seed += f":{version_identity}"
     if len(key) > 4 and key[4] and key[4] != "sync":
         seed += f":{key[4]}"
+    if len(key) > 5 and key[5]:
+        seed += f":{key[5]}"
     return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
@@ -541,8 +553,9 @@ def _in_progress_response(
     services: list[str] | None = None,
     version_ref: str | None = None,
     action: str = "sync",
+    sync_spec: Mapping[str, Any] | None = None,
 ) -> dict:
-    key = _deployment_key(env, ref, services, version_ref, action)
+    key = _deployment_key(env, ref, services, version_ref, action, sync_spec=sync_spec)
     response = {
         "status": "in_progress",
         "deployment_id": _deployment_id(key),
@@ -569,11 +582,10 @@ def _completed_response(
     services: list[str] | None = None,
     version_ref: str | None = None,
     action: str = "sync",
+    sync_spec: Mapping[str, Any] | None = None,
 ) -> dict:
-    # Keyed exactly as the deployment was stored (review on #630): a version_ref that
-    # took part in the key must take part in the id, or /deploy/status looks up a
-    # deployment that was never stored under that id.
-    key = _deployment_key(env, ref, services, version_ref, action)
+    # Keyed exactly as the deployment was stored so /deploy/status matches its id.
+    key = _deployment_key(env, ref, services, version_ref, action, sync_spec=sync_spec)
     result_payload = (
         result.to_public_dict()
         if hasattr(result, "to_public_dict")
@@ -601,10 +613,17 @@ def _version_kwargs(version_ref: str | None) -> dict:
     return {"version_ref": version_ref} if version_ref else {}
 
 
-def _deployment_target(version_ref: str | None, action: str | None = None):
-    """The thread target: _run_deployment itself when no version_ref/action is set (the
-    exact legacy shape), else the same function with those bound in."""
-    kwargs = {**_version_kwargs(version_ref), **_action_kwargs(action)}
+def _deployment_target(
+    version_ref: str | None,
+    action: str | None = None,
+    sync_spec: Mapping[str, Any] | None = None,
+):
+    """The thread target: _run_deployment itself when no version_ref/action/sync_spec is set."""
+    kwargs = {
+        **_version_kwargs(version_ref),
+        **_action_kwargs(action),
+        **_sync_spec_kwargs(sync_spec),
+    }
     if not kwargs:
         return _run_deployment
     return functools.partial(_run_deployment, **kwargs)
@@ -617,13 +636,18 @@ def _run_deployment(
     services: list[str] | None = None,
     version_ref: str | None = None,
     action: str = "sync",
+    sync_spec: Mapping[str, Any] | None = None,
 ) -> None:
-    key = _deployment_key(env, ref, services, version_ref, action)
+    key = _deployment_key(env, ref, services, version_ref, action, sync_spec=sync_spec)
     response: dict | None = None
     try:
         from sync_runner import sync_services_by_version
 
-        extra = {**_version_kwargs(version_ref), **_action_kwargs(action)}
+        extra = {
+            **_version_kwargs(version_ref),
+            **_action_kwargs(action),
+            **_sync_spec_kwargs(sync_spec),
+        }
         result = (
             sync_services_by_version(env, ref, triggered_by, services, **extra)
             if extra
@@ -637,6 +661,7 @@ def _run_deployment(
             services,
             version_ref=version_ref,
             action=action,
+            sync_spec=sync_spec,
         )
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
@@ -741,6 +766,18 @@ def _allowed_deploy_envs() -> frozenset[str] | None:
         return None
     allowed = frozenset(part.strip() for part in raw.split(",") if part.strip())
     return allowed or None
+
+
+def _is_env_allowed(env: str, allowed_envs: frozenset[str] | None) -> bool:
+    if allowed_envs is None:
+        return True
+    if env in allowed_envs:
+        return True
+    # Staging runner accepts ephemeral preview deployments when preview is not explicitly
+    # split out, whereas production-only runners never allow staging or preview.
+    if env == "preview" and "staging" in allowed_envs:
+        return True
+    return False
 
 
 class DeployRequest(BaseModel):
@@ -997,10 +1034,10 @@ def _process_deploy_request(
     if not ref:
         return {"error": "Ref must be an exact 40-character commit SHA"}, 400
 
-    if env not in ("staging", "production"):
-        return {"error": "Invalid env (must be staging or production)"}, 400
+    if env not in ("staging", "production", "preview"):
+        return {"error": "Invalid env (must be staging, production, or preview)"}, 400
     allowed_envs = _allowed_deploy_envs()
-    if allowed_envs is not None and env not in allowed_envs:
+    if not _is_env_allowed(env, allowed_envs):
         return {
             "error": f"Runner does not accept env {env!r} (allowed={sorted(allowed_envs)})"
         }, 403
@@ -1025,13 +1062,20 @@ def _process_deploy_request(
                 "error": "services must be a non-empty list of non-empty strings"
             }, 400
 
-    try:
-        version_ref = validate_version_ref(payload.get("version_ref"))
-    except ValueError as exc:
-        return {"error": str(exc)}, 400
     action = payload.get("action") or "sync"
     if action not in DEPLOY_ACTIONS:
         return {"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}, 400
+    raw_sync_spec = payload.get("sync_spec")
+    if raw_sync_spec is not None and not isinstance(raw_sync_spec, dict):
+        return {"error": "sync_spec must be a JSON object"}, 400
+    sync_spec = dict(raw_sync_spec) if raw_sync_spec is not None else None
+    try:
+        version_ref = validate_version_ref(
+            payload.get("version_ref"),
+            allow_preview_refs=(env == "preview" or action in ("up", "down")),
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
     logger.info(
         f"Deployment: {ref} to {env} by {triggered_by}"
         + (f" (version_ref {version_ref})" if version_ref else "")
@@ -1039,7 +1083,9 @@ def _process_deploy_request(
     )
 
     if wait:
-        key = _deployment_key(env, ref, services, version_ref, action)
+        key = _deployment_key(
+            env, ref, services, version_ref, action, sync_spec=sync_spec
+        )
         with _deploy_state_lock:
             recent = _reusable_result(key)
             if recent:
@@ -1067,6 +1113,7 @@ def _process_deploy_request(
             services,
             **_version_kwargs(version_ref),
             **_action_kwargs(action),
+            **_sync_spec_kwargs(sync_spec),
         )
         with _deploy_state_lock:
             response = _recent_result(key) or {
@@ -1079,7 +1126,7 @@ def _process_deploy_request(
         status_code = 200 if response.get("status") == "completed" else 500
         return response, status_code
 
-    key = _deployment_key(env, ref, services, version_ref, action)
+    key = _deployment_key(env, ref, services, version_ref, action, sync_spec=sync_spec)
     with _deploy_state_lock:
         recent = _reusable_result(key)
         if recent:
@@ -1094,6 +1141,7 @@ def _process_deploy_request(
                     services,
                     version_ref=version_ref,
                     action=action,
+                    sync_spec=sync_spec,
                 ),
                 202,
             )
@@ -1102,12 +1150,12 @@ def _process_deploy_request(
 
     if services is not None:
         thread = threading.Thread(
-            target=_deployment_target(version_ref, action),
+            target=_deployment_target(version_ref, action, sync_spec=sync_spec),
             args=(env, ref, triggered_by, services),
         )
     else:
         thread = threading.Thread(
-            target=_deployment_target(version_ref, action),
+            target=_deployment_target(version_ref, action, sync_spec=sync_spec),
             args=(env, ref, triggered_by),
         )
     thread.daemon = True
@@ -1122,6 +1170,7 @@ def _process_deploy_request(
                 services=services,
                 version_ref=version_ref,
                 action=action,
+                sync_spec=sync_spec,
             ),
             "wait": False,
         },
@@ -1223,10 +1272,10 @@ def _process_status_request(
     deployment_id = payload.get("deployment_id")
     if not ref:
         return {"error": "Ref must be an exact 40-character commit SHA"}, 400
-    if env not in ("staging", "production"):
-        return {"error": "Invalid env (must be staging or production)"}, 400
+    if env not in ("staging", "production", "preview"):
+        return {"error": "Invalid env (must be staging, production, or preview)"}, 400
     allowed_envs = _allowed_deploy_envs()
-    if allowed_envs is not None and env not in allowed_envs:
+    if not _is_env_allowed(env, allowed_envs):
         return {
             "error": f"Runner does not accept env {env!r} (allowed={sorted(allowed_envs)})"
         }, 403
@@ -1247,16 +1296,25 @@ def _process_status_request(
     ):
         return {"error": "deployment_id must be 16 lowercase hex characters"}, 400
 
-    try:
-        version_ref = validate_version_ref(payload.get("version_ref"))
-    except ValueError as exc:
-        return {"error": str(exc)}, 400
     action = payload.get("action") or "sync"
     if action not in DEPLOY_ACTIONS:
         return {"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}, 400
+    raw_sync_spec = payload.get("sync_spec")
+    if raw_sync_spec is not None and not isinstance(raw_sync_spec, dict):
+        return {"error": "sync_spec must be a JSON object"}, 400
+    sync_spec = dict(raw_sync_spec) if raw_sync_spec is not None else None
+    try:
+        version_ref = validate_version_ref(
+            payload.get("version_ref"),
+            allow_preview_refs=(env == "preview" or action in ("up", "down")),
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
     with _deploy_state_lock:
         if services is not None:
-            key = _deployment_key(env, ref, services, version_ref, action)
+            key = _deployment_key(
+                env, ref, services, version_ref, action, sync_spec=sync_spec
+            )
         else:
             candidates = _keys_for_legacy_status(env, ref)
             if len(candidates) > 1:
@@ -1272,7 +1330,7 @@ def _process_status_request(
             key = (
                 candidates[0]
                 if candidates
-                else _deployment_key(env, ref, action=action)
+                else _deployment_key(env, ref, action=action, sync_spec=sync_spec)
             )
 
         expected_id = _deployment_id(key)

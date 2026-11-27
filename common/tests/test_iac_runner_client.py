@@ -275,7 +275,7 @@ def test_poll_validates_inputs_before_post():
     ("extra_kwargs", "expected_field", "expected_value"),
     [
         ({"version_ref": "v0.0.46"}, "version_ref", "v0.0.46"),
-        ({"action": "secrets-supply"}, "action", "secrets-supply"),
+        ({"action": "up"}, "action", "up"),
     ],
 )
 def test_trigger_carries_optional_payload_field_only_when_given(

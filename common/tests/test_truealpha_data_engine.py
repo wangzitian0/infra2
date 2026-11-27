@@ -198,6 +198,23 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
         "secrets_backend",
         classmethod(lambda cls, env=None: _Secrets(values)),
     )
+    monkeypatch.delenv("DEPLOY_VERSION_REF", raising=False)
+    environment = {
+        "ENV": "staging",
+        "ENV_SUFFIX": "-staging",
+        "ENV_DOMAIN_SUFFIX": "-staging",
+        "INTERNAL_DOMAIN": "example.test",
+        "DATA_PATH": "/tmp/infra2-data",
+    }
+    with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):
+        deployer.compose_env_base(environment)
+    missing_approval = _secret_values()
+    missing_approval.pop("CAPTURE_APPROVED_BY")
+    monkeypatch.setattr(
+        deployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: _Secrets(missing_approval)),
+    )
     assert not deployer.ensure_runtime_secrets()
 
 
@@ -352,18 +369,13 @@ class _WritableSecrets(_Secrets):
         return True
 
 
-def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkeypatch):
-    """truealpha#712: the runner resolves truealpha-data-engine:<tag> to its registry digest
-    and writes it (with the tag as GIT_COMMIT_SHA, the identifier the app images stamp)
-    before compose_env_base reads Vault. The existing verify_runtime_applied then proves
-    the containers run that digest."""
+def test_release_request_resolves_digest_in_memory_without_vault_write(monkeypatch):
+    """Unified SyncPipeline resolves DEPLOY_VERSION_REF in memory without writing Vault."""
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
     secrets = _WritableSecrets(_secret_values("a"))
     monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
-    # The runner passes the release in the child PROCESS environment; Deployer.env()
-    # is the curated config and never carries it (the 2026-09-07 silent skip).
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.46")
     new_digest = "sha256:" + "e" * 64
     asked: list[tuple[str, str]] = []
@@ -378,16 +390,18 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
         "release-manifest:"
         + hashlib.sha256(f"v0.0.46:{new_digest}".encode()).hexdigest()
     )
-    assert (
-        deployer.pin_release("v0.0.46", secrets=secrets, resolve=resolve) == new_digest
-    )
+    resolved = deployer.resolve_release_env("v0.0.46", resolve=resolve)
     assert asked == [("ghcr.io/wangzitian0/truealpha-data-engine", "v0.0.46")]
-    assert secrets.writes == [
-        ("IMAGE_DIGEST", new_digest),
-        ("GIT_COMMIT_SHA", "v0.0.46"),
-        ("RELEASE_ID", expected_release),
-    ]
-    # compose_env_base now reads the pinned values, not the ones Vault held before
+    assert resolved == {
+        "IMAGE_DIGEST": new_digest,
+        "GIT_COMMIT_SHA": "v0.0.46",
+        "RELEASE_ID": expected_release,
+    }
+    assert secrets.writes == []
+
+    from common.deploy import git_refs as refs
+
+    monkeypatch.setattr(refs, "resolve_image_digest", lambda **_kw: new_digest)
     env = deployer.compose_env_base(
         {"ENV": "staging", "DATA_PATH": "/tmp/x", "ENV_SUFFIX": "-staging"}
     )
@@ -396,41 +410,32 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
         and env["GIT_COMMIT_SHA"] == "v0.0.46"
         and env["RELEASE_ID"] == expected_release
     )
-    assert expected_release != "release-manifest:" + "b" * 64
-    assert "v0.0.46" != "v0.0.45"
-    assert new_digest != "sha256:" + "a" * 64
+    assert secrets.writes == []
 
 
-def test_pin_release_fails_closed_on_a_bad_ref_or_an_unresolvable_tag(monkeypatch):
+def test_resolve_release_env_fails_closed_on_a_bad_ref_or_unresolvable_tag():
     import pytest
 
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
-    secrets = _WritableSecrets(_secret_values("a"))
     with pytest.raises(ValueError, match="vX.Y.Z tag or a commit sha"):
-        deployer.pin_release(
-            "latest", secrets=secrets, resolve=lambda image, ref: "sha256:" + "f" * 64
+        deployer.resolve_release_env(
+            "latest", resolve=lambda image, ref: "sha256:" + "f" * 64
         )
     with pytest.raises(RuntimeError, match="no such tag"):
-        deployer.pin_release(
+        deployer.resolve_release_env(
             "v9.9.9",
-            secrets=secrets,
             resolve=lambda image, ref: (_ for _ in ()).throw(
                 RuntimeError("no such tag")
             ),
         )
-    assert secrets.writes == []
 
 
-def test_pin_release_retries_a_lookup_that_got_no_answer(monkeypatch):
-    """2026-09-17: the v0.0.83 staging deploy died on one dropped ghcr.io connection
-    ("Remote end closed connection without response") with every other step green. A
-    lookup that got no answer is retried; the pin then proceeds as usual."""
+def test_resolve_release_env_retries_a_lookup_that_got_no_answer(monkeypatch):
     import http.client
 
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
-    secrets = _WritableSecrets(_secret_values("a"))
     monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     digest = "sha256:" + "d" * 64
@@ -445,22 +450,16 @@ def test_pin_release_retries_a_lookup_that_got_no_answer(monkeypatch):
         return digest
 
     slept: list[float] = []
-    assert (
-        deployer.pin_release(
-            "v0.0.83", secrets=secrets, resolve=resolve, sleep=slept.append
-        )
-        == digest
-    )
+    out = deployer.resolve_release_env("v0.0.83", resolve=resolve, sleep=slept.append)
+    assert out["IMAGE_DIGEST"] == digest
     assert slept == list(deploy._PIN_RESOLVE_BACKOFF_SECONDS)
-    assert ("IMAGE_DIGEST", digest) in secrets.writes
 
 
-def test_pin_release_gives_up_after_the_last_transport_failure(monkeypatch):
+def test_resolve_release_env_gives_up_after_the_last_transport_failure(monkeypatch):
     import pytest
 
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
-    secrets = _WritableSecrets(_secret_values("a"))
     monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
     calls: list[str] = []
 
@@ -469,21 +468,16 @@ def test_pin_release_gives_up_after_the_last_transport_failure(monkeypatch):
         raise ConnectionResetError("reset by peer")
 
     with pytest.raises(ConnectionResetError):
-        deployer.pin_release(
-            "v0.0.83", secrets=secrets, resolve=resolve, sleep=lambda _s: None
-        )
+        deployer.resolve_release_env("v0.0.83", resolve=resolve, sleep=lambda _s: None)
     assert len(calls) == len(deploy._PIN_RESOLVE_BACKOFF_SECONDS) + 1
-    assert secrets.writes == []
 
 
-def test_pin_release_never_retries_a_registry_answer(monkeypatch):
-    """A 404 or a refusal is an answer: retrying cannot change it, so it fails at once."""
+def test_resolve_release_env_never_retries_a_registry_answer():
     import pytest
     from common.deploy import git_refs as refs
 
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
-    secrets = _WritableSecrets(_secret_values("a"))
     calls: list[str] = []
 
     def resolve(image, ref):
@@ -491,11 +485,8 @@ def test_pin_release_never_retries_a_registry_answer(monkeypatch):
         raise refs.ReleaseError("does not exist in the registry")
 
     with pytest.raises(refs.ReleaseError):
-        deployer.pin_release(
-            "v9.9.9", secrets=secrets, resolve=resolve, sleep=lambda _s: None
-        )
+        deployer.resolve_release_env("v9.9.9", resolve=resolve, sleep=lambda _s: None)
     assert calls == ["v9.9.9"]
-    assert secrets.writes == []
 
 
 def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatch):
@@ -521,10 +512,7 @@ def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatc
     assert secrets.writes == []
 
 
-def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
-    """The regression that shipped: the version ref was read from cls.env(), which is
-    the curated deployment config and never carries DEPLOY_VERSION_REF, so the runner
-    reported success with no pin. It must come from os.environ."""
+def test_ensure_runtime_secrets_reads_deploy_version_ref_from_process_env(monkeypatch):
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
     secrets = _WritableSecrets(_secret_values("a"))
@@ -540,7 +528,7 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     assert deployer.ensure_runtime_secrets() is True
-    assert ("GIT_COMMIT_SHA", "v0.0.47") in secrets.writes
+    assert secrets.writes == []
 
 
 def test_code_server_healthcheck_is_not_a_dagster_cli_cold_start():
@@ -587,10 +575,10 @@ def test_ensure_runtime_secrets_accepts_env_parameter(monkeypatch):
     monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
 
-    # Calling with env="staging" must succeed and not raise TypeError
+    # Calling with env="staging" must succeed and never write to Vault
     assert deployer.ensure_runtime_secrets(env="staging") is True
     assert "staging" in calls
-    assert ("GIT_COMMIT_SHA", "v0.0.48") in secrets.writes
+    assert secrets.writes == []
 
 
 def test_verify_runtime_applied_passes_timeout_to_inspect(monkeypatch):
@@ -735,7 +723,6 @@ def test_canonical_vault_names_deploy_without_legacy_aliases(monkeypatch):
 def test_legacy_only_vault_names_are_no_longer_accepted(monkeypatch):
     """Legacy DATA_ENGINE_IMAGE_DIGEST / RELEASE_MANIFEST_ID alone fail closed (#1781)."""
     deployer = _deployer_with(monkeypatch, _legacy_only_values())
-    assert deployer.ensure_runtime_secrets() is False
     with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):
         deployer.compose_env_base({})
 
@@ -745,7 +732,6 @@ def test_deploy_still_fails_closed_when_canonical_vault_names_missing(monkeypatc
     del values["IMAGE_DIGEST"]
     del values["RELEASE_ID"]
     deployer = _deployer_with(monkeypatch, values)
-    assert deployer.ensure_runtime_secrets() is False
     with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):
         deployer.compose_env_base({})
 

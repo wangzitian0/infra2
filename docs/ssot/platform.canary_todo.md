@@ -145,7 +145,7 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 
 ## 5A. Preview slot (#1647)
 
-`platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.preview.render_throwaway_secrets` generates `REDIS_PASSWORD`, `POSTGRES_ADMIN_PASSWORD`, `TODO_POSTGRES_PASSWORD`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
+`platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.steps.preview_slot.render_throwaway_secrets` generates `REDIS_PASSWORD`, `POSTGRES_ADMIN_PASSWORD`, `TODO_POSTGRES_PASSWORD`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
 
 ## 5B. SSO setup operator steps (#1807)
 

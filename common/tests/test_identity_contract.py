@@ -528,8 +528,8 @@ def _renders_from_service_identity(value: ast.expr) -> bool:
 def test_every_issuing_site_renders_the_attributes_from_service_identity() -> None:
     sites = otel_attribute_sites()
     assert set(sites) == {
-        "common/deploy/promote.py",
-        "common/deploy/preview.py",
+        "common/deploy/steps/app_rollout.py",
+        "common/deploy/steps/preview_slot.py",
         "common/deploy/sync_pipeline.py",
     }
     for path, values in sites.items():

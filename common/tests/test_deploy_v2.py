@@ -26,7 +26,10 @@ from common.deploy.iac_runner_client import (
     status_poll_attempts,
     status_poll_delays,
 )
-from common.deploy.preview import PreviewDeps, PreviewOptions
+from common.deploy.steps.preview_slot import (
+    PreviewSlotDeps as PreviewDeps,
+    PreviewSlotOptions as PreviewOptions,
+)
 from common.deploy.v2 import (
     DeployDeps,
     DeployOptions,
@@ -53,6 +56,7 @@ def _stub_iac_on_main_guard(monkeypatch):
     monkeypatch.setattr(
         dv2, "assert_app_version_ref_matches_train", lambda *a, **k: None
     )
+    monkeypatch.delenv("IAC_WEBHOOK_SECRET", raising=False)
 
 
 def _fake_resolve_image_ref(ref, **_kw):
@@ -575,7 +579,7 @@ def test_prod_tag_routes_fixed_and_pulls_the_tag_not_the_sha(calls):
         version_ref="v1.2.3",
         options=DeployOptions(staging_validated=True, code_reviewed=True),
     )
-    assert res.backend == "deploy-primitive"
+    assert res.backend == "sync-pipeline"
     # truealpha#447: iac_ref must reach the fixed-compose backend as a re-assertable
     # branch/tag, not just get recorded on the target — this is what the backend passes
     # to update_compose(..., branch=...) so the compose's OWN git source stays current.
@@ -606,7 +610,7 @@ def test_prod_rejects_non_tag_version_ref_fail_closed(calls, bad):
 
 def test_staging_accepts_tag_and_pulls_it(calls):
     res = _deploy(deploy_type="staging", version_ref="v1.2.3")
-    assert res.backend == "deploy-primitive"
+    assert res.backend == "sync-pipeline"
     assert calls["fixed"]["env"] == "staging"
     assert calls["fixed"]["image_ref"] == "v1.2.3"
     assert calls["image_waits"][-1]["image_ref"] == "v1.2.3"
@@ -658,7 +662,7 @@ def test_staging_rejects_code_forms_fail_closed(calls, bad):
 
 def test_preview_branch(calls):
     res = _deploy(deploy_type="preview/branch", version_ref="main")
-    assert res.backend == "preview-lifecycle"
+    assert res.backend == "sync-pipeline"
     assert res.target.sub_domain == "report-branch-main"
     assert calls["preview"]["kind"] == "branch" and calls["preview"]["value"] == "main"
     assert calls["preview"]["image_ref"] == SHA_CODE[:7]
@@ -812,7 +816,7 @@ def test_prod_break_glass_bypasses_staging_first(calls):
         version_ref="v1.2.3",
         options=DeployOptions(break_glass=True, code_reviewed=True),
     )
-    assert res.backend == "deploy-primitive"
+    assert res.backend == "sync-pipeline"
 
 
 @pytest.mark.parametrize("code_reviewed", [False, None])
@@ -970,7 +974,7 @@ def cli(monkeypatch):
         target = make_target(
             kw["deploy_type"], service=kw["service"], version=SHA_CODE, iac_ref=SHA_IAC
         )
-        return DeployV2Result(target, "staging", "deploy-primitive", {"sha": SHA_CODE})
+        return DeployV2Result(target, "staging", "sync-pipeline", {"sha": SHA_CODE})
 
     monkeypatch.setattr(dv2, "deploy_v2", fake_deploy_v2)
     return rec, json
@@ -1000,7 +1004,7 @@ def test_cli_passes_surface_through(cli, capsys, monkeypatch):
     assert rec["image_wait_seconds"] is None
     assert rec["image_poll_seconds"] is None
     out = json.loads(capsys.readouterr().out)
-    assert out["env"] == "staging" and out["backend"] == "deploy-primitive"
+    assert out["env"] == "staging" and out["backend"] == "sync-pipeline"
 
 
 def test_cli_platform_preview_builds_the_dokploy_client_and_reaches_preview_up(
@@ -1237,6 +1241,7 @@ def _fake_down_result(kind, value, *, domain, client, cleared=True):
 def test_cli_down_exits_nonzero_when_slot_containers_survive(monkeypatch, capsys):
     import common.deploy.dokploy_client as dk
 
+    monkeypatch.delenv("IAC_WEBHOOK_SECRET", raising=False)
     monkeypatch.setattr(dk, "get_dokploy", lambda host: "client")
     monkeypatch.setattr(
         dv2,
@@ -1255,6 +1260,7 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     # --down resolves the SAME alias (kind from --type, value from --version-ref) and
     # routes to the preview backend's down(); it never resolves a ref or deploys.
     monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
+    monkeypatch.delenv("IAC_WEBHOOK_SECRET", raising=False)
     rec = {}
 
     def fake_down(kind, value, *, domain, client, service):
@@ -1465,7 +1471,7 @@ def test_every_runner_wait_uses_the_short_first_poll_schedule(calls, monkeypatch
         deploy_type="staging",
         version_ref="v1.2.3",
         deps=DeployDeps(
-            client=object(),
+            client=None,
             domain="zitian.party",
             iac_runner_url="https://iac.example",
             iac_webhook_secret="s",
@@ -1496,7 +1502,7 @@ def test_deploy_phases_report_their_duration_on_stderr(calls, monkeypatch, capsy
         deploy_type="staging",
         version_ref="v1.2.3",
         deps=DeployDeps(
-            client=object(),
+            client=None,
             domain="zitian.party",
             iac_runner_url="https://iac.example",
             iac_webhook_secret="s",
@@ -1504,11 +1510,8 @@ def test_deploy_phases_report_their_duration_on_stderr(calls, monkeypatch, capsy
     )
     err = capsys.readouterr().err
     assert (
-        "deploy_v2 progress: secret supply for finance_report/app in staging: completed after"
+        "deploy_v2 progress: iac-runner SyncPipeline of finance_report/app to staging: completed after"
         in err
-    )
-    assert (
-        "deploy_v2 progress: Dokploy promote of finance_report/app to staging:" in err
     )
     # never mistaken for the verdict line or the runner record reconcile parses
     assert "deploy_v2 failed:" not in err
@@ -1591,7 +1594,7 @@ def test_platform_preview_routes_to_runner_preview(monkeypatch, calls):
     )
     res = _deploy(service="platform/todo", deploy_type="preview/pr", version_ref=5)
     assert trigger == []
-    assert res.backend == "preview-lifecycle"
+    assert res.backend == "sync-pipeline"
     preview = calls["preview"]
     assert (preview["service"], preview["kind"], str(preview["value"])) == (
         "platform/todo",
@@ -1918,7 +1921,7 @@ def test_orthogonal_preview_type_resolves_branch_and_pr_and_defaults_iac_ref(
         version_ref="pr-42",
         deps=DeployDeps(client=object()),
     )
-    assert res_todo.backend == "preview-lifecycle"
+    assert res_todo.backend == "sync-pipeline"
     assert calls["preview"]["service"] == "platform/todo"
     assert calls["preview"]["value"] == 42
 
@@ -1982,54 +1985,47 @@ def _runner_fakes(monkeypatch, *, final_status="completed"):
     return order
 
 
-def test_fixed_app_deploy_runs_the_secret_supply_through_the_runner_first(
-    calls, monkeypatch
-):
+def test_fixed_app_deploy_routes_through_runner_when_client_is_none(calls, monkeypatch):
     order = _runner_fakes(monkeypatch)
-    original_fixed = dv2._deploy_fixed
-
-    def fixed_after_supply(env, code, **kw):
-        order.append(("fixed", env))
-        return original_fixed(env, code, **kw)
-
-    monkeypatch.setattr(dv2, "_deploy_fixed", fixed_after_supply)
     result = _deploy(
         deploy_type="staging",
         version_ref="v1.2.3",
         deps=DeployDeps(
-            client=object(),
+            client=None,
             domain="zitian.party",
             iac_runner_url="https://iac.example",
             iac_webhook_secret="s",
         ),
     )
     kinds = [k for k, _ in order]
-    assert kinds == ["trigger", "poll", "fixed"]
+    assert kinds == ["trigger", "poll"]
     trigger_kw = order[0][1]
-    assert trigger_kw["action"] == "secrets-supply"
+    assert trigger_kw["action"] == "up"
     assert trigger_kw["services"] == ["finance_report/app"]
     assert trigger_kw["env"] == "staging"
-    assert order[1][1]["action"] == "secrets-supply"
-    assert result.detail["secret_supply"]["status"] == "completed"
+    assert trigger_kw["sync_spec"]["mode"] == "fixed"
+    assert order[1][1]["action"] == "up"
+    assert result.backend == "iac-runner"
+    assert calls["fixed"] is None
 
 
-def test_fixed_app_deploy_fails_closed_when_the_supply_fails(calls, monkeypatch):
+def test_fixed_app_deploy_fails_closed_when_runner_deploy_fails(calls, monkeypatch):
     _runner_fakes(monkeypatch, final_status="failed")
-    with pytest.raises(RuntimeError, match="secret supply for finance_report/app"):
+    with pytest.raises(RuntimeError, match="app deploy of finance_report/app"):
         _deploy(
             deploy_type="staging",
             version_ref="v1.2.3",
             deps=DeployDeps(
-                client=object(),
+                client=None,
                 domain="zitian.party",
                 iac_runner_url="https://iac.example",
                 iac_webhook_secret="s",
             ),
         )
-    assert calls["fixed"] is None  # never promoted
+    assert calls["fixed"] is None
 
 
-def test_fixed_app_deploy_without_runner_credentials_skips_the_supply(
+def test_fixed_app_deploy_without_runner_credentials_runs_in_process_sync_pipeline(
     calls, monkeypatch
 ):
     order = _runner_fakes(monkeypatch)
@@ -2037,7 +2033,7 @@ def test_fixed_app_deploy_without_runner_credentials_skips_the_supply(
     monkeypatch.delenv("IAC_WEBHOOK_SECRET", raising=False)
     result = _deploy(deploy_type="staging", version_ref="v1.2.3")
     assert order == []
-    assert result.detail["secret_supply"]["status"] == "skipped"
+    assert result.backend == "sync-pipeline"
     assert calls["fixed"] is not None
 
 
@@ -2049,7 +2045,7 @@ _LOST_MESSAGE = (
     "(deployment {id}): the runner has no record of this deployment; it was probably "
     "recreated between the request and the first poll (#666)"
 )
-_RUNNER_SITES = ["platform", "secret-supply", "batch"]
+_RUNNER_SITES = ["platform", "fixed-app", "batch"]
 
 
 def _lost(deployment_id="unknown"):
@@ -2085,9 +2081,9 @@ def _scripted_runner(monkeypatch, polls):
 def _run_runner_site(site, env_type):
     """Enter deploy_v2 at one of the three places that talk to the runner.
 
-    platform       -> _deploy_platform  (one iac-pinned service)
-    secret-supply  -> _supply_app_secrets  (the supply before an app stack's promote)
-    batch          -> _deploy_platform_batch  (``--service a,b``, the reconcile's shape)
+    platform   -> _deploy_platform  (one iac-pinned service)
+    fixed-app  -> _deploy_fixed_v2  (fixed app rollout via iac-runner)
+    batch      -> _deploy_platform_batch  (``--service a,b``, the reconcile's shape)
     """
     prod = env_type == "prod"
     if site == "platform":
@@ -2097,13 +2093,13 @@ def _run_runner_site(site, env_type):
             version_ref="",
             options=DeployOptions(code_reviewed=True),
         )
-    if site == "secret-supply":
+    if site == "fixed-app":
         return _deploy(
             deploy_type=env_type,
             version_ref="v1.2.3",
             options=DeployOptions(staging_validated=prod, code_reviewed=True),
             deps=DeployDeps(
-                client=object(),
+                client=None,
                 domain="zitian.party",
                 iac_runner_url="https://iac.example",
                 iac_webhook_secret="s",
@@ -2220,7 +2216,7 @@ class _RunnerAnswer:
         assert self.status_code < 400, f"unexpected HTTP {self.status_code}"
 
 
-@pytest.mark.parametrize("site", ["secret-supply", "batch"])
+@pytest.mark.parametrize("site", ["fixed-app", "batch"])
 @pytest.mark.parametrize(
     ("env_type", "resubmits"), [("staging", True), ("prod", False)]
 )
@@ -2392,10 +2388,9 @@ def test_cli_threads_force_promote_pause_rollback_and_max_rollback_attempts(
 
 
 def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
-    """#1416: preview.up and promote._validate_deploy_preconditions must pass a non-empty
-    repo keyword argument to infra2_sdk.refs.resolve_to_sha when repo=None."""
-    import common.deploy.preview as preview_mod
-    import common.deploy.promote as promote_mod
+    """#1416: preview_slot and app_rollout pass non-empty repo to resolve_to_sha."""
+    import common.deploy.steps.app_rollout as promote_mod
+    import common.deploy.steps.preview_slot as preview_mod
 
     seen_repos: list[str] = []
 
@@ -2407,7 +2402,7 @@ def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
     monkeypatch.setattr(preview_mod, "resolve_to_sha", fake_resolve_to_sha)
     monkeypatch.setattr(promote_mod, "resolve_to_sha", fake_resolve_to_sha)
 
-    sha, _cfg, _data, _env = promote_mod._validate_deploy_preconditions(
+    sha, _cfg, _data, _env = promote_mod.validate_fixed_preconditions(
         "finance_report/app",
         "staging",
         "zitian.party",
@@ -2421,11 +2416,11 @@ def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
 
     monkeypatch.setattr(
         preview_mod,
-        "_source_app_vault_creds",
+        "source_app_vault_creds",
         lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("stop-after-resolve")),
     )
     with pytest.raises(RuntimeError, match="stop-after-resolve"):
-        preview_mod.up(
+        preview_mod.execute_preview_up(
             "pr",
             "999",
             code=SHA_CODE,
@@ -2437,7 +2432,7 @@ def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
     with pytest.raises(
         ValueError, match="has no registered source repository in APP_SOURCES"
     ):
-        promote_mod._validate_deploy_preconditions(
+        promote_mod.validate_fixed_preconditions(
             "unknown/service",
             "staging",
             "zitian.party",

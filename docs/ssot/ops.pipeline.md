@@ -590,7 +590,7 @@ api/worker 只发 `EVALSHA`、从不在 `NOSCRIPT` 后重载脚本,Authentik wor
 sync 结果带 `restarted_dependents`。列不出或重启失败则 sync 失败并给出手工 `docker restart` 命令——重试会因 hash
 未变而跳过,不会再重启。registry 加载时 fail-closed:未注册的 `dependency`、自依赖、compose 里没有
 `container_name` 的服务名都直接报错。现有声明:`platform/openpanel`(`op-api`、`op-worker`)、`platform/authentik`(`worker`)。
-promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Actions、无 ssh)用 Dokploy 的
+app rollout（`common.deploy.steps.app_rollout` + `SyncPipeline.run_fixed`，app + staging|prod）用 Dokploy 的
 `docker.getContainers` 做同一个证明(按 `container_name` 匹配;Dokploy 只列运行中的容器,`Created`/exited
 即为缺失),并在其后通过公网 `/api/health` 校验 HTTP 200、`status == "ok"` 与版本身份(`version`/`git_sha`
 匹配目标 `image_tag`,#569);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。

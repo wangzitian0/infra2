@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from infra2_sdk.config import EnvironmentManifest, assert_env
 
-from common.deploy import promote
+from common.deploy.steps import app_rollout
 from common.deploy.env_config import app_compose_env_config
 from common.tests.compose_env import compiled_vault_template, container_env
 
@@ -38,7 +38,7 @@ def container_environ(env: str, container: str) -> dict[str, str]:
     """Container environment of a promote: compose, deploy builder, Vault lines."""
     cfg = app_compose_env_config(SERVICE, env)
     args = (SERVICE, env, "zitian.party", env.replace("prod", "production"), cfg)
-    variables, _ = promote._build_deploy_env_vars(*args, "7913891", "a" * 40, "x")
+    variables, _ = app_rollout.build_fixed_env_vars(*args, "7913891", "a" * 40, "x")
     environ = container_env(APP / "compose.yaml", container, variables)
     return {**environ, **dict.fromkeys(VAULT, "<vault>")}
 

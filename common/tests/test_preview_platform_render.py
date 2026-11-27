@@ -14,8 +14,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from common.deploy import preview as pl
-from common.deploy.preview import PreviewDeps, PreviewOptions
+from common.deploy.steps import preview_slot as pl
+from common.deploy.steps.preview_slot import (
+    PreviewSlotDeps as PreviewDeps,
+    PreviewSlotOptions as PreviewOptions,
+)
 from common.deploy.env_config import preview_service_config
 from common.deploy.platform_images import PLATFORM_IMAGES
 from common.tests.test_preview_lifecycle import FakeDokploy
@@ -45,7 +48,7 @@ class NoVaultDokploy(FakeDokploy):
 
 def _render(slot: int) -> tuple[NoVaultDokploy, dict[str, str]]:
     client = NoVaultDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "pr",
         slot,
         code="main",
@@ -112,7 +115,7 @@ def test_app_preview_still_reads_the_source_env_creds():
     # The other side of the branch: an App unit has no throwaway names.
     assert preview_service_config("finance_report/app").throwaway_secrets == ()
     client = FakeDokploy(existing=None)
-    pl.up(
+    pl.execute_preview_up(
         "pr",
         5,
         code="main",
@@ -144,9 +147,11 @@ class _Inventory(FakeDokploy):
 
 
 def test_teardown_always_reads_the_inventory_twice_even_when_the_compose_is_gone():
-    assert "wait" not in inspect.signature(pl.down).parameters
+    assert "wait" not in inspect.signature(pl.execute_preview_down).parameters
     client = _Inventory([[]], existing=None)
-    result = pl.down("pr", 5, domain="zitian.party", client=client, service=SERVICE)
+    result = pl.execute_preview_down(
+        "pr", 5, domain="zitian.party", client=client, service=SERVICE
+    )
     assert client.deleted == []
     assert client.reads == 2
     assert result.containers_cleared is True
@@ -155,7 +160,7 @@ def test_teardown_always_reads_the_inventory_twice_even_when_the_compose_is_gone
 def test_teardown_reports_survivors_of_the_slot():
     survivor = [{"name": "/platform-redis-pr-5"}]
     client = _Inventory([survivor], existing={"composeId": "cmp-1"})
-    result = pl.down(
+    result = pl.execute_preview_down(
         "pr",
         5,
         domain="zitian.party",

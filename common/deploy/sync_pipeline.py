@@ -6,11 +6,14 @@ Deconstructs procedural deployment synchronization into discrete verifiable step
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
 import os
 import re
 import subprocess
-from dataclasses import dataclass, field
+import sys
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from common.core.service_identity import ServiceIdentity
@@ -42,7 +45,6 @@ class SyncAction:
     FAILED = "failed"
     CREATED = "created"
     UPDATED = "updated"
-    SUPPLIED = "supplied"
 
 
 class SyncResult(dict):
@@ -139,7 +141,7 @@ class SyncPipeline:
         )
 
     def run(self) -> SyncResult:
-        """Execute all synchronization steps sequentially."""
+        """Execute all synchronization steps sequentially under compose write lock."""
         preflight_res = self.step_check_preflight()
         if preflight_res is not None:
             return preflight_res
@@ -152,11 +154,102 @@ class SyncPipeline:
         if drift_res is not None:
             return drift_res
 
-        deploy_res = self.step_prepare_and_deploy()
-        if deploy_res is not None:
-            return deploy_res
+        compose_id = ""
+        try:
+            existing = self.ctx.deployer._find_remote_compose(self.ctx.env)
+            if isinstance(existing, dict):
+                compose_id = str(existing.get("composeId") or "")
+        except Exception:  # noqa: BLE001
+            compose_id = ""
 
-        return self.step_verify_and_finalize()
+        if compose_id:
+            from common.deploy.compose_lock import compose_write_lock
+
+            lock_cm: Any = compose_write_lock(compose_id)
+        else:
+            from contextlib import nullcontext
+
+            lock_cm = nullcontext()
+
+        with lock_cm:
+            deploy_res = self.step_prepare_and_deploy()
+            if deploy_res is not None:
+                return deploy_res
+
+            return self.step_verify_and_finalize()
+
+    @classmethod
+    def run_fixed(
+        cls,
+        env: str,
+        code: str,
+        *,
+        options: Any = None,
+        deps: Any = None,
+    ) -> Any:
+        """Execute unified SyncPipeline v2 fixed-compose app rollout."""
+        from common.deploy.steps.app_rollout import (
+            AppRolloutDeps,
+            AppRolloutOptions,
+            execute_fixed_rollout,
+        )
+
+        return execute_fixed_rollout(
+            env,
+            code,
+            options=options or AppRolloutOptions(),
+            deps=deps or AppRolloutDeps(),
+        )
+
+    @classmethod
+    def run_preview_up(
+        cls,
+        kind: str,
+        value: int | str | None,
+        *,
+        code: str,
+        options: Any = None,
+        deps: Any = None,
+    ) -> Any:
+        """Execute unified SyncPipeline v2 dynamic preview slot up."""
+        from common.deploy.steps.preview_slot import (
+            PreviewSlotDeps,
+            PreviewSlotOptions,
+            execute_preview_up,
+        )
+
+        return execute_preview_up(
+            kind,
+            value,
+            code=code,
+            options=options or PreviewSlotOptions(),
+            deps=deps or PreviewSlotDeps(),
+        )
+
+    @classmethod
+    def run_preview_down(
+        cls,
+        kind: str,
+        value: int | str | None,
+        *,
+        domain: str,
+        client: Any,
+        service: str = "finance_report/app",
+        attempts: int = 6,
+        _sleep: Any = None,
+    ) -> Any:
+        """Execute unified SyncPipeline v2 dynamic preview slot teardown."""
+        from common.deploy.steps.preview_slot import execute_preview_down
+
+        return execute_preview_down(
+            kind,
+            value,
+            domain=domain,
+            client=client,
+            service=service,
+            attempts=attempts,
+            _sleep=_sleep,
+        )
 
     def step_check_preflight(self) -> SyncResult | None:
         """Verify environment pre-conditions and prod-only constraints."""
@@ -183,19 +276,6 @@ class SyncPipeline:
             return SyncResult(
                 action=SyncAction.FAILED,
                 details=details,
-            )
-
-        if os.environ.get("DEPLOY_ACTION") == "secrets-supply":
-            if not deployer.apply_secret_supply(self.ctx.context, env=e.get("ENV")):
-                details = "secret supply left required values missing"
-                log.log_error(f"Error: {details}")
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details=details,
-                )
-            return SyncResult(
-                action=SyncAction.SUPPLIED,
-                details="secret supply applied; no compose",
             )
 
         return None
@@ -560,3 +640,160 @@ class SyncPipeline:
         if restarted:
             result["restarted_dependents"] = restarted
         return result
+
+
+def _supply_fixed_service_secrets(service: str, env_name: str) -> None:
+    """Apply 1Password -> Vault secret supply before fixed-compose rollout."""
+    from invoke import Context
+
+    from common.deploy.deployer import load_deployer_class
+    from common.security.store import VaultSecrets
+
+    deployer_cls = load_deployer_class(service)
+    if deployer_cls is None:
+        return
+    try:
+        ok = deployer_cls.apply_secret_supply(Context(), env=env_name)
+    except (VaultSecrets.VaultAuthError, VaultSecrets.VaultConnectionError) as exc:
+        logger.warning(
+            "%s: skipping secret supply for %s (%s)",
+            service,
+            env_name,
+            exc.__class__.__name__,
+        )
+        return
+    if not ok:
+        raise RuntimeError(
+            f"{service}: secret supply left required values missing for env {env_name!r}"
+        )
+
+
+def run_sync_spec(spec: dict[str, Any], *, client: Any = None) -> dict[str, Any]:
+    """Execute one unified SyncPipeline v2 fixed/preview spec for ``iac-runner``."""
+    from common.core.environ import infra_domain
+    from common.deploy.dokploy_client import get_dokploy
+
+    mode = str(spec.get("mode") or "fixed").strip().lower()
+    action = str(spec.get("action") or "up").strip().lower()
+    service = str(spec.get("service") or "finance_report/app").strip()
+    domain = str(spec.get("domain") or infra_domain()).strip()
+    vault_template = str(spec.get("vault_secrets_template") or "").strip()
+    effective_client = (
+        client if client is not None else get_dokploy(host=f"cloud.{infra_domain()}")
+    )
+
+    prev_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
+    injected_template = False
+    if vault_template and prev_template is None:
+        os.environ["VAULT_SECRETS_TEMPLATE"] = vault_template
+        injected_template = True
+    try:
+        if mode == "fixed":
+            env_name = str(spec.get("env") or "staging").strip()
+            deploy_env = "production" if env_name == "prod" else env_name
+            _supply_fixed_service_secrets(service, deploy_env)
+            from common.deploy.steps.app_rollout import (
+                AppRolloutDeps,
+                AppRolloutOptions,
+            )
+
+            plan = SyncPipeline.run_fixed(
+                env_name,
+                str(spec["code"]),
+                options=AppRolloutOptions(
+                    service=service,
+                    staging_validated=bool(spec.get("staging_validated", False)),
+                    break_glass=bool(spec.get("break_glass", False)),
+                    force_promote=bool(spec.get("force_promote", False)),
+                    pause_rollback=bool(spec.get("pause_rollback", False)),
+                    max_rollback_attempts=int(spec.get("max_rollback_attempts", 2)),
+                    image_ref=spec.get("image_ref"),
+                    iac_ref=str(spec.get("iac_ref") or ""),
+                    branch=spec.get("branch"),
+                    wait=bool(spec.get("wait", True)),
+                    timeout=int(spec.get("timeout", 600)),
+                    verify_config=bool(spec.get("verify_config", True)),
+                    verify_smoke=bool(spec.get("verify_smoke", True)),
+                    verify_ingestion=bool(spec.get("verify_ingestion", False)),
+                ),
+                deps=AppRolloutDeps(
+                    client=effective_client,
+                    domain=domain,
+                    repo=spec.get("repo"),
+                ),
+            )
+            payload = asdict(plan)
+            payload["mode"] = "fixed"
+            payload["action"] = "up"
+            return payload
+
+        if mode == "preview":
+            kind = str(spec.get("alias_kind") or "branch")
+            value = spec.get("alias_value")
+            if action == "down":
+                res = SyncPipeline.run_preview_down(
+                    kind,
+                    value,
+                    domain=domain,
+                    client=effective_client,
+                    service=service,
+                )
+                return asdict(res)
+            from common.deploy.steps.preview_slot import (
+                PreviewSlotDeps,
+                PreviewSlotOptions,
+            )
+
+            res = SyncPipeline.run_preview_up(
+                kind,
+                value,
+                code=str(spec["code"]),
+                options=PreviewSlotOptions(
+                    service=service,
+                    image_ref=spec.get("image_ref"),
+                    iac_ref=str(spec.get("iac_ref") or ""),
+                    branch=str(spec.get("branch") or "main"),
+                    wait=bool(spec.get("wait", True)),
+                    health_timeout=int(spec.get("timeout", 600)),
+                ),
+                deps=PreviewSlotDeps(
+                    client=effective_client,
+                    domain=domain,
+                    repo=spec.get("repo"),
+                ),
+            )
+            return asdict(res)
+
+        raise ValueError(f"Unsupported SyncPipeline spec mode {mode!r}")
+    finally:
+        if injected_template:
+            os.environ.pop("VAULT_SECRETS_TEMPLATE", None)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint invoked by iac-runner inside a ref-locked venv."""
+    parser = argparse.ArgumentParser(description="Execute SyncPipeline v2 spec")
+    parser.add_argument(
+        "--spec-env",
+        default="IAC_SYNC_SPEC",
+        help="Environment variable holding JSON spec (default: IAC_SYNC_SPEC)",
+    )
+    args = parser.parse_args(argv)
+    raw = os.environ.get(args.spec_env, "").strip()
+    if not raw:
+        print(f"SyncPipeline spec env {args.spec_env!r} is empty", file=sys.stderr)
+        return 1
+    try:
+        spec = json.loads(raw)
+        result = run_sync_spec(spec)
+    except Exception as exc:  # noqa: BLE001
+        print(f"SyncPipeline failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result))
+    if result.get("action") == "down" and not result.get("containers_cleared"):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

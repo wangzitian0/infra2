@@ -87,33 +87,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       # deploy_v2's on-main guard asks GitHub's compare API; without a token the call is
       # anonymous and shares a 60/hour budget per runner IP (#635: `403 rate limit exceeded`).
       GITHUB_TOKEN: ${{ github.token }}
-      # The ONE shared control-plane domain (common.deploy.env_config.infra_domain, #561) --
-      # cloud./vault./otel. host builds must NEVER follow a per-service app-routing
-      # override (inputs.domain, e.g. truealpha.club), or they produce a nonexistent
-      # hostname with no Traefik router or cert (a Cloudflare 526). The per-service
-      # app-routing domain flows to deploy_v2 via inputs.domain below (a separate,
-      # already-decoupled --domain CLI argument, not this env var).
+      # The ONE shared control-plane domain (common.deploy.env_config.infra_domain, #561).
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
-      # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
+      # Every service routes through iac_runner SyncPipeline v2.
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_STAGING_URL: ${{ vars.IAC_RUNNER_STAGING_URL || 'https://iac-staging.zitian.party' }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
-      # common.deploy.schema_gate's #698 pre-deploy schema gate (finance_report/app
-      # staging/prod only, TODOWRITE:20): it SSHes to the VPS to run the check inside
-      # the app's own published image — the only place both a docker daemon and the
-      # app's docker network are reachable from (neither this job nor iac-runner has
-      # both; see common/deploy/schema_gate.py's module docstring for the physical
-      # probe). Reuses the SAME INFRA2_WATCHDOG_SSH_* credentials the watchdog jobs in
-      # ops-checks.yml already provision — no new secret.
-      VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
-      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
-      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
-      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
     steps:
       - name: Reject retired prod dispatch
         if: ${{ inputs.type == 'prod' }}
@@ -139,18 +121,6 @@ jobs:
           sdk="$(python tools/sdk_requirement.py)"
           python -m pip install invoke httpx python-dotenv rich "$sdk"
 
-      - name: Configure SSH key for the pre-deploy schema gate
-        # Same optional-provisioning shape as ops-checks.yml's watchdog jobs: a
-        # platform (iac_pinned) deploy never needs this (common.deploy.schema_gate only
-        # runs for finance_report/app), so a missing key must not hard-fail those.
-        # finance_report/app staging/prod WITHOUT it fails closed later, loudly, from
-        # schema_gate._ssh_host() itself -- never silently skipped.
-        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
-        uses: ./.github/actions/ssh-setup
-        with:
-          key-name: infra2_schema_gate
-          private-key: ${{ env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-
       - name: Run deploy_v2
         env:
           SERVICE_INPUT: ${{ github.event.inputs.service || 'finance_report/app' }}
@@ -166,15 +136,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # App needs the Dokploy key; a platform (iac_pinned) service needs the iac_runner
-          # webhook secret instead. Require the right one for the chosen service.
-          if [[ "$SERVICE_INPUT" == platform/* ]]; then
-            if [[ -z "${IAC_WEBHOOK_SECRET:-}" || -z "${IAC_RUNNER_URL:-}" ]]; then
-              echo "::error::IAC_WEBHOOK_SECRET and IAC_RUNNER_URL are required for a platform deploy."
-              exit 1
-            fi
-          elif [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
-            echo "::error::DOKPLOY_API_KEY secret is required to deploy."
+          # All services dispatch through iac-runner SyncPipeline v2.
+          if [[ -z "${IAC_WEBHOOK_SECRET:-}" || -z "${IAC_RUNNER_URL:-}" ]]; then
+            echo "::error::IAC_WEBHOOK_SECRET and IAC_RUNNER_URL are required for deploy_v2."
             exit 1
           fi
 
