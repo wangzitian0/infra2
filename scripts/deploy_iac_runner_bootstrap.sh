@@ -392,6 +392,7 @@ details = request(
     "GET",
     "compose.one?" + urllib.parse.urlencode({"composeId": compose_id}),
 )
+resolved_app_name = details.get("appName") or resolved_app_name
 current_env = details.get("env") or ""
 if target_env == "staging" and (
     not get_env_value(current_env, "VAULT_ROLE_ID")
@@ -433,6 +434,7 @@ confirmed = request(
     "GET",
     "compose.one?" + urllib.parse.urlencode({"composeId": compose_id}),
 )
+resolved_app_name = confirmed.get("appName") or resolved_app_name
 confirmed_env = confirmed.get("env") or ""
 print(
     "Dokploy compose after update: "
@@ -488,7 +490,9 @@ services:
       - traefik.docker.network=dokploy-network
       - traefik.http.routers.${project}-websecure.rule=Host(\`${subdomain}.${resolved_domain:-zitian.party}\`)
       - traefik.http.routers.${project}-websecure.entrypoints=websecure
+      - traefik.http.routers.${project}-websecure.tls=true
       - traefik.http.routers.${project}-websecure.tls.certresolver=letsencrypt
+      - traefik.http.routers.${project}-websecure.service=${project}
       - traefik.http.services.${project}.loadbalancer.server.port=8080
 YAML
 fi
