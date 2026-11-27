@@ -259,6 +259,20 @@ jobs:
         if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
         run: python tools/watchdog_weekly_digest.py ${{ github.event.schedule == '0 2 1 * *' && '--monthly' || '' }}
 
+      # The delivery board: five numbers, one Lark card and one SigNoz log record (#1644 Q1).
+      # It reads the run list, the merged PRs and the tree, and dispatches nothing. It runs
+      # first: it needs about 40 API calls, and the two steps below read stage records.
+      # A failed or timed-out board shows on the step and does not fail the job
+      # (`continue-on-error`), so the reminder and the probe still run.
+      - name: Send the delivery board
+        timeout-minutes: 3
+        continue-on-error: true
+        if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'promotion-reminder' || inputs.task == 'all' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DELIVERY_BOARD_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+        run: python tools/delivery_board.py
+
       - name: Remind the owner of a green staging tag
         if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'promotion-reminder' || inputs.task == 'all' }}
         env:

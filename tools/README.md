@@ -16,7 +16,8 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    prod-promotion guard in `common/deploy/promotion_guard.py`, #1646), `stage_records.py` (the record reader),
    `out_of_band_watchdog.py`
    / `watchdog_issue_trail.py` / `watchdog_weekly_digest.py` (scheduled
-   watchdogs), `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
+   watchdogs), `delivery_board.py` (the daily delivery board: one Lark card and one SigNoz
+   record, #1644), `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
    session merge authority as a check: checks, threads, settling, protected and
    deploy-triggering paths, plus GitHub's own `mergeable`/`mergeStateStatus`
    and a stale-green guard -- green proves the tree the checks ran on, so a

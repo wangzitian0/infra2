@@ -254,6 +254,8 @@ An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy set
 
 **The round-trip canary follows the same contract (#1452).** `common/observability/observability_roundtrip_probe.py` posts its canary log directly to the collector, so it has no SDK and no issued `OTEL_RESOURCE_ATTRIBUTES`. It builds its resource with `ServiceIdentity.otel_resource_attributes()`. `infra.service.id` is the registered service that declares the probe (`platform/signoz`), and `infra.component` is the probe name (`signoz-roundtrip`). `service.name` stays `infra-observability-canary`. `INFRA_IAC_REF` supplies `service.version` and `infra.iac.ref`; the alerting compose passes it to the probe runner. Without a ref, `service.version` is `unknown`.
 
+**The delivery board follows the same contract (#1644).** `common/observability/delivery_board.py` posts one log record each day from a GitHub Actions job. It builds its resource with `ServiceIdentity.otel_resource_attributes()`: `service.name=infra2-delivery-board`, `infra.service.id=harness/delivery_board`, `infra.component=delivery-board`. It is a report of the harness, not a registry service, and it runs in no deploy environment: `deployment.environment.name` is `ci`. `GITHUB_SHA` supplies `service.version` and `infra.iac.ref`.
+
 ---
 
 <a id="manual-deploy-targets"></a>
