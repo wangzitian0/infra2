@@ -547,7 +547,7 @@ def test_severity_and_runbook_route_backup_failures() -> None:
 
 def test_the_watchdog_job_installs_what_the_backup_checks_import() -> None:
     workflow = yaml.safe_load(
-        (ROOT / ".github/workflows/ops-checks.yml").read_text(encoding="utf-8")
+        (ROOT / ".github/workflows/watchdog.yml").read_text(encoding="utf-8")
     )
     [job] = [
         job

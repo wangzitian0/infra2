@@ -27,7 +27,10 @@ from packaging.requirements import Requirement
 from common.tests.test_workflow_runtime_deps import _dependency_closure as _closure
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github/workflows/ops-checks.yml"
+WORKFLOWS = (
+    ROOT / ".github/workflows/ops-checks.yml",
+    ROOT / ".github/workflows/watchdog.yml",
+)
 #: Shell tokens the workflow uses for the SDK pin (read from uv.lock by tools/sdk_requirement.py).
 SDK_TOKENS = ("$sdk_requirement", "infra2-sdk @")
 
@@ -80,14 +83,15 @@ def _top_level_modules(distributions: set[str]) -> set[str]:
 
 
 def _jobs() -> list[tuple[str, set[str], set[str]]]:
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     jobs = []
-    for name, job in workflow["jobs"].items():
-        runs = [step.get("run", "") for step in job.get("steps", [])]
-        packages = _job_packages(runs)
-        entries = _entrypoints(runs)
-        if packages is not None and entries:
-            jobs.append((name, packages, entries))
+    for wf_path in WORKFLOWS:
+        workflow = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+        for name, job in workflow["jobs"].items():
+            runs = [step.get("run", "") for step in job.get("steps", [])]
+            packages = _job_packages(runs)
+            entries = _entrypoints(runs)
+            if packages is not None and entries:
+                jobs.append((name, packages, entries))
     return jobs
 
 

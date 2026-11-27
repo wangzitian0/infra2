@@ -191,7 +191,7 @@ def test_a_choice_input_expands_to_its_options() -> None:
     assert deadlocks(_wf(mixed, "deploy-v2-preview", ["preview"])) != []
 
 
-@pytest.mark.parametrize("name", ["ops-checks.yml", "deploy.yml"])
+@pytest.mark.parametrize("name", ["ops-checks.yml", "watchdog.yml", "deploy.yml"])
 def test_the_real_workflow_groups_stay_bounded(name: str) -> None:
     """No job in these files declares its own group today, so the deadlock check above
     has no subject in them. This positive control reads their real workflow-level
@@ -207,18 +207,28 @@ def test_the_real_workflow_groups_stay_bounded(name: str) -> None:
 
 def test_each_ops_checks_schedule_and_task_has_a_known_run_group() -> None:
     """Each schedule names its own run group, and each dispatch task expands to
-    `ops-checks-<task>`. A job-level group equal to one of these names deadlocks."""
-    workflow = yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "ops-checks.yml").read_text(encoding="utf-8")
+    `<prefix>-<task>`. A job-level group equal to one of these names deadlocks."""
+    checks = (
+        ("ops-checks.yml", "ops-checks", "infra2-facet-reconcile", ()),
+        (
+            "watchdog.yml",
+            "watchdog",
+            "infra2-out-of-band-watchdog",
+            ("0 1 * * 1", "0 2 1 * *"),
+        ),
     )
-    group = _group(workflow["concurrency"])
-    names, _, _ = workflow_group_names(group, workflow)
-    tasks = _choices(workflow, "task")
-    assert tasks
-    assert {f"ops-checks-{task}" for task in tasks} <= names
-    for entry in (workflow.get(True) or workflow.get("on"))["schedule"]:
-        assert f"github.event.schedule == '{entry['cron']}'" in group or (
-            entry["cron"] in ("0 1 * * 1", "0 2 1 * *")
-        ), entry
-    job = {"j": {"concurrency": {"group": "infra2-out-of-band-watchdog"}}}
-    assert deadlocks({**workflow, "jobs": job}) != []
+    for wf_name, prefix, known_group, shared_crons in checks:
+        workflow = yaml.safe_load(
+            (ROOT / ".github" / "workflows" / wf_name).read_text(encoding="utf-8")
+        )
+        group = _group(workflow["concurrency"])
+        names, _, _ = workflow_group_names(group, workflow)
+        tasks = _choices(workflow, "task")
+        assert tasks
+        assert {f"{prefix}-{task}" for task in tasks} <= names
+        for entry in (workflow.get(True) or workflow.get("on"))["schedule"]:
+            assert f"github.event.schedule == '{entry['cron']}'" in group or (
+                entry["cron"] in shared_crons
+            ), entry
+        job = {"j": {"concurrency": {"group": known_group}}}
+        assert deadlocks({**workflow, "jobs": job}) != []
