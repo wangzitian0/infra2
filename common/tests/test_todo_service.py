@@ -157,3 +157,33 @@ def test_portal_config_template_contains_canary_todo() -> None:
     assert todo_item is not None, "Canary Todo item not found in Homer config"
     assert todo_item["url"] == "https://todo{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}"
     assert todo_item["tag"] == "canary"
+
+
+def test_todo_slot_commands_escape_database_url_for_compose() -> None:
+    """Slot shell commands must escape $$DATABASE_URL so Compose preserves the Vault-sourced variable."""
+    import re
+    import yaml
+
+    from common.deploy.compose_compile import load_stack
+
+    compose_file = REPO_ROOT / "platform/30.todo/compose.yaml"
+    content = yaml.safe_load(load_stack(compose_file).compiled)
+
+    slot_services = [
+        (name, svc)
+        for name, svc in content["services"].items()
+        if name.startswith("todo-")
+    ]
+    assert slot_services, "expected todo-* slot services in compiled compose.yaml"
+
+    for name, svc in slot_services:
+        cmd = svc.get("command")
+        cmd_text = (
+            " ".join(str(part) for part in cmd)
+            if isinstance(cmd, list)
+            else str(cmd or "")
+        )
+        assert "$$DATABASE_URL" in cmd_text, f"{name} must escape $$DATABASE_URL"
+        assert re.search(r"(?<!\$)\$DATABASE_URL", cmd_text) is None, (
+            f"{name} contains unescaped $DATABASE_URL"
+        )

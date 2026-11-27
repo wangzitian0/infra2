@@ -22,7 +22,7 @@ services:
     command:
       - sh
       - -c
-      - export DATABASE_URL="$(printf '%s' "$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_11_app:|; s|/postgres$|/todo_v4_11|')" && export SERVICE_VERSION="v4.11.2" && exec python /app/app.py
+      - export DATABASE_URL="$(printf '%s' "$$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_11_app:|; s|/postgres$|/todo_v4_11|')" && export SERVICE_VERSION="v4.11.2" && exec python /app/app.py
     x-vault: {}
     x-capabilities:
       s3: {}
@@ -85,7 +85,7 @@ services:
     command:
       - sh
       - -c
-      - export DATABASE_URL="$(printf '%s' "$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_13_app:|; s|/postgres$|/todo_v4_13|')" && export SERVICE_VERSION="v4.13.0" && exec python /app/app.py
+      - export DATABASE_URL="$(printf '%s' "$$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_13_app:|; s|/postgres$|/todo_v4_13|')" && export SERVICE_VERSION="v4.13.0" && exec python /app/app.py
     x-vault: {}
     x-capabilities:
       s3: {}
