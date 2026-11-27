@@ -1747,3 +1747,83 @@ def test_require_app_peer_cli_flag_forwards_to_verify_canary() -> None:
     ) as mock_verify:
         assert main(["--env", "staging", "--require-app-peer"]) == 0
     assert mock_verify.call_args.kwargs["require_app_peer"] is True
+
+
+def _with_llm_stream_section(stream_body: str) -> str:
+    fresh = _relative_ts(30, now=FIXED_NOW)
+    base = _canned_stdout(
+        traces=f"500\t{fresh}",
+        logs=f"100\t{fresh}",
+        environment="staging",
+    )
+    old_line = '{"status": "pass", "input_tokens": 120, "output_tokens": 35}'
+    marker = "=== LLM_SUMMARY_STREAM ===\n"
+    idx = base.index(marker) + len(marker)
+    return base[:idx] + stream_body + "\n" + base[idx + len(old_line) + 1 :]
+
+
+def test_llm_pillar_accepts_v4_13_sse_stream_and_legacy_json() -> None:
+    sse_payload = "\n".join(
+        [
+            'event: meta\ndata: {"model": "glm-5.3-flash", "todo_count": 0}',
+            'event: delta\ndata: {"text": "No recent todos."}',
+            'event: done\ndata: {"input_tokens": 30, "output_tokens": 47}',
+        ]
+    )
+    sse_report, _ = _verify_with_canned_ssh(
+        "staging", _with_llm_stream_section(sse_payload)
+    )
+    assert sse_report.llm is not None
+    assert sse_report.llm.ok is True
+    assert sse_report.llm.details["stream"]["format"] == "sse"
+    assert sse_report.llm.details["stream"]["input_tokens"] == 30
+    assert sse_report.llm.details["stream"]["output_tokens"] == 47
+
+    legacy_payload = '{"status": "pass", "input_tokens": 120, "output_tokens": 35}'
+    legacy_report, _ = _verify_with_canned_ssh(
+        "staging", _with_llm_stream_section(legacy_payload)
+    )
+    assert legacy_report.llm is not None
+    assert legacy_report.llm.ok is True
+
+
+def test_llm_pillar_rejects_broken_or_incomplete_sse_stream() -> None:
+    err_payload = "\n".join(
+        [
+            'event: meta\ndata: {"model": "glm-5.3-flash"}',
+            'event: error\ndata: {"detail": "upstream timeout"}',
+        ]
+    )
+    err_report, _ = _verify_with_canned_ssh(
+        "staging", _with_llm_stream_section(err_payload)
+    )
+    assert err_report.llm is not None
+    assert err_report.llm.ok is False
+    assert "stream status='error'" in err_report.llm.summary
+
+    missing_done_payload = "\n".join(
+        [
+            'event: meta\ndata: {"model": "glm-5.3-flash"}',
+            'event: delta\ndata: {"text": "Partial"}',
+        ]
+    )
+    incomplete_report, _ = _verify_with_canned_ssh(
+        "staging", _with_llm_stream_section(missing_done_payload)
+    )
+    assert incomplete_report.llm is not None
+    assert incomplete_report.llm.ok is False
+    assert "stream status='incomplete'" in incomplete_report.llm.summary
+
+    zero_tokens_payload = "\n".join(
+        [
+            'event: meta\ndata: {"model": "glm-5.3-flash"}',
+            'event: delta\ndata: {"text": ""}',
+            'event: done\ndata: {"input_tokens": 0, "output_tokens": 0}',
+        ]
+    )
+    zero_report, _ = _verify_with_canned_ssh(
+        "staging", _with_llm_stream_section(zero_tokens_payload)
+    )
+    assert zero_report.llm is not None
+    assert zero_report.llm.ok is False
+    assert "stream usage tokens missing/zero" in zero_report.llm.summary
