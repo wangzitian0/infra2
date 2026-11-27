@@ -1,10 +1,10 @@
 # Canary Todo (Infrastructure Verification Tool)
 
-Canary service at `todo.zitian.party` (with per-slot domains `todo-<slot>.zitian.party` declared in `platform/30.todo/slots.yaml`: `v4-11`, `v4-13`, `v4-14`). It proves the platform's real runtime paths. The full contract is in [`docs/ssot/platform.canary_todo.md`](../../docs/ssot/platform.canary_todo.md).
+Canary service at `todo.zitian.party` (with per-slot domains `todo-<slot>.zitian.party` declared in `platform/30.todo/slots.yaml`: `v4-13` secondary, `v4-14` primary). It proves the platform's real runtime paths. The full contract is in [`docs/ssot/platform.canary_todo.md`](../../docs/ssot/platform.canary_todo.md).
 
 ## Overview
 
-- **Service**: todo (multi-slot: `todo-v4-11`, `todo-v4-13`, `todo-v4-14` via `slots.yaml`)
+- **Service**: todo (multi-slot: `todo-v4-13`, `todo-v4-14` via `slots.yaml`)
 - **Port**: 8000 (container) -> 443 (Traefik)
 - **Subdomain**: per-slot routes (`todo-<slot>.zitian.party`, plus primary `todo.zitian.party`) using Authentik ForwardAuth proxy labels in `compose.yaml`
 - **Deployer**: `TodoDeployer` (`platform/30.todo/deploy.py`)
@@ -13,8 +13,8 @@ Canary service at `todo.zitian.party` (with per-slot domains `todo-<slot>.zitian
 ## Validated Capabilities
 
 1. **Redis** (`platform/02.redis`): `AUTH`, then `SETEX`, `GET` and `DEL` of a random value under per-slot `REDIS_KEY_PREFIX`. `-NOAUTH` fails.
-2. **Postgres** (`platform/01.postgres`): isolated per-slot roles and databases (`todo_v4_11_app`/`todo_v4_11`, `todo_v4_13_app`/`todo_v4_13`, `todo_v4_14_app`/`todo_v4_14`, plus `todo_app`/`postgres`), `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped `canary_todo_probe` temporary table `CREATE`/`INSERT`/`SELECT`/`DELETE` roundtrip. `TodoDeployer` and `preview.compose.yaml` also ensure native enum `canary_todo_capability` matches `canary_schema:METADATA` (`schema_check`). An `E` reply fails.
-3. **S3** (`platform/03.s3`): `PUT`, `GET` and `DELETE` of one object under per-slot `S3_KEY_PREFIX` (`canary/v4-11/`, `canary/v4-13/`, `canary/v4-14/`) in bucket `platform-canary`.
+2. **Postgres** (`platform/01.postgres`): isolated per-slot roles and databases (`todo_v4_13_app`/`todo_v4_13`, `todo_4_14_app`/`todo_4_14`, plus `todo_app`/`postgres`), `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped `canary_todo_probe` temporary table `CREATE`/`INSERT`/`SELECT`/`DELETE` roundtrip. `TodoDeployer` and `preview.compose.yaml` also ensure native enum `canary_todo_capability` matches `canary_schema:METADATA` (`schema_check`). An `E` reply fails.
+3. **S3** (`platform/03.s3`): `PUT`, `GET` and `DELETE` of one object under per-slot `S3_KEY_PREFIX` (`canary/v4-13/`, `canary/v4-14/`) in bucket `platform-canary`.
 4. **SigNoz** (`platform/11.signoz`): collector liveness. The canary also exports its own traces, logs, and custom OpenTelemetry metrics (`canary.probe.duration_ms`, `canary.probe.outcomes`), with its SigNoz v5 dashboard in `dashboard.json`.
 5. **OpenPanel** (`platform/24.openpanel`): API liveness via `OPENPANEL_HEALTH_URL`, plus `openpanel` and `browser_otel` capability env vars via `TodoDeployer.compose_env_base`.
 6. **Authentik** (`platform/10.authentik`): SSO liveness.

@@ -66,13 +66,13 @@ The document returns HTTP 200 only when every gating check passes. It returns HT
 | Surface | Who can reach it | Used by |
 |---------|------------------|---------|
 | `GET /api/health` | Public (Traefik router priority 100, exact path); container healthcheck probes `/readyz` | `staging_gate`, `prod_gate`, and public health checks |
-| `GET /api/canary/status` | The Docker network, and SSO users through the protected router | Probe runner (`todo-canary-status-<slot>`), the dashboard |
+| `GET /api/canary/status` | The Docker network, and SSO users through the protected router | Probe runner (`todo-canary-status` for primary slot, `todo-<slot>-canary-status` for secondary slots), the dashboard |
 | `POST /api/todos/summary` | SSO users and internal Docker callers (`docker exec` via `tools/canary_verify.py`) | Manual UI trigger and low-frequency LLM verification |
 | `GET /` and the rest | SSO users only (Authentik ForwardAuth, priority 10) | People |
 
 `/api/canary/status` is not public. It shows internal host names and raw errors, and it runs real probes.
 
-**Probe consumer.** `TodoDeployer.probes` declares one `todo-canary-status-<slot>` probe per active slot (plus compatibility alias where configured; HTTP 200, severity `error` = P1, timeout 15 s). The probe runner polls it every 60 s. Three red rounds raise an alert. A staging runner sends a report instead of a page. A signal entry for each environment derives from `TodoDeployer.signals`.
+**Probe consumer.** `TodoDeployer.probes` declares `todo-canary-status` for the primary slot (`v4-14`) and `todo-<slot>-canary-status` for each secondary slot (e.g. `todo-v4-13-canary-status`; HTTP 200, severity `error` = P1, timeout 15 s). The probe runner polls them every 60 s. Three red rounds raise an alert. A staging runner sends a report instead of a page. A signal entry for each environment derives from `TodoDeployer.signals`.
 
 **Severity.** The probe shipped at `warning` (P2) because it was new and stayed red while an operator step was open (an `unconfigured` check). It is now `error` (P1). The raise needed two conditions: every gating check passes in both environments, and the production canary has answered HTTP 200 for a full day. Evidence, recorded on #991:
 

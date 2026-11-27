@@ -23,7 +23,7 @@ This repository is both the implementation/deployment control plane for `infra2`
 3. **Preferences are not cross-repository commands:** Default GitHub, collaboration, and design preferences live in [`harness/workspace/`](harness/workspace/). More specific rules in the target repository prevail.
 4. **Dependency boundary:** A submodule is a development snapshot, not a package, runtime, deployment, or configuration-hash dependency. Stable cross-repository code contracts travel only through a published `infra2-sdk` version.
 5. **Submodule development boundary:** Submodule checkouts in `repos/` must remain detached or on tracked commits matching parent pins. Develop submodule changes in independent checkouts or worktrees outside the harness working tree.
-6. **Canary role:** This repository is the first consumer and Canary proving ground for released `infra2-sdk` versions before downstream adoption. The Canary is the multi-slot Canary Todo service (`platform/30.todo`, `slots.yaml` — `v4-11`, `v4-13`, `v4-14`). Its SSOT is [`docs/ssot/platform.canary_todo.md`](docs/ssot/platform.canary_todo.md). Probes read each slot's `/api/canary/status` every 60 s to prove Redis writes, Postgres logins, and S3 writes.
+6. **Canary role:** This repository is the first consumer and Canary proving ground for released `infra2-sdk` versions before downstream adoption. The Canary is the multi-slot Canary Todo service (`platform/30.todo`, `slots.yaml` — `v4-13`, `v4-14`). Its SSOT is [`docs/ssot/platform.canary_todo.md`](docs/ssot/platform.canary_todo.md). Probes read each slot's `/api/canary/status` every 60 s to prove Redis writes, Postgres logins, and S3 writes.
 
 ## Core mandatory principles (SSOT first)
 
