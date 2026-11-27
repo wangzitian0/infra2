@@ -10,10 +10,10 @@ import base64
 
 import pytest
 
-from common.deploy import promote as dp
-from common.deploy.promote import (
-    PromoteDeps,
-    PromoteOptions,
+from common.deploy.steps import app_rollout as dp
+from common.deploy.steps.app_rollout import (
+    AppRolloutDeps as PromoteDeps,
+    AppRolloutOptions as PromoteOptions,
     ensure_generated_secrets as _real_ensure_generated_secrets,
 )
 from common.deploy.queue import parse_epoch_seconds
@@ -171,7 +171,7 @@ def _stub_public_health(monkeypatch):
 
 def test_staging_deploy_assembles_axes_and_triggers():
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(iac_ref="b" * 40),
@@ -227,7 +227,7 @@ def test_branch_is_reasserted_on_every_deploy_when_given(monkeypatch):
     # must be re-asserted on every call for a plain (github) stack.
     _plain_app_stack(monkeypatch, "finance_report/finance_report/preview/compose.yaml")
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(iac_ref="b" * 40, branch="v1.1.38"),
@@ -251,7 +251,7 @@ def test_branch_omitted_leaves_a_plain_composes_source_untouched(monkeypatch):
     # A plain stack without a branch: no update_compose call at all.
     _plain_app_stack(monkeypatch, "finance_report/finance_report/preview/compose.yaml")
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(iac_ref="b" * 40),
@@ -284,7 +284,7 @@ def test_an_x_infra2_app_stack_uploads_its_compiled_text_as_raw(
     from common.deploy.compose_compile import load_stack
 
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service=service, iac_ref="b" * 40, branch=branch),
@@ -335,7 +335,7 @@ def test_the_deployed_compose_is_the_stack_file_at_iac_ref_not_the_checkout(
 
     monkeypatch.setattr(config_drift, "contents_at_ref", contents_at_ref)
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(iac_ref=TAG_SHA),
@@ -411,7 +411,7 @@ def test_an_equal_release_template_deploys_the_compiled_stack(monkeypatch):
         "VAULT_SECRETS_TEMPLATE", base64.b64encode(template.encode()).decode()
     )
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(iac_ref="b" * 40),
@@ -440,7 +440,7 @@ def test_a_release_template_mismatch_stops_before_any_dokploy_write(
     monkeypatch.setenv("VAULT_SECRETS_TEMPLATE", injected(_release_template(service)))
     client = FakeDokploy()
     with pytest.raises(dp.ReleaseTemplateMismatch):
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             FULL_SHA,
             options=PromoteOptions(service=service, iac_ref="b" * 40),
@@ -456,7 +456,7 @@ def test_truealpha_staging_deploy_resolves_its_own_compose_and_identity():
     # finance_report-only path above. Same shape, different service/compose/identity —
     # proves the generalization didn't just special-case finance_report's literals.
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
@@ -486,7 +486,7 @@ def test_app_domain_override_does_not_leak_into_the_shared_control_plane_endpoin
     # conflation would send the Vault preflight probe to vault.truealpha.club (a Cloudflare
     # 526 — dormant here only because AppRole auth skips that preflight).
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
@@ -510,7 +510,7 @@ def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
     # It serves on its own domain, as the receiver passes it (Deployer.domain) — mirrors
     # the staging test above, prod env.
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "prod",
         FULL_SHA,
         options=PromoteOptions(
@@ -542,7 +542,7 @@ def test_truealpha_llm_container_receives_the_collector_endpoint_and_issued_iden
     check that proves the container gets it (a deploy-side assertion alone passed while
     truealpha's compose consumed none of it, and the service sent nothing for weeks)."""
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         env_type,
         FULL_SHA,
         options=PromoteOptions(
@@ -582,7 +582,7 @@ def test_truealpha_staging_deploy_sets_app_host():
     rule rendered as the literal, unmatchable `Host()` on a real deploy despite
     every compose_env_base-level unit test passing. Assert against THIS path."""
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
@@ -596,7 +596,7 @@ def test_truealpha_prod_deploy_sets_app_host_to_the_bare_domain():
     """truealpha#474: production has no ENV_SUFFIX to disambiguate, so it must be the
     bare domain, not truealpha.<domain> (the truealpha.truealpha.club bug)."""
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "prod",
         FULL_SHA,
         options=PromoteOptions(
@@ -612,7 +612,7 @@ def test_finance_report_deploy_has_no_app_host_override():
     """The default Deployer.compose_env_overrides is a no-op: a service with no
     override (finance_report/app) must not gain a stray APP_HOST key."""
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging", FULL_SHA, deps=PromoteDeps(client=client, domain="zitian.party")
     )
     _, env = client.updated[0]
@@ -632,14 +632,16 @@ def test_deploy_rejects_invalid_targets_before_any_side_effect(
 ):
     client = FakeDokploy()
     with pytest.raises(ValueError, match=expected_match):
-        dp.deploy(env_name, "deadbeef", deps=PromoteDeps(client=client, domain=domain))
+        dp.execute_fixed_rollout(
+            env_name, "deadbeef", deps=PromoteDeps(client=client, domain=domain)
+        )
     assert client.updated == []
     assert client.deployed == []
 
 
 def test_prod_deploys_a_staging_validated_digest():
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "prod",
         "deadbeef",
         options=PromoteOptions(staging_validated=True),
@@ -653,7 +655,7 @@ def test_prod_deploys_a_staging_validated_digest():
 
 def test_prod_break_glass_overrides_the_staging_gate():
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "prod",
         "deadbeef",
         options=PromoteOptions(break_glass=True),
@@ -665,7 +667,7 @@ def test_prod_break_glass_overrides_the_staging_gate():
 
 def test_sha_is_lowercased_via_the_resolver():
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging", "DEADBEEF", deps=PromoteDeps(client=client, domain="zitian.party")
     )
     assert plan.sha == "deadbeef"
@@ -673,7 +675,7 @@ def test_sha_is_lowercased_via_the_resolver():
 
 def test_data_lane_is_derived_from_env_config_not_caller_supplied():
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging", "deadbeef", deps=PromoteDeps(client=client, domain="zitian.party")
     )
     assert plan.data == "staging"
@@ -833,7 +835,7 @@ def test_deploy_with_wait_snapshots_before_then_polls_the_new_record():
         return [{"id": "old", "status": "done"}]
 
     client = FakeDokploy(deployments=deployments)
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         "deadbeef",
         options=PromoteOptions(wait=True),
@@ -847,7 +849,7 @@ def test_deploy_without_wait_does_not_poll_deployments():
     # default wait=False: the rollout poll is never consulted (no get_compose_deployments).
     calls = []
     client = FakeDokploy(deployments=lambda self: calls.append(1) or [])
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging", "deadbeef", deps=PromoteDeps(client=client, domain="zitian.party")
     )
     assert calls == []
@@ -858,7 +860,7 @@ def test_deploy_without_wait_does_not_poll_deployments():
 
 def test_deploy_sets_cache_bust_and_static_infra_keys():
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         deps=PromoteDeps(client=client, domain="zitian.party", now=lambda: 1000),
@@ -878,10 +880,10 @@ def test_cache_bust_differs_for_two_deploys_in_the_same_second():
     # collide here and re-introduce a no-op — ms resolution must keep them distinct).
     c1 = FakeDokploy()
     c2 = FakeDokploy()
-    h1 = dp.deploy(
+    h1 = dp.execute_fixed_rollout(
         "staging", FULL_SHA, deps=PromoteDeps(client=c1, domain="z.p", now=lambda: 1.2)
     ).env_vars
-    h2 = dp.deploy(
+    h2 = dp.execute_fixed_rollout(
         "staging", FULL_SHA, deps=PromoteDeps(client=c2, domain="z.p", now=lambda: 1.8)
     ).env_vars
     assert h1["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1200"
@@ -893,14 +895,14 @@ def test_deploy_replaces_compose_env_and_removes_model_overrides():
     import inspect
 
     assert not hasattr(dp, "model_overrides_from_env")
-    assert list(inspect.signature(dp.deploy).parameters) == [
+    assert list(inspect.signature(dp.execute_fixed_rollout).parameters) == [
         "env",
         "code",
         "options",
         "deps",
     ]
     assert (
-        "model_overrides" not in inspect.signature(dp._build_deploy_env_vars).parameters
+        "model_overrides" not in inspect.signature(dp.build_fixed_env_vars).parameters
     )
     for bad_kw in (
         {"domain": "zitian.party"},
@@ -909,10 +911,10 @@ def test_deploy_replaces_compose_env_and_removes_model_overrides():
         {"iac_ref": "b" * 40},
     ):
         with pytest.raises(TypeError, match="unexpected keyword argument"):
-            dp.deploy("staging", FULL_SHA, **bad_kw)
+            dp.execute_fixed_rollout("staging", FULL_SHA, **bad_kw)
 
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         "deadbeef",
         deps=PromoteDeps(client=client, domain="zitian.party"),
@@ -970,7 +972,9 @@ def test_assert_approle_creds_present_skips_an_unregistered_service():
 def test_deploy_raises_before_any_mutation_when_approle_creds_missing():
     client = FakeDokploy(env_str="")
     with pytest.raises(ValueError, match="VAULT_ROLE_ID"):
-        dp.deploy("staging", "deadbeef", deps=PromoteDeps(client=client, domain="z.p"))
+        dp.execute_fixed_rollout(
+            "staging", "deadbeef", deps=PromoteDeps(client=client, domain="z.p")
+        )
     assert client.updated == []
     assert client.deployed == []
     assert client.branch_updates == []
@@ -991,7 +995,7 @@ def test_deploy_calls_schema_gate_before_any_mutation_when_registered(monkeypatc
     monkeypatch.setattr(dp.schema_gate, "run_schema_gate", _record_and_block)
     client = FakeDokploy()
     with pytest.raises(dp.schema_gate.SchemaGateError, match="blocked"):
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             FULL_SHA,
             options=PromoteOptions(iac_ref="b" * 40),
@@ -1018,7 +1022,7 @@ def test_deploy_skips_schema_gate_for_an_unregistered_service(monkeypatch):
         lambda *a, **k: calls.append((a, k)) or "A",
     )
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
@@ -1033,7 +1037,7 @@ def test_deploy_carries_the_gates_rollback_class_into_the_returned_plan(monkeypa
     the caller through DeployPlan -- not be computed and dropped on the floor."""
     monkeypatch.setattr(dp.schema_gate, "run_schema_gate", lambda *a, **k: "C")
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(iac_ref="b" * 40),
@@ -1046,7 +1050,7 @@ def test_deploy_plan_rollback_class_is_none_for_an_unregistered_service():
     """truealpha/app is never gated -- its DeployPlan must say so explicitly (None),
     not silently omit or fabricate a class."""
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
@@ -1071,7 +1075,7 @@ def test_deploy_calls_ensure_generated_secrets_before_any_mutation(monkeypatch):
     monkeypatch.setattr(dp, "ensure_generated_secrets", _record_and_raise)
     client = FakeDokploy()
     with pytest.raises(ValueError, match="boom"):
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "prod",
             "deadbeef",
             options=PromoteOptions(service="truealpha/app", staging_validated=True),
@@ -1094,7 +1098,7 @@ def test_deploy_calls_ensure_generated_secrets_with_the_unmapped_staging_env(
         lambda service, env: calls.append((service, env)),
     )
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(iac_ref="b" * 40),
@@ -1205,7 +1209,7 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
         lambda service: _NoVaultAccessDeployer,
     )
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging", FULL_SHA, deps=PromoteDeps(client=client, domain="zitian.party")
     )
     assert plan.sha == FULL_SHA
@@ -1270,7 +1274,7 @@ def test_verify_effective_config_hash_tolerates_transient_read_error():
 def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
     # the reflecting fake echoes the pushed env back, so the effective hash matches.
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(verify_config=True),
@@ -1303,7 +1307,7 @@ def test_staging_deploy_injects_openpanel_client_id():
     from common.observability.openpanel import OPENPANEL_CLIENTS
 
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging", FULL_SHA, deps=PromoteDeps(client=client, domain="zitian.party")
     )
     _, env = client.updated[0]
@@ -1316,7 +1320,7 @@ def test_prod_deploy_injects_openpanel_client_id_normalizing_prod_alias():
     from common.observability.openpanel import OPENPANEL_CLIENTS
 
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "prod",
         FULL_SHA,
         options=PromoteOptions(staging_validated=True),
@@ -1342,7 +1346,7 @@ def test_deploy_emits_platform_snapshot_on_failure(monkeypatch):
             raise RuntimeError("dokploy 500")
 
     with pytest.raises(RuntimeError, match="dokploy 500"):
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             FULL_SHA,
             options=PromoteOptions(wait=False),
@@ -1383,7 +1387,7 @@ def test_deploy_with_wait_fails_when_the_frontend_is_left_created(monkeypatch):
     client = FakeDokploy(deployments=_rollout_done)
     client._containers = broken
     with pytest.raises(RuntimeError) as excinfo:
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             "deadbeef",
             options=PromoteOptions(wait=True),
@@ -1419,7 +1423,7 @@ def test_deploy_with_wait_waits_for_a_health_check_still_starting(monkeypatch):
 
     client = FakeDokploy(deployments=_rollout_done)
     client._containers = containers
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         "deadbeef",
         options=PromoteOptions(wait=True),
@@ -1431,7 +1435,7 @@ def test_deploy_with_wait_waits_for_a_health_check_still_starting(monkeypatch):
 def test_deploy_without_wait_never_consults_the_containers():
     client = FakeDokploy()
     client._containers = lambda self: (_ for _ in ()).throw(AssertionError("consulted"))
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging", "deadbeef", deps=PromoteDeps(client=client, domain="zitian.party")
     )
 
@@ -1458,7 +1462,7 @@ def test_deploy_fast_swap_uses_deterministic_config_hash():
     # deterministic (tag + iac_ref) to avoid churning vault-agent when secrets and code are unchanged,
     # while still advancing when iac_ref advances.
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
@@ -1471,7 +1475,7 @@ def test_deploy_fast_swap_uses_deterministic_config_hash():
 def test_deploy_fast_swap_falls_back_to_ms_hash_when_iac_ref_missing():
     # When iac_ref is omitted, fast_swap safely falls back to the per-call timestamp cache-bust.
     client = FakeDokploy()
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", iac_ref=""),
@@ -1495,7 +1499,7 @@ def test_deploy_with_wait_verifies_public_health_version_identity(monkeypatch):
         return 200, '{"status": "ok", "git_sha": "v0.0.42"}'
 
     client = FakeDokploy(deployments=_rollout_done)
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(service="truealpha/app", image_ref="v0.0.42", wait=True),
@@ -1517,7 +1521,7 @@ def test_truealpha_prod_deploy_probes_the_host_that_traefik_routes(monkeypatch):
         return 200, '{"status": "ok", "git_sha": "v0.0.42"}'
 
     client = FakeDokploy(deployments=_rollout_done)
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "prod",
         FULL_SHA,
         options=PromoteOptions(
@@ -1557,7 +1561,7 @@ def test_deploy_with_wait_fails_closed_and_emits_snapshot_when_public_health_ser
     with pytest.raises(
         RuntimeError, match="still reporting version 'v0.0.41'"
     ) as excinfo:
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             FULL_SHA,
             options=PromoteOptions(
@@ -1574,7 +1578,7 @@ def test_deploy_with_wait_fails_closed_and_emits_snapshot_when_public_health_ser
 def test_deploy_with_wait_skips_public_health_when_verify_smoke_false():
     """#569: verify_smoke=False bypasses the public /api/health poll."""
     client = FakeDokploy(deployments=_rollout_done)
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         "deadbeef",
         options=PromoteOptions(wait=True, verify_smoke=False),
@@ -1606,7 +1610,7 @@ def test_force_promote_bypasses_false_positive_schema_and_smoke_gates_with_audit
         return 503, '{"status": "starting"}'
 
     client = FakeDokploy(deployments=_rollout_done)
-    plan = dp.deploy(
+    plan = dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
         options=PromoteOptions(
@@ -1636,7 +1640,7 @@ def test_automatic_rollback_restores_previous_version_and_notifies(monkeypatch):
         ),
     )
     with pytest.raises(RuntimeError, match="still reporting version 'v0.1.40'"):
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             FULL_SHA,
             options=PromoteOptions(image_ref="v0.1.41", wait=True, timeout=5),
@@ -1677,7 +1681,7 @@ def test_pause_rollback_suppresses_automatic_rollback_with_audit_trail(
         ),
     )
     with pytest.raises(RuntimeError, match="still reporting version 'v0.1.40'"):
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             FULL_SHA,
             options=PromoteOptions(
@@ -1736,7 +1740,7 @@ def test_rollback_circuit_breaker_trips_on_third_consecutive_rollback(monkeypatc
 
     for attempt_idx in (1, 2):
         with pytest.raises(RuntimeError, match="still reporting version 'v0.1.40'"):
-            dp.deploy(
+            dp.execute_fixed_rollout(
                 "staging",
                 FULL_SHA,
                 options=PromoteOptions(
@@ -1761,7 +1765,7 @@ def test_rollback_circuit_breaker_trips_on_third_consecutive_rollback(monkeypatc
     with pytest.raises(
         RuntimeError, match="automatic rollback circuit breaker tripped"
     ):
-        dp.deploy(
+        dp.execute_fixed_rollout(
             "staging",
             FULL_SHA,
             options=PromoteOptions(
@@ -1814,7 +1818,8 @@ def test_verify_public_health_accepts_healthy_status_from_fastapi_init_service()
 def test_promote_reuses_dokploy_adapter_deployment_ids_ssot():
     """SSOT guard: promote and preview share dokploy_adapter.deployment_ids rather than
     maintaining duplicate _dep_id / _deployment_ids helpers."""
-    from common.deploy import dokploy_adapter, preview, release_markers, v2
+    from common.deploy import dokploy_adapter, release_markers, v2
+    from common.deploy.steps import preview_slot as preview
 
     assert dp._deployment_ids is dokploy_adapter.deployment_ids
     assert preview._deployment_ids is dokploy_adapter.deployment_ids

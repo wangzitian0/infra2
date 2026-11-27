@@ -21,8 +21,8 @@ from common.observability.watchdog_audit import (  # noqa: E402
 
 DEPLOY_BOUNDARIES = (
     ROOT / "common/deploy/deployer.py",
-    ROOT / "common/deploy/promote.py",
-    ROOT / "common/deploy/preview.py",
+    ROOT / "common/deploy/steps/app_rollout.py",
+    ROOT / "common/deploy/steps/preview_slot.py",
 )
 NON_OWNED_TOP_LEVEL = {"repos"}
 

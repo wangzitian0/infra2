@@ -155,9 +155,6 @@ def test_every_registered_service_declares_its_store_only_keys():
         "truealpha/app": ("S3_BUCKET",),
         "truealpha/data_engine": (
             "CAPTURE_APPROVED_BY",
-            "GIT_COMMIT_SHA",
-            "IMAGE_DIGEST",
-            "RELEASE_ID",
             "S3_BUCKET",
         ),
     }
@@ -202,12 +199,7 @@ DEPLOYER_READS = {
     # 2026-09-09 duly listed truealpha/data_engine:S3_BUCKET as an orphan in both
     # environments — a prune would have broken the next data-engine deploy.
     "truealpha/data_engine": tuple(
-        sorted(
-            set(_data_engine_deployer()._REQUIRED_SECRET_KEYS)
-            # Not required (an unpinned deploy reports "unknown"), but read from this
-            # path by compose_env_base all the same.
-            | {"GIT_COMMIT_SHA"}
-        )
+        sorted(set(_data_engine_deployer()._REQUIRED_SECRET_KEYS))
     ),
     "truealpha/app": (
         "APP_SERVICE_DB_PASSWORD",

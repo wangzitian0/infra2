@@ -1856,7 +1856,7 @@ def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
     assert key in webhook_server._recent_deploys
 
 
-@pytest.mark.parametrize("action", ["sync", "secrets-supply"])
+@pytest.mark.parametrize("action", ["sync", "up"])
 def test_a_retry_in_flight_is_reported_over_the_failure_it_retries(
     monkeypatch, action
 ) -> None:
@@ -2142,13 +2142,10 @@ def test_status_fails_closed_when_legacy_coordinate_is_ambiguous(monkeypatch) ->
     }
 
 
-def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
+def test_sync_pipeline_up_action_is_its_own_deployment_and_reaches_the_sync(
     monkeypatch,
 ) -> None:
-    """#649: deploy_v2 fires /deploy with action=secrets-supply before an app stack's
-    Dokploy promote. The action must reach sync_services_by_version (which sets
-    DEPLOY_ACTION for the child) and must key a different deployment than a plain sync
-    of the same coordinates, or the 600 s request cache would answer one with the other."""
+    """deploy_v2 fires /deploy with action=up and sync_spec for unified SyncPipeline v2."""
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
@@ -2168,41 +2165,62 @@ def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
             requested_services=list(services or []),
             results=[
                 sync_runner.ServiceSyncResult(
-                    service="finance_report/app", task="fr-app.sync", success=True
+                    service="finance_report/app",
+                    task="sync_pipeline:fixed:up",
+                    success=True,
                 )
             ],
         )
 
     monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync)
+    spec = {
+        "mode": "fixed",
+        "action": "up",
+        "env": "staging",
+        "service": "finance_report/app",
+    }
     payload = {
         "env": "staging",
         "ref": DEPLOY_SHA,
         "wait": True,
         "triggered_by": "deploy_v2",
         "services": ["finance_report/app"],
-        "action": "secrets-supply",
+        "action": "up",
+        "sync_spec": spec,
     }
     body, status_code = _post_signed(webhook_server, "/deploy", payload, monkeypatch)
     assert status_code == 200
-    assert seen["action"] == "secrets-supply"
-    assert body["action"] == "secrets-supply"
+    assert seen["action"] == "up"
+    assert seen["sync_spec"] == spec
+    assert body["action"] == "up"
     plain = webhook_server._deployment_key(
         "staging", DEPLOY_SHA, ["finance_report/app"]
     )
-    supply = webhook_server._deployment_key(
-        "staging", DEPLOY_SHA, ["finance_report/app"], action="secrets-supply"
+    up_key = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["finance_report/app"], action="up", sync_spec=spec
     )
-    assert webhook_server._deployment_id(plain) != webhook_server._deployment_id(supply)
-    assert body["deployment_id"] == webhook_server._deployment_id(supply)
-    # a plain sync of the same coordinates is NOT served from the supply's cached result
+    assert webhook_server._deployment_id(plain) != webhook_server._deployment_id(up_key)
+    assert body["deployment_id"] == webhook_server._deployment_id(up_key)
     body2, _ = _post_signed(
-        webhook_server, "/deploy", {**payload, "action": "sync"}, monkeypatch
+        webhook_server,
+        "/deploy",
+        {
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "deploy_v2",
+            "services": ["finance_report/app"],
+            "action": "sync",
+        },
+        monkeypatch,
     )
     assert body2.get("cached") is not True
-    assert body2.get("action") != "secrets-supply"
+    assert body2.get("action") != "up"
 
 
-def test_run_invoke_task_passes_the_action_to_the_child(monkeypatch, tmp_path) -> None:
+def test_run_sync_pipeline_spec_passes_env_and_executes_module(
+    monkeypatch, tmp_path
+) -> None:
     sync_runner = _load_module(
         "sync_runner_action_env_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
@@ -2213,35 +2231,51 @@ def test_run_invoke_task_passes_the_action_to_the_child(monkeypatch, tmp_path) -
             return types.SimpleNamespace(
                 returncode=0, stdout='{"auth": {"client_token": "t"}}', stderr=""
             )
+        captured["args"] = list(args)
         captured["env"] = kwargs["env"]
-        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout='{"ok": true}', stderr="")
 
     monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
-    sync_runner.run_invoke_task(
-        "fr-app.sync", tmp_path, "staging", action="secrets-supply"
-    )
-    assert captured["env"]["DEPLOY_ACTION"] == "secrets-supply"
-    sync_runner.run_invoke_task("fr-app.sync", tmp_path, "staging")
-    assert "DEPLOY_ACTION" not in captured["env"]
+    spec = {
+        "mode": "fixed",
+        "action": "up",
+        "env": "staging",
+        "service": "finance_report/app",
+    }
+    out = sync_runner.run_sync_pipeline_spec(spec, tmp_path, "staging")
+    assert out["success"] is True
+    assert captured["args"][1:] == [
+        "-P",
+        "-m",
+        "common.deploy.sync_pipeline",
+        "--spec-env",
+        "IAC_SYNC_SPEC",
+    ]
+    assert json.loads(captured["env"]["IAC_SYNC_SPEC"]) == spec
 
 
-def test_async_secrets_supply_response_id_matches_the_status_lookup(
+def test_async_up_action_response_id_matches_the_status_lookup(
     monkeypatch,
 ) -> None:
-    """v1.1.69 incident: the 202 body for an async secrets-supply request carried the id of
-    the plain sync (no action), so deploy_v2's poll of /deploy/status with the action got
-    409 'deployment_id does not match'. Every response for the action must carry its id."""
+    """Async action=up /deploy and /deploy/status compute identical deployment_id."""
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    spec = {
+        "mode": "fixed",
+        "action": "up",
+        "env": "staging",
+        "service": "finance_report/app",
+    }
     request_json = {
         "env": "staging",
         "ref": DEPLOY_SHA,
         "wait": False,
         "triggered_by": "deploy_v2",
         "services": ["finance_report/app"],
-        "action": "secrets-supply",
+        "action": "up",
+        "sync_spec": spec,
     }
     webhook_server = _load_module(
         "webhook_server_async_action_under_test",
@@ -2269,12 +2303,14 @@ def test_async_secrets_supply_response_id_matches_the_status_lookup(
     )
     expected = webhook_server._deployment_id(
         webhook_server._deployment_key(
-            "staging", DEPLOY_SHA, ["finance_report/app"], action="secrets-supply"
+            "staging",
+            DEPLOY_SHA,
+            ["finance_report/app"],
+            action="up",
+            sync_spec=spec,
         )
     )
     assert body["deployment_id"] == expected
-    # and the status lookup with the same coordinates + action finds it (fresh
-    # signature: nonces are single-use)
     status_body, status_code = _post_signed(
         webhook_server,
         "/deploy/status",
@@ -2504,3 +2540,82 @@ def test_diagnose_failure_classifies_dokploy_deployment_error_with_log_tail(
     assert "502 Bad Gateway" in diagnostic["summary"]
     assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["fix_hint"]
     assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["next_action"]
+
+
+def test_webhook_rejects_sync_spec_env_escalation_and_preserves_wait_in_flight_id(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    webhook_server = _load_module(
+        "webhook_sync_spec_guard", IAC_RUNNER / "webhook_server.py", monkeypatch
+    )
+    monkeypatch.setenv("IAC_RUNNER_ALLOWED_ENVS", "staging")
+    ref = "a" * 40
+
+    # Escalation attempt: top-level env='staging' with sync_spec targeting prod must 403.
+    body, code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "staging",
+            "ref": ref,
+            "action": "up",
+            "services": ["finance_report/app"],
+            "sync_spec": {
+                "mode": "fixed",
+                "env": "prod",
+                "service": "finance_report/app",
+            },
+        },
+        monkeypatch,
+    )
+    assert code == 403
+    assert "forbidden for runner env" in body["error"]
+
+    # Mode mismatch under preview env must 403.
+    monkeypatch.setenv("IAC_RUNNER_ALLOWED_ENVS", "staging")
+    body, code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "preview",
+            "ref": ref,
+            "action": "up",
+            "services": ["finance_report/app"],
+            "sync_spec": {"mode": "fixed", "env": "production"},
+        },
+        monkeypatch,
+    )
+    assert code == 403
+
+    # Duplicate in-flight wait=True must include sync_spec in its deployment_id.
+    sync_spec = {
+        "mode": "preview",
+        "action": "up",
+        "service": "finance_report/app",
+        "alias_kind": "pr",
+        "alias_value": "5",
+    }
+    key = webhook_server._deployment_key(
+        "preview", ref, ["finance_report/app"], "5", "up", sync_spec=sync_spec
+    )
+    webhook_server._in_flight_deploys.add(key)
+    try:
+        dup_body, dup_code = _post_signed(
+            webhook_server,
+            "/deploy",
+            {
+                "env": "preview",
+                "ref": ref,
+                "action": "up",
+                "wait": True,
+                "version_ref": "5",
+                "services": ["finance_report/app"],
+                "sync_spec": sync_spec,
+            },
+            monkeypatch,
+        )
+        assert dup_code == 202
+        assert dup_body["deployment_id"] == webhook_server._deployment_id(key)
+    finally:
+        webhook_server._in_flight_deploys.discard(key)

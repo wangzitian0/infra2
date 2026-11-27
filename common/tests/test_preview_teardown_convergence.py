@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import pytest
 
-import common.deploy.preview as pl
-from common.deploy.preview import PreviewDeps
+from common.deploy.steps import preview_slot as pl
+from common.deploy.steps.preview_slot import PreviewSlotDeps as PreviewDeps
 
 FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
 SHORT_SHA = FULL_SHA[:7]
@@ -153,7 +153,7 @@ def test_record_keyed_by_stable_name_while_dokploy_mangles_appname(kind, value):
     # AC #921.1: the Dokploy record is created under the stable `compose_name`, while the
     # docker project runs under Dokploy's SUFFIXED appName (name != appName, per reality).
     client = ConvergenceFakeDokploy()
-    pl.up(
+    pl.execute_preview_up(
         kind,
         value,
         code="main",
@@ -177,13 +177,13 @@ def test_down_leaves_zero_orphans_despite_appname_suffix(kind, value):
     # prunes the suffixed docker project. Zero survivors at BOTH layers, even though
     # name != appName — the real orphan-proof guarantee.
     client = ConvergenceFakeDokploy()
-    pl.up(
+    pl.execute_preview_up(
         kind,
         value,
         code="main",
         deps=PreviewDeps(client=client, domain="zitian.party", http_get=_ok_get),
     )
-    pl.down(kind, value, domain="zitian.party", client=client)
+    pl.execute_preview_down(kind, value, domain="zitian.party", client=client)
 
     assert client.records == {}  # Dokploy record gone
     assert client.survivors() == {}  # no orphaned docker project — the #310 guarantee
@@ -197,7 +197,7 @@ def test_teardown_is_composeid_based_not_name_based():
     # NOT what the current stack runs under, so it would survive — i.e. keying teardown
     # off the bare name (the #310 bug) leaks. The real lifecycle never does this.
     client = ConvergenceFakeDokploy()
-    pl.up(
+    pl.execute_preview_up(
         "pr",
         7,
         code="main",
@@ -205,7 +205,7 @@ def test_teardown_is_composeid_based_not_name_based():
     )
     bare_name = pl.preview_alias("pr", 7).compose_name
     client.docker_projects[bare_name] = "cmp-stray"  # a #310-style divergent project
-    pl.down("pr", 7, domain="zitian.party", client=client)
+    pl.execute_preview_down("pr", 7, domain="zitian.party", client=client)
 
     # the real (suffixed) project is gone; the bare-name stray survives — proving the
     # model distinguishes the two keys and that composeId-teardown is what saves us.
@@ -270,7 +270,7 @@ def test_down_verifies_physical_container_absence():
             [],
         ]
     )
-    result = pl.down(
+    result = pl.execute_preview_down(
         "branch",
         "main",
         domain="zitian.party",
@@ -285,7 +285,7 @@ def test_down_verifies_physical_container_absence():
 def test_down_detects_container_survivors():
     # Container never disappears
     client = ContainerListFakeDokploy([[{"name": "/finance-report-branch-main"}]])
-    result = pl.down(
+    result = pl.execute_preview_down(
         "branch",
         "main",
         domain="zitian.party",

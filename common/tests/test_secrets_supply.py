@@ -223,31 +223,6 @@ def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
         ), wf
 
 
-def test_deployer_sync_under_secrets_supply_action_stops_after_the_supply(
-    monkeypatch,
-) -> None:
-    """The runner's child gets DEPLOY_ACTION=secrets-supply from deploy_v2 (#649): only the
-    supply runs; nothing is composed, so an app stack's Dokploy promote stays the deploy."""
-    monkeypatch.setattr(AlertingLike, "env", classmethod(lambda cls: dict(ENV)))
-    monkeypatch.setattr(deployer_module, "validate_env", lambda: [])
-    monkeypatch.setenv("DEPLOY_ACTION", "secrets-supply")
-    seen: list = []
-    monkeypatch.setattr(
-        AlertingLike,
-        "apply_secret_supply",
-        classmethod(lambda cls, c, env=None: seen.append(env) or True),
-    )
-    assert AlertingLike.sync(object()) == {
-        "action": "supplied",
-        "details": "secret supply applied; no compose",
-    }
-    assert seen == ["staging"]
-    monkeypatch.setattr(
-        AlertingLike, "apply_secret_supply", classmethod(lambda cls, c, env=None: False)
-    )
-    assert AlertingLike.sync(object())["action"] == "failed"
-
-
 def test_deployer_sync_runs_the_supply_even_when_the_compose_hash_says_skip(
     monkeypatch,
 ) -> None:

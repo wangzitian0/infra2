@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from common.deploy import promote as dp
-from common.deploy.promote import PromoteDeps, PromoteOptions
+from common.deploy.steps import app_rollout as dp
+from common.deploy.steps.app_rollout import AppRolloutDeps, AppRolloutOptions
 from common.deploy.contract import SERVICES
 from common.observability_dashboards import load_dashboard
 from common.tests.compose_env import container_env
@@ -41,11 +41,11 @@ WORKER_METRICS = ("finance.statement_parse.outcome", "finance.async_parse.failur
 
 def _pushed_env() -> dict[str, str]:
     client = FakeDokploy()
-    dp.deploy(
+    dp.execute_fixed_rollout(
         "staging",
         FULL_SHA,
-        options=PromoteOptions(iac_ref="b" * 40),
-        deps=PromoteDeps(client=client, domain="zitian.party"),
+        options=AppRolloutOptions(iac_ref="b" * 40),
+        deps=AppRolloutDeps(client=client, domain="zitian.party"),
     )
     return client.updated[0][1]
 
@@ -187,9 +187,9 @@ def _sync_env(monkeypatch, environment: str) -> dict[str, str]:
 
 def _preview_env() -> dict[str, str]:
     from common.deploy.env_config import preview_alias
-    from common.deploy.preview import _preview_env_vars
+    from common.deploy.steps.preview_slot import build_preview_env_vars
 
-    return _preview_env_vars(
+    return build_preview_env_vars(
         preview_alias("pr", 5),
         service="finance_report/app",
         sha=FULL_SHA,

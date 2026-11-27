@@ -6,18 +6,18 @@
 
 `common/deploy` contains the centralized deployment engines behind the `deploy_v2` interface (`tools.deploy_v2`):
 1. **`Deployer` Base Abstraction**: The core engine driving service deploy tasks (`pre_compose`, `compose`, `post_compose`, `restart_dependents`), wired to Dokploy REST endpoints.
-2. **Fixed-Environment Promotion (`promote.py`)**: Authoritative backend for `staging` and `production` rollouts with strict change-set auditing, provenance guards, and production safety gates (RL-DATA-1: `staging_validated` + `code_reviewed`).
-3. **Dynamic Preview Lifecycle (`preview.py`)**: Manages isolated multi-alias preview deployments (`branch-<name>`, `pr-<N>`, `commit-<sha7>`, `tag-<slug>`) with trigger-bound terminal teardown.
-4. **Pre-Deploy Schema Gate (`schema_gate.py`)**: Runs `python -m infra2_sdk.storage check-schema` in the app image against the live database before a deploy replaces containers. Exit 1 (blocked) and exit 3 (not evaluated) stop the deploy.
+2. **Unified `SyncPipeline` v2 (`sync_pipeline.py` & `steps/`)**: Authoritative orchestrator for `iac_pinned`, fixed-environment (`steps/app_rollout.py`), and dynamic preview (`steps/preview_slot.py`) rollouts with provenance guards and RL-DATA-1 gates.
+3. **Pre-Deploy Schema Gate (`schema_gate.py`)**: Runs `python -m infra2_sdk.storage check-schema` in the app image against the live database before a deploy replaces containers. Exit 1 (blocked) and exit 3 (not evaluated) stop the deploy.
 
 ## Module Map
 
 | Module | Role | Key Exports |
 |--------|------|-------------|
 | `deployer.py` | Platform & app deployment base class | `Deployer`, `make_tasks()`, `Deployer.apply_secret_supply()` |
+| `sync_pipeline.py` | Unified SyncPipeline v2 orchestrator and CLI spec runner | `SyncPipeline`, `run_sync_spec()` |
+| `steps/app_rollout.py` | Fixed-compose staging & production rollout steps | `execute_fixed_rollout()`, `AppRolloutOptions`, `AppRolloutDeps` |
+| `steps/preview_slot.py` | Dynamic preview slot lifecycle steps | `execute_preview_up()`, `execute_preview_down()`, `PreviewSlotOptions` |
 | `stack_presets.py` | App PostgreSQL/Redis stack presets; facts come from `common/core/stack_preset_facts.py` | `PostgresStackDeployer`, `RedisStackDeployer`, `stack_tasks()` |
-| `promote.py` | Staging & production promotion pipeline | `deploy()`, fixed environment orchestration |
-| `preview.py` | Dynamic preview stack lifecycle | `up()`, `down()`, preview slot routing |
 | `schema_gate.py` | Pre-deploy enum schema gate against live DB (`python -m infra2_sdk.storage check-schema` in the app image) | `SchemaCheckSpec`, `SchemaGateError`, `gate_applies()`, `run_schema_gate()` |
 | `in_service.py` | Container health & liveness verification | `ContainerObservation`, `InServiceVerdict`, `expected_running_services()`, `parse_docker_ps()`, `in_service_verdict()`, `container_names()` |
 | `rollout.py` | Dokploy rollout polling & terminal status | `RolloutError`, `RolloutResult`, `wait_for_deployment()`, `TERMINAL_SUCCESS_STATUSES` |
@@ -51,17 +51,18 @@ class PostgresDeployer(Deployer):
 tasks = make_tasks(PostgresDeployer)
 ```
 
-### Triggering a Fixed-Environment Promotion
+### Triggering a Fixed-Environment Rollout
 ```python
 from common.deploy.dokploy_client import get_dokploy
-from common.deploy.promote import PromoteDeps, PromoteOptions, deploy
+from common.deploy.steps.app_rollout import AppRolloutDeps, AppRolloutOptions
+from common.deploy.sync_pipeline import SyncPipeline
 
-# Orchestrates staging promotion for an app release tag (CLI front door: tools.deploy_v2)
-plan = deploy(
+# Orchestrates staging rollout for an app release tag (CLI front door: tools.deploy_v2)
+plan = SyncPipeline.run_fixed(
     "staging",
     "v1.1.96",
-    options=PromoteOptions(service="finance_report/app", iac_ref="v1.1.96"),
-    deps=PromoteDeps(client=get_dokploy(), domain="zitian.party"),
+    options=AppRolloutOptions(service="finance_report/app", iac_ref="v1.1.96"),
+    deps=AppRolloutDeps(client=get_dokploy(), domain="zitian.party"),
 )
 assert plan.env == "staging"
 ```

@@ -17,6 +17,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 logging.basicConfig(
@@ -871,15 +872,7 @@ def run_invoke_task(
             raise ValueError("deploy_ref must be an exact 40-character commit SHA")
         env_vars["IAC_DEPLOY_REF"] = deploy_ref.lower()
     if version_ref:
-        # The app release this platform deploy pins (truealpha#712). Only a Deployer
-        # that reads DEPLOY_VERSION_REF acts on it; the value is already validated by
-        # the webhook (tag or sha) and is never interpolated into a shell.
         env_vars["DEPLOY_VERSION_REF"] = version_ref
-    if action and action != "sync":
-        # deploy_v2 asks for the secret supply alone before an app stack's Dokploy
-        # promote (which never enters the Deployer); Deployer.sync reads this and stops
-        # after apply_secret_supply — no compose (#649).
-        env_vars["DEPLOY_ACTION"] = action
     if vault_root_token := resolve_vault_token(env_vars):
         # The bounded AppRole token travels as VAULT_TOKEN (common.env, infra2-sdk); the old
         # name is kept for one release so a child at an older iac_ref still finds it.
@@ -909,6 +902,77 @@ def run_invoke_task(
         logger.error(f"Task {task_name} timed out after {DEPLOY_TIMEOUT}s")
         return {
             "task": task_name,
+            "success": False,
+            "stdout": "",
+            "stderr": f"Timeout after {DEPLOY_TIMEOUT}s",
+        }
+
+
+def run_sync_pipeline_spec(
+    sync_spec: dict[str, Any],
+    repo_path: Path,
+    deploy_env: str = "staging",
+    deploy_ref: str | None = None,
+    *,
+    python: str | None = None,
+) -> dict[str, Any]:
+    """Execute unified ``common.deploy.sync_pipeline`` for one app/preview spec."""
+    mode = str(sync_spec.get("mode") or "").strip().lower()
+    if deploy_env == "preview":
+        if mode != "preview":
+            raise ValueError(
+                f"preview runner deploy requires sync_spec.mode='preview', got {mode!r}"
+            )
+    else:
+        if mode != "fixed":
+            raise ValueError(
+                f"{deploy_env} runner deploy requires sync_spec.mode='fixed', got {mode!r}"
+            )
+        raw_spec_env = str(sync_spec.get("env") or "").strip().lower()
+        canonical_spec_env = "production" if raw_spec_env == "prod" else raw_spec_env
+        if canonical_spec_env != deploy_env:
+            raise ValueError(
+                f"sync_spec.env {raw_spec_env!r} does not match deploy_env {deploy_env!r}"
+            )
+    env_vars = {
+        **os.environ,
+        **deploy_env_overrides(deploy_env),
+        "IAC_SYNC_EXPECTED_ENV": deploy_env,
+        "IAC_SYNC_SPEC": json.dumps(sync_spec, separators=(",", ":")),
+    }
+    if deploy_ref:
+        if not EXACT_COMMIT_RE.fullmatch(deploy_ref):
+            raise ValueError("deploy_ref must be an exact 40-character commit SHA")
+        env_vars["IAC_DEPLOY_REF"] = deploy_ref.lower()
+    if vault_root_token := resolve_vault_token(env_vars):
+        env_vars["VAULT_TOKEN"] = vault_root_token
+        env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
+    env_vars.setdefault("COLUMNS", "200")
+    try:
+        result = subprocess.run(
+            [
+                python or sys.executable,
+                "-P",
+                "-m",
+                "common.deploy.sync_pipeline",
+                "--spec-env",
+                "IAC_SYNC_SPEC",
+            ],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            env=env_vars,
+            timeout=DEPLOY_TIMEOUT,
+        )
+        return {
+            "task": f"sync_pipeline:{sync_spec.get('mode', 'fixed')}:{sync_spec.get('action', 'up')}",
+            "success": result.returncode == 0,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "task": f"sync_pipeline:{sync_spec.get('mode', 'fixed')}:{sync_spec.get('action', 'up')}",
             "success": False,
             "stdout": "",
             "stderr": f"Timeout after {DEPLOY_TIMEOUT}s",
@@ -997,6 +1061,7 @@ def sync_services(
     deploy_env: str = "staging",
     version_ref: str | None = None,
     action: str | None = None,
+    sync_spec: dict[str, Any] | None = None,
 ) -> SyncResult:
     """Sync the specified services with deployment lock."""
     requested_services = sorted(services)
@@ -1076,6 +1141,32 @@ def sync_services(
             "reused" if ref_env.reused else "synced",
             ref_env.seconds,
         )
+
+        if sync_spec is not None and action in ("up", "down"):
+            target_service = str(sync_spec.get("service") or next(iter(services), ""))
+            spec_res = run_sync_pipeline_spec(
+                sync_spec,
+                repo_path,
+                deploy_env,
+                resolved_head,
+                python=ref_env.python,
+            )
+            results = [
+                ServiceSyncResult(
+                    service=target_service,
+                    task=str(spec_res["task"]),
+                    success=bool(spec_res["success"]),
+                    stdout=str(spec_res.get("stdout", "")),
+                    stderr=str(spec_res.get("stderr", "")),
+                )
+            ]
+            return SyncResult(
+                env=deploy_env,
+                ref=ref,
+                requested_services=requested_services,
+                results=results,
+                ref_env=ref_env.to_dict(),
+            )
 
         results: list[ServiceSyncResult] = []
         task_map = (
@@ -1184,8 +1275,9 @@ def sync_services_by_version(
     services: list[str] | None = None,
     version_ref: str | None = None,
     action: str | None = None,
+    sync_spec: dict[str, Any] | None = None,
 ) -> SyncResult:
-    """Deploy targeted platform services to a specific environment using a git ref."""
+    """Deploy targeted services to a specific environment using a git ref."""
     logger.info("=== Deployment Started ===")
     logger.info(f"Environment: {env}")
     logger.info(f"Ref: {ref}")
@@ -1196,9 +1288,11 @@ def sync_services_by_version(
     if action and action != "sync":
         logger.info(f"Action: {action}")
     target_services = set(services) if services else set()
-    extra = {"version_ref": version_ref} if version_ref else {}
+    extra: dict[str, Any] = {"version_ref": version_ref} if version_ref else {}
     if action and action != "sync":
         extra["action"] = action
+    if sync_spec is not None:
+        extra["sync_spec"] = sync_spec
     result = sync_services(target_services, ref=ref, deploy_env=env, **extra)
 
     logger.info(

@@ -80,7 +80,7 @@ def test_no_import_boundary_violation() -> None:
 def test_the_scan_sees_the_real_tree() -> None:
     """GREEN-WHILE-EMPTY: a scan that finds no modules passes every rule."""
     graph = scan_module_imports(ROOT, ignore_type_checking=False)
-    assert "common.deploy.preview" in graph
+    assert "common.deploy.steps.preview_slot" in graph
     assert "tools.pr_merge_gate" in graph
     assert not any(module.startswith((".venv", "venv")) for module in graph)
     assert sum(module.startswith("common.") for module in graph) >= 100

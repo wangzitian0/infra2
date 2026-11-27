@@ -505,7 +505,9 @@ def test_python_import_and_dotted_repo_ref_guards_reject_invalid_symbols() -> No
     ok = "common.deploy.deployer.Deployer._assert_approle_creds_present"
     assert _resolve_dotted(ok, sdk=False) is None
     assert (
-        _resolve_dotted("common.deploy.promote.assert_approle_creds_present", sdk=False)
+        _resolve_dotted(
+            "common.deploy.steps.app_rollout.assert_approle_creds_present", sdk=False
+        )
         is None
     )
     bad = "common.deploy.deployer._assert_approle_creds_present"

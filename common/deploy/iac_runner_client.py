@@ -10,13 +10,14 @@ import os
 import re
 import time
 from collections.abc import Iterator
+from typing import Any
 
 import httpx
 from common.deploy.git_refs import classify_ref
 
 _SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _DEPLOYMENT_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")
-_VALID_ENVS = ("staging", "production")
+_VALID_ENVS = ("staging", "production", "preview")
 
 STATUS_POLL_INITIAL_SECONDS = 2.0
 STATUS_POLL_BACKOFF = 1.25
@@ -131,8 +132,8 @@ def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
         raise ValueError("iac_runner base_url is required")
 
 
-def _validate_version_ref(version_ref: str) -> str:
-    """A release tag or a commit sha — the only two shapes a Deployer may pin from."""
+def _validate_version_ref(version_ref: str, *, allow_preview_refs: bool = False) -> str:
+    """Validate version_ref as tag/sha (or branch/pr when preview/rollout actions allow)."""
     candidate = str(version_ref).strip()
     try:
         form = classify_ref(candidate)
@@ -140,7 +141,8 @@ def _validate_version_ref(version_ref: str) -> str:
         raise ValueError(
             f"version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha, got {version_ref!r}"
         ) from exc
-    if form not in ("tag", "sha"):
+    allowed = ("tag", "sha", "branch", "pr") if allow_preview_refs else ("tag", "sha")
+    if form not in allowed:
         raise ValueError(
             f"version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha, got {version_ref!r}"
         )
@@ -188,8 +190,9 @@ def trigger_platform_deploy(
     version_ref: str | None = None,
     action: str | None = None,
     oidc_token: str | None = None,
+    sync_spec: dict[str, Any] | None = None,
 ) -> dict:
-    """Trigger an iac_runner platform deploy for specified services."""
+    """Trigger an iac_runner platform or app SyncPipeline deploy."""
     _validate_request(env, ref, secret, base_url)
     if not all(isinstance(service, str) for service in services):
         raise ValueError("services must be a non-empty list of non-empty strings")
@@ -197,6 +200,7 @@ def trigger_platform_deploy(
     if not normalized_services or any(not service for service in normalized_services):
         raise ValueError("services must be a non-empty list of non-empty strings")
 
+    allow_preview = env == "preview" or action in ("up", "down")
     body: dict = {
         "env": env,
         "ref": ref,
@@ -206,9 +210,11 @@ def trigger_platform_deploy(
         **({"action": action} if action and action != "sync" else {}),
     }
     if version_ref is not None:
-        # The app release a digest-pinned platform service should pin (truealpha#712);
-        # validated here so a malformed ref fails before any POST, like env/ref.
-        body["version_ref"] = _validate_version_ref(version_ref)
+        body["version_ref"] = _validate_version_ref(
+            version_ref, allow_preview_refs=allow_preview
+        )
+    if sync_spec is not None:
+        body["sync_spec"] = dict(sync_spec)
     payload = json.dumps(body, separators=(",", ":")).encode()
     headers = _signed_headers(secret, payload, now=now, nonce=nonce or _new_nonce())
     if env == "production":
@@ -247,6 +253,7 @@ def poll_platform_deploy_status(
     not_found_grace: float = STATUS_NOT_FOUND_GRACE_SECONDS,
     backoff: float = 1.0,
     max_interval: float | None = None,
+    sync_spec: dict[str, Any] | None = None,
 ) -> dict:
     """Poll /deploy/status until the deploy reaches a terminal state."""
     _validate_request(env, ref, secret, base_url)
@@ -265,13 +272,22 @@ def poll_platform_deploy_status(
         raise ValueError("services must be a non-empty list of non-empty strings")
     if deployment_id is not None and not _DEPLOYMENT_ID_RE.match(deployment_id):
         raise ValueError("deployment_id must be 16 lowercase hex characters")
-    status_coordinate = {"env": env, "ref": ref, "triggered_by": triggered_by}
+    allow_preview = env == "preview" or action in ("up", "down")
+    status_coordinate: dict[str, Any] = {
+        "env": env,
+        "ref": ref,
+        "triggered_by": triggered_by,
+    }
     if normalized_services is not None:
         status_coordinate["services"] = normalized_services
     if action and action != "sync":
         status_coordinate["action"] = action
     if version_ref is not None:
-        status_coordinate["version_ref"] = _validate_version_ref(version_ref)
+        status_coordinate["version_ref"] = _validate_version_ref(
+            version_ref, allow_preview_refs=allow_preview
+        )
+    if sync_spec is not None:
+        status_coordinate["sync_spec"] = dict(sync_spec)
     if deployment_id is not None:
         status_coordinate["deployment_id"] = deployment_id
     payload = json.dumps(

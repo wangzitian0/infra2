@@ -123,29 +123,18 @@ class DataEngineDeployer(Deployer):
         "S3_ACCESS_KEY",
         "S3_SECRET_KEY",
         "S3_BUCKET",
-        "IMAGE_DIGEST",
-        "RELEASE_ID",
         "CAPTURE_APPROVED_BY",
     )
 
     @classmethod
-    def pin_release(
-        cls, version_ref: str, *, secrets=None, resolve=None, sleep=time.sleep
-    ) -> str:
-        """Pin the data-engine image of app release ``version_ref`` in Vault (truealpha#712).
-
-        The stack is digest-pinned; a release request carries a tag. The runner — the
-        one deploy context with the AppRole that may update this env's data_engine
-        path — resolves ``truealpha-data-engine:<tag>`` to its registry digest and
-        writes ``IMAGE_DIGEST`` plus ``GIT_COMMIT_SHA`` (the tag, the same
-        identifier the app images stamp) before ``compose_env_base`` reads them. The
-        existing ``verify_runtime_applied`` then proves the three containers run that
-        digest — the post-deploy assertion the issue asked for, unchanged.
-
-        Fails closed: an unresolvable tag or a refused Vault write raises, and the
-        deploy stops before any compose mutation. Only a lookup that got no answer at
-        all is retried (``_PIN_RESOLVE_BACKOFF_SECONDS``); the last such failure raises.
-        """
+    def resolve_release_env(
+        cls,
+        version_ref: str,
+        *,
+        resolve=None,
+        sleep=time.sleep,
+    ) -> dict[str, str]:
+        """Resolve immutable data-engine release coordinates in memory without Vault writes."""
         candidate = str(version_ref).strip()
         try:
             form = classify_ref(candidate)
@@ -179,35 +168,26 @@ class DataEngineDeployer(Deployer):
                 f"registry returned a malformed digest for {candidate}: {digest!r}"
             )
         release_id = f"release-manifest:{hashlib.sha256(f'{candidate}:{digest}'.encode()).hexdigest()}"
-        backend = secrets if secrets is not None else cls.secrets_backend()
-        for key, value in (
-            ("IMAGE_DIGEST", digest),
-            ("GIT_COMMIT_SHA", candidate),
-            ("RELEASE_ID", release_id),
-        ):
-            if not backend.set(key, value):
-                raise RuntimeError(
-                    f"Vault refused to pin {key} for release {candidate}"
-                )
         success(
-            f"{cls.service}: pinned release {candidate} -> {digest[:19]}… ({release_id[:31]}…) in Vault"
+            f"{cls.service}: resolved release {candidate} -> {digest[:19]}… ({release_id[:31]}…)"
         )
-        return digest
+        return {
+            "IMAGE_DIGEST": digest,
+            "GIT_COMMIT_SHA": candidate,
+            "RELEASE_ID": release_id,
+        }
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None, *, env: str | None = None) -> bool:
         secrets = cls.secrets_backend(env=env)
-        # From the PROCESS environment, not cls.env(): Deployer.env() is the curated
-        # deployment config (common.core.environ.get_env — 1Password init vars plus a fixed set
-        # of os.environ keys), and the runner's per-deploy DEPLOY_VERSION_REF is not in
-        # that set. The first live run of #630 (2026-09-07, infra2 run 34107133379)
-        # reported success with the pin silently skipped for exactly this reason.
         version_ref = (os.environ.get("DEPLOY_VERSION_REF") or "").strip()
         if version_ref:
             try:
-                cls.pin_release(version_ref, secrets=secrets)
+                cls.resolve_release_env(version_ref)
             except Exception as exc:  # noqa: BLE001 - every failure here must stop the deploy
-                error(f"{cls.service}: could not pin release {version_ref!r}: {exc}")
+                error(
+                    f"{cls.service}: could not resolve release {version_ref!r}: {exc}"
+                )
                 return False
         missing = [
             key for key in cls._REQUIRED_SECRET_KEYS if not (secrets.get(key) or "")
@@ -215,23 +195,48 @@ class DataEngineDeployer(Deployer):
         if missing:
             error(f"Missing TrueAlpha data-engine Vault fields: {', '.join(missing)}")
             return False
-        image_digest = secrets.get("IMAGE_DIGEST") or ""
-        release_id = secrets.get("RELEASE_ID") or ""
-        if not _IMAGE_DIGEST.fullmatch(image_digest):
-            error("IMAGE_DIGEST must be a full sha256 OCI digest")
-            return False
-        if not _RELEASE_ID.fullmatch(release_id):
-            error("RELEASE_ID must be a content-addressed release-manifest ID")
-            return False
         return True
+
+    @classmethod
+    def _remote_release_env(cls, env: dict | None) -> dict[str, str]:
+        """Read existing release identity from remote Dokploy compose when DEPLOY_VERSION_REF is unset."""
+        try:
+            compose = cls._find_remote_compose(env or cls.env())
+            if isinstance(compose, dict) and compose.get("composeId"):
+                from common.deploy.dokploy_client import get_dokploy
+                from common.deploy.env_util import _parse_env_text
+
+                domain = (env or {}).get("INTERNAL_DOMAIN") or ""
+                host = f"cloud.{domain}" if domain else None
+                raw_env = get_dokploy(host=host).get_compose_env(compose["composeId"])
+                parsed = _parse_env_text(raw_env or "")
+                return {
+                    k: parsed[k]
+                    for k in ("IMAGE_DIGEST", "GIT_COMMIT_SHA", "RELEASE_ID")
+                    if parsed.get(k)
+                }
+        except Exception:  # noqa: BLE001
+            return {}
+        return {}
 
     @classmethod
     def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
         base = super().compose_env_base(env)
         secrets = cls.secrets_backend()
         environment = base.get("ENV", "production")
-        image_digest = secrets.get("IMAGE_DIGEST") or ""
-        release_id = secrets.get("RELEASE_ID") or ""
+        version_ref = (os.environ.get("DEPLOY_VERSION_REF") or "").strip()
+        release_env = cls.resolve_release_env(version_ref) if version_ref else {}
+        if not release_env:
+            release_env = cls._remote_release_env(env)
+        image_digest = (
+            release_env.get("IMAGE_DIGEST") or secrets.get("IMAGE_DIGEST") or ""
+        )
+        release_id = release_env.get("RELEASE_ID") or secrets.get("RELEASE_ID") or ""
+        git_sha = (
+            release_env.get("GIT_COMMIT_SHA")
+            or secrets.get("GIT_COMMIT_SHA")
+            or "unknown"
+        )
         approved_by = secrets.get("CAPTURE_APPROVED_BY") or ""
         if not _IMAGE_DIGEST.fullmatch(image_digest):
             raise ValueError("IMAGE_DIGEST must be configured before deployment")
@@ -246,7 +251,7 @@ class DataEngineDeployer(Deployer):
                 "IMAGE_DIGEST": image_digest,
                 "RELEASE_ID": release_id,
                 "CAPTURE_APPROVED_BY": approved_by,
-                "GIT_COMMIT_SHA": secrets.get("GIT_COMMIT_SHA") or "unknown",
+                "GIT_COMMIT_SHA": git_sha,
             }
         )
         compiled = cls._compiled_compose()

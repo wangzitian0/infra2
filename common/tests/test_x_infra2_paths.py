@@ -107,7 +107,7 @@ class _PreviewClient:
 
 
 def _preview_up(monkeypatch, service: str, client, compose_path: str | None = None):
-    from common.deploy import preview as pl
+    from common.deploy.steps import preview_slot as pl
 
     monkeypatch.setattr(pl, "resolve_to_sha", lambda code, repo=None: FULL_SHA)
     if compose_path is not None:
@@ -115,12 +115,12 @@ def _preview_up(monkeypatch, service: str, client, compose_path: str | None = No
             pl.preview_service_config(service), compose_path=compose_path
         )
         monkeypatch.setattr(pl, "preview_service_config", lambda s: config)
-    return pl.up(
+    return pl.execute_preview_up(
         "pr",
         5,
         code="main",
-        options=pl.PreviewOptions(service=service, wait=False),
-        deps=pl.PreviewDeps(
+        options=pl.PreviewSlotOptions(service=service, wait=False),
+        deps=pl.PreviewSlotDeps(
             client=client, domain="example.test", repo="https://x/r.git"
         ),
     )

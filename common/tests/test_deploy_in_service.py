@@ -1125,13 +1125,14 @@ def test_wait_for_rollout_and_failure_snapshot_surface_dokploy_log_tail(
 ):
     """#1366: wait_for_rollout and failure_snapshot.build_snapshot surface deploymentId,
     logPath, errorMessage, and log tail when a Dokploy deployment record enters error."""
-    from common.deploy import failure_snapshot, promote
+    from common.deploy import failure_snapshot
     from common.deploy.dokploy_adapter import read_deployment_log_tail
     from common.deploy.failure_snapshot import build_snapshot
-    from common.deploy.promote import wait_for_rollout
+    from common.deploy.steps import app_rollout
+    from common.deploy.steps.app_rollout import wait_for_rollout
 
     monkeypatch.setattr(
-        promote,
+        app_rollout,
         "read_deployment_log_tail",
         lambda dep, **kw: read_deployment_log_tail(
             dep, allowed_prefixes=(str(tmp_path),), **kw
