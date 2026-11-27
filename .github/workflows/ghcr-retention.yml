@@ -19,6 +19,7 @@ run-name: GHCR retention (${{ github.event_name }}${{ inputs.dry_run && ', dry r
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ghcr-retention
@@ -44,8 +45,10 @@ jobs:
 
       - name: Delete old versions
         env:
-          GHCR_RETENTION_TOKEN: ${{ secrets.GHCR_RETENTION_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          # Step 1 of 2 (#2000): the contract entry lands first, so this job prints the plan
+          # with GITHUB_TOKEN. The next change reads GHCR_RETENTION_TOKEN and deletes.
+          GHCR_RETENTION_TOKEN: ${{ github.token }}
+          DRY_RUN: "true"
         run: |
           if [ -z "$GHCR_RETENTION_TOKEN" ]; then
             echo "::error::secret GHCR_RETENTION_TOKEN is not set (classic PAT: read:packages, delete:packages)"
