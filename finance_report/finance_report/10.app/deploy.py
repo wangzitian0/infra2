@@ -319,21 +319,18 @@ class AppDeployer(Deployer):
             error("S3 bucket creation failed")
             raise RuntimeError(f"Failed to create S3 bucket '{bucket_name}'")
 
+        from common.security.supply import write_store_keys
+
+        to_write = {}
         if not existing_access_key:
-            if secrets.set("S3_ACCESS_KEY", minio_result["access_key"]):
-                success("Vault: S3_ACCESS_KEY stored")
-            else:
-                warning("Failed to store S3_ACCESS_KEY in Vault")
-
+            to_write["S3_ACCESS_KEY"] = minio_result["access_key"]
         if not existing_secret_key:
-            if secrets.set("S3_SECRET_KEY", minio_result["secret_key"]):
-                success("Vault: S3_SECRET_KEY stored")
-            else:
-                warning("Failed to store S3_SECRET_KEY in Vault")
-
+            to_write["S3_SECRET_KEY"] = minio_result["secret_key"]
         if not secrets.get("S3_BUCKET"):
-            if secrets.set("S3_BUCKET", bucket_name):
-                success("Vault: S3_BUCKET stored")
+            to_write["S3_BUCKET"] = bucket_name
+        if to_write:
+            write_store_keys(secrets, to_write)
+            success(f"Vault: stored {sorted(to_write)}")
 
     _ensure_minio_bucket = _ensure_s3_bucket
 

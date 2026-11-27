@@ -140,9 +140,12 @@ class OpenPanelDeployer(Deployer):
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
         """Ensure every Vault key referenced by secrets.ctmpl exists."""
+        import secrets as py_secrets
+        from common.security.supply import ensure_store_keys
+
         e = cls.env()
-        env_name = e.get("ENV", "production")
-        project = e.get("PROJECT", "platform")
+        env_name = cls._require_env_name(e)
+        project = cls.project_name(e)
 
         pg_secrets = get_secrets(project, "postgres", env_name)
         redis_secrets = get_secrets(project, "redis", env_name)
@@ -154,38 +157,16 @@ class OpenPanelDeployer(Deployer):
             return False
 
         openpanel_secrets = get_secrets(project, "openpanel", env_name)
-
-        # On first deploy the `.../openpanel` path does not exist yet, and
-        # VaultSecrets.get() raises VaultSecretNotFoundError instead of returning
-        # None. Treat "path missing" as "secret absent" so the set() calls below
-        # create the path idempotently.
-        def _read(key):
-            try:
-                return openpanel_secrets.get(key)
-            except openpanel_secrets.VaultSecretNotFoundError:
-                return None
-
-        cookie_secret = _read("cookie_secret")
-        if not cookie_secret:
-            import secrets as py_secrets
-
-            # OpenPanel COOKIE_SECRET: opaque random session signing key.
-            cookie_secret = py_secrets.token_hex(32)
-            if not openpanel_secrets.set("cookie_secret", cookie_secret):
-                error("Failed to store cookie_secret in Vault")
-                return False
-            warning("Generated new cookie_secret in Vault")
-        else:
-            info("cookie_secret exists in Vault")
-
-        # Check or set resend_api_key placeholder
-        resend_api_key = _read("resend_api_key")
-        if not resend_api_key:
-            if not openpanel_secrets.set("resend_api_key", "placeholder"):
-                error("Failed to store placeholder resend_api_key in Vault")
-                return False
-            warning("Set placeholder resend_api_key in Vault")
-
+        try:
+            ensure_store_keys(
+                openpanel_secrets,
+                defaults={"resend_api_key": "placeholder"},
+                generators={"cookie_secret": lambda: py_secrets.token_hex(32)},
+            )
+        except Exception as exc:  # noqa: BLE001
+            error(f"Failed to store OpenPanel secrets in Vault: {exc}")
+            return False
+        info("OpenPanel runtime secrets verified in Vault")
         return True
 
     @classmethod

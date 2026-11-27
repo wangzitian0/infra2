@@ -8,7 +8,7 @@ import urllib.request
 from common.core.environ import get_env
 from common.console import error, header, info, success, warning
 from common.deploy.deployer import Deployer, make_tasks
-from common.security.store import VaultSecrets, generate_password
+from common.security.store import generate_password
 from common.core.facets import (
     ProbeFacet,
     PublicRouteFacet,
@@ -376,19 +376,18 @@ class AppDeployer(Deployer):
     def _ensure_vault_secret(
         cls, key: str, length: int, *, env: str | None = None
     ) -> bool:
+        from common.security.supply import ensure_store_keys
+
         secrets = cls.secrets_backend(env=env)
         try:
-            existing = secrets.get(key)
-        except VaultSecrets.VaultSecretNotFoundError:
-            existing = None
-        if existing:
-            info(f"Vault secret exists: {key}")
+            ensure_store_keys(
+                secrets, generators={key: lambda: generate_password(length)}
+            )
+            success(f"Vault: {key} verified")
             return True
-        if secrets.set(key, generate_password(length)):
-            success(f"Vault: {key} generated and stored")
-            return True
-        error(f"Failed to store {key} in Vault")
-        return False
+        except Exception as exc:  # noqa: BLE001
+            error(f"Failed to store {key} in Vault: {exc}")
+            return False
 
     @classmethod
     def _ensure_secret_key(cls, env: str | None = None) -> bool:
@@ -489,16 +488,17 @@ class AppDeployer(Deployer):
             raise RuntimeError(f"Failed to create S3 bucket '{bucket_name}'")
         cls._ensure_never_expires(c, bucket_name)
 
-        for key, value in (
-            ("S3_ACCESS_KEY", minio_result["access_key"]),
-            ("S3_SECRET_KEY", minio_result["secret_key"]),
-            ("S3_BUCKET", bucket_name),
-        ):
-            if not secrets.get(key):
-                if secrets.set(key, value):
-                    success(f"Vault: {key} stored")
-                else:
-                    warning(f"Failed to store {key} in Vault")
+        from common.security.supply import ensure_store_keys
+
+        ensure_store_keys(
+            secrets,
+            defaults={
+                "S3_ACCESS_KEY": minio_result["access_key"],
+                "S3_SECRET_KEY": minio_result["secret_key"],
+                "S3_BUCKET": bucket_name,
+            },
+        )
+        success("Vault: S3 credentials stored")
 
     @classmethod
     def _ensure_never_expires(cls, c, bucket_name):

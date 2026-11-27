@@ -116,23 +116,19 @@ class S3Deployer(Deployer):
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
         """Ensure every field that the vault-agent template reads exists in Vault."""
+        from common.security.supply import ensure_store_keys
+
         vault_secrets = cls.secrets_backend()
-        root_user = vault_secrets.get("root_user") or "admin"
-        root_password = vault_secrets.get("root_password")
-
-        if not root_password:
-            root_password = generate_password(32)
-            warning("Generated new S3 root password")
-
-        if not vault_secrets.set("root_user", root_user):
-            error("Failed to store root_user in Vault")
+        try:
+            ensure_store_keys(
+                vault_secrets,
+                defaults={"root_user": "admin"},
+                generators={"root_password": lambda: generate_password(32)},
+            )
+        except Exception as exc:  # noqa: BLE001
+            error(f"Failed to store S3 runtime secrets in Vault: {exc}")
             return False
-        info("Vault: root_user stored")
-
-        if not vault_secrets.set("root_password", root_password):
-            error("Failed to store root_password in Vault")
-            return False
-        info("Vault: root_password stored")
+        info("Vault: root_user and root_password verified")
         return True
 
     @classmethod

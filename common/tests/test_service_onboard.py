@@ -36,13 +36,25 @@ def test_check_op_signed_in():
     assert check_op_signed_in(mock_runner_err) is False
 
 
-def test_onboard_preflight_fails_closed_without_op():
+def test_onboard_preflight_fails_closed_without_op(monkeypatch):
+    monkeypatch.delenv("DEPLOY_ENV", raising=False)
+    monkeypatch.delenv("INFRA_ENVIRONMENT", raising=False)
     mock_runner_fail = MagicMock(return_value=MagicMock(returncode=1))
     with pytest.raises(RuntimeError, match="1Password CLI not signed in"):
         onboard_service(
             service="test-service",
+            env="staging",
             op_runner=mock_runner_fail,
         )
+
+
+def test_onboard_and_offboard_require_explicit_env(monkeypatch):
+    monkeypatch.delenv("DEPLOY_ENV", raising=False)
+    monkeypatch.delenv("INFRA_ENVIRONMENT", raising=False)
+    with pytest.raises(ValueError, match="Explicit environment is required"):
+        onboard_service(service="demo-app")
+    with pytest.raises(ValueError, match="Explicit environment is required"):
+        offboard_service(service="demo-app")
 
 
 def test_get_or_create_db_credentials_reuse_existing():
@@ -88,8 +100,9 @@ def test_get_or_create_db_credentials_generate_new():
 def test_provision_vault_approle():
     mock_c = MagicMock(spec=Context)
 
-    # Responses for: 1. policy write, 2. role write, 3. read role-id, 4. write secret-id
+    # Responses for: 1. policy write, 2. role write, 3. list secret-ids, 4. read role-id, 5. write secret-id, 6. list token accessors
     res_ok = MagicMock(ok=True)
+    res_empty_list = MagicMock(ok=True, stdout="[]")
     res_role_id = MagicMock(
         ok=True, stdout=json.dumps({"data": {"role_id": "mock-role-uuid"}})
     )
@@ -97,7 +110,14 @@ def test_provision_vault_approle():
         ok=True, stdout=json.dumps({"data": {"secret_id": "mock-secret-uuid"}})
     )
 
-    mock_c.run.side_effect = [res_ok, res_ok, res_role_id, res_secret_id]
+    mock_c.run.side_effect = [
+        res_ok,
+        res_ok,
+        res_empty_list,
+        res_role_id,
+        res_secret_id,
+        res_empty_list,
+    ]
 
     role_name, role_id, secret_id = provision_vault_approle(
         mock_c,
@@ -111,12 +131,18 @@ def test_provision_vault_approle():
     assert role_name == "apps-production-my_app"
     assert role_id == "mock-role-uuid"
     assert secret_id == "mock-secret-uuid"
-    assert mock_c.run.call_count == 4
+    role_cmd = mock_c.run.call_args_list[1][0][0]
+    assert "token_ttl=24h token_max_ttl=168h" in role_cmd
+    assert mock_c.run.call_count == 6
 
 
 def test_provision_vault_approle_destroys_stale_accessors():
     mock_c = MagicMock()
     res_ok = MagicMock(ok=True)
+    res_prior_list = MagicMock(
+        ok=True,
+        stdout=json.dumps(["acc-stale-1", "acc-stale-2"]),
+    )
     res_role_id = MagicMock(
         ok=True, stdout=json.dumps({"data": {"role_id": "mock-role-uuid"}})
     )
@@ -131,18 +157,16 @@ def test_provision_vault_approle_destroys_stale_accessors():
             }
         ),
     )
-    res_list = MagicMock(
-        ok=True,
-        stdout=json.dumps(["acc-stale-1", "acc-new", "acc-stale-2"]),
-    )
+    res_empty_tokens = MagicMock(ok=True, stdout="[]")
     mock_c.run.side_effect = [
         res_ok,
         res_ok,
+        res_prior_list,
         res_role_id,
         res_secret_id,
-        res_list,
         res_ok,
         res_ok,
+        res_empty_tokens,
     ]
 
     role_name, role_id, secret_id = provision_vault_approle(
@@ -155,7 +179,7 @@ def test_provision_vault_approle_destroys_stale_accessors():
     )
 
     assert secret_id == "new-secret-uuid"
-    assert mock_c.run.call_count == 7
+    assert mock_c.run.call_count == 8
     destroyed = [
         call_args[0][0]
         for call_args in mock_c.run.call_args_list
@@ -196,11 +220,22 @@ def test_onboard_service_end_to_end():
     }
 
     res_ok = MagicMock(ok=True)
+    res_prior = MagicMock(ok=True, stdout='["acc-old"]')
     res_role_id = MagicMock(ok=True, stdout=json.dumps({"data": {"role_id": "r-123"}}))
     res_secret_id = MagicMock(
-        ok=True, stdout=json.dumps({"data": {"secret_id": "s-456"}})
+        ok=True,
+        stdout=json.dumps(
+            {"data": {"secret_id": "s-456", "secret_id_accessor": "acc-new"}}
+        ),
     )
-    mock_c.run.side_effect = [res_ok, res_ok, res_role_id, res_secret_id]
+    mock_c.run.side_effect = [
+        res_ok,
+        res_ok,
+        res_prior,
+        res_role_id,
+        res_secret_id,
+        res_ok,  # post-Dokploy destroy acc-old
+    ]
 
     with patch.object(sob, "_load_postgres_tasks") as mock_load_pg:
         mock_pg = MagicMock()
@@ -375,4 +410,57 @@ def test_offboard_platform_service_purges_bare_service_db_and_role() -> None:
     assert any(
         "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'activepieces')" in cmd
         for cmd in executed_commands
+    )
+
+
+def test_onboard_redis_url_includes_vault_password() -> None:
+    """onboard_service reads platform/redis credential via vault_backend and supports dry_run."""
+    mock_c = MagicMock(spec=Context)
+    mock_runner_ok = MagicMock(return_value=MagicMock(returncode=0))
+    mock_op = MagicMock()
+    mock_vault = MagicMock()
+    mock_vault.read.return_value = {"password": "test-redis-auth-token"}
+    mock_dokploy = MagicMock()
+    mock_dokploy.find_compose_by_name.return_value = None
+
+    res_ok = MagicMock(ok=True)
+    res_empty = MagicMock(ok=True, stdout="[]")
+    res_role = MagicMock(ok=True, stdout='{"data":{"role_id":"r1"}}')
+    res_sec = MagicMock(
+        ok=True, stdout='{"data":{"secret_id":"s1","secret_id_accessor":"a1"}}'
+    )
+    mock_c.run.side_effect = [res_ok, res_ok, res_empty, res_role, res_sec]
+
+    dry_summary = onboard_service(
+        c=mock_c,
+        service="demo-redis",
+        project="apps",
+        env="staging",
+        db="none",
+        redis=True,
+        dry_run=True,
+        op_runner=mock_runner_ok,
+        op_backend=mock_op,
+        dokploy_client=mock_dokploy,
+    )
+    assert dry_summary["env"] == "staging"
+
+    onboard_service(
+        c=mock_c,
+        service="demo-redis",
+        project="apps",
+        env="staging",
+        db="none",
+        redis=True,
+        op_runner=mock_runner_ok,
+        op_backend=mock_op,
+        vault_backend=mock_vault,
+        vault_token="tok",
+        dokploy_client=mock_dokploy,
+    )
+    mock_vault.read.assert_called_once_with("platform/staging/redis")
+    _path, written = mock_vault.write.call_args[0]
+    assert (
+        written["REDIS_URL"]
+        == "redis://:test-redis-auth-token@platform-redis-staging:6379/0"
     )

@@ -99,9 +99,11 @@ class AuthentikDeployer(Deployer):
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
         """Ensure every Vault key that the vault-agent template reads exists."""
+        from common.security.supply import ensure_store_keys
+
         e = cls.env()
-        env_name = e.get("ENV", "production")
-        project = e.get("PROJECT", "platform")
+        env_name = cls._require_env_name(e)
+        project = cls.project_name(e)
 
         pg_secrets = get_secrets(project, "postgres", env_name)
         redis_secrets = get_secrets(project, "redis", env_name)
@@ -113,33 +115,19 @@ class AuthentikDeployer(Deployer):
             return False
 
         authentik_secrets = get_secrets(project, "authentik", env_name)
-
-        secret_key = authentik_secrets.get("secret_key")
-        if not secret_key:
-            secret_key = generate_password(50)
-            if not authentik_secrets.set("secret_key", secret_key):
-                error("Failed to store Authentik secret key in Vault")
-                return False
-            warning("Generated new Authentik secret key in Vault")
-        else:
-            info("Authentik secret key exists in Vault")
-
-        bootstrap_password = authentik_secrets.get("bootstrap_password")
-        if not bootstrap_password:
-            bootstrap_password = generate_password(24)
-            if not authentik_secrets.set("bootstrap_password", bootstrap_password):
-                error("Failed to store Authentik bootstrap password in Vault")
-                return False
-            warning("Generated new bootstrap admin password")
-
-        bootstrap_email = authentik_secrets.get("bootstrap_email")
-        if not bootstrap_email:
-            bootstrap_email = e.get("ADMIN_EMAIL", "admin@localhost")
-            if not authentik_secrets.set("bootstrap_email", bootstrap_email):
-                error("Failed to store Authentik bootstrap email in Vault")
-                return False
-            warning(f"Set bootstrap admin email: {bootstrap_email}")
-
+        try:
+            ensure_store_keys(
+                authentik_secrets,
+                defaults={"bootstrap_email": e.get("ADMIN_EMAIL", "admin@localhost")},
+                generators={
+                    "secret_key": lambda: generate_password(50),
+                    "bootstrap_password": lambda: generate_password(24),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            error(f"Failed to store Authentik secrets in Vault: {exc}")
+            return False
+        info("Authentik runtime secrets verified in Vault")
         return True
 
     @classmethod

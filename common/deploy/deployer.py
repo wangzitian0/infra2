@@ -381,8 +381,9 @@ class Deployer:
         e = cls._env_for(env)
         effective_env = env or e.get("ENV", "production")
         project = cls.project_name(e)
+        vault_service = getattr(cls, "vault_service_name", None) or cls.service
 
-        if secrets_registry.lookup(project, cls.service) is not None:
+        if secrets_registry.lookup(project, vault_service) is not None:
             # The manifest owns this service's store and apply_secret_supply generates
             # what it declares (PR-E: one writer).
             return True
@@ -393,23 +394,24 @@ class Deployer:
         if not cls.secret_key:
             return True
 
-        from common.security.store import VaultSecrets, generate_password
+        from common.security import supply as secrets_supply
+        from common.security.store import generate_password
 
         secrets_backend = cls.secrets_backend(env=effective_env)
-
         try:
-            val = secrets_backend.get(cls.secret_key)
-        except VaultSecrets.VaultSecretNotFoundError:
-            val = None
-        if not val:
-            val = generate_password(24)
-            if secrets_backend.set(cls.secret_key, val):
-                warning(f"Generated new secret in Vault: {cls.secret_key}")
-            else:
-                error(f"Failed to store secret in Vault: {cls.secret_key}")
-                return False
-        else:
-            info(f"Vault secret exists: {cls.secret_key}")
+            resolved = secrets_supply.ensure_store_keys(
+                secrets_backend,
+                generators={cls.secret_key: lambda: generate_password(24)},
+            )
+            val = resolved.get(cls.secret_key)
+        except Exception as exc:  # noqa: BLE001
+            error(f"Failed to store secret in Vault: {cls.secret_key} ({exc})")
+            return False
+        info(
+            f"Vault secret verified: {cls.secret_key}"
+            if val
+            else f"Vault secret empty: {cls.secret_key}"
+        )
         return True
 
     # ---- plan PR-E: the manifest-driven secret supply, applied on every deploy --------
@@ -427,7 +429,8 @@ class Deployer:
 
         e = cls._env_for(env)
         env_name = env or e.get("ENV", "production")
-        service = secrets_registry.lookup(cls.project_name(e), cls.service)
+        vault_service = getattr(cls, "vault_service_name", None) or cls.service
+        service = secrets_registry.lookup(cls.project_name(e), vault_service)
         if service is None:
             return True
 
@@ -557,8 +560,9 @@ class Deployer:
 
         if not cls.ensure_runtime_secrets(c):
             return None
-        if not cls.apply_secret_supply(c, env=e.get("ENV")):
-            return None
+        if not getattr(c, "_secret_supply_applied", False):
+            if not cls.apply_secret_supply(c, env=e.get("ENV")):
+                return None
 
         # Return base env vars + VAULT_ADDR for vault-init pattern
         result = cls.compose_env_base(e)
