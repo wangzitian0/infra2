@@ -90,12 +90,18 @@ def main() -> int:
         )
         return 2
     since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
-    staging = list_records(
-        repo, token, env="staging.release_validation", phase="post", since=since
-    )
-    production = list_records(
-        repo, token, env="prod.release_integrity", phase="post", since=since
-    )
+    try:
+        staging = list_records(
+            repo, token, env="staging.release_validation", phase="post", since=since
+        )
+        production = list_records(
+            repo, token, env="prod.release_integrity", phase="post", since=since
+        )
+    except (
+        RuntimeError
+    ) as exc:  # the records are unread: a reminder never fails the run
+        print(f"::warning::promotion reminder skipped: {exc}")
+        return 0
     refs = get_json(
         f"/repos/{repo}/git/matching-refs/tags/{PRODUCTION_MARKER_PREFIX}",
         token,

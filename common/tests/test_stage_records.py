@@ -1069,6 +1069,64 @@ def _verified(gh, wanted=None) -> set[str]:
     )
 
 
+def test_the_reminder_prints_a_warning_and_passes_when_the_records_are_unread(
+    monkeypatch, capsys
+) -> None:
+    """The ``digest`` job runs the probe after the reminder: an unread set must not stop it."""
+
+    def unread(*_args, **_kwargs):
+        raise RuntimeError("stage_records: the artifact listing is unread")
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(promotion_reminder, "list_records", unread)
+    assert promotion_reminder.main() == 0
+    assert (
+        "::warning::promotion reminder skipped: stage_records: the artifact listing"
+        in capsys.readouterr().out
+    )
+
+
+def test_an_unread_record_stops_the_sdk_scan_and_a_404_skips_one_record(
+    monkeypatch,
+) -> None:
+    """A read that GitHub does not answer is not an absent record: the scan stops with an error."""
+    from common.deploy import github_api
+
+    monkeypatch.setattr(github_api, "_sleep", lambda _seconds: None)
+
+    class _Refuses(_CountingGitHub):
+        def __init__(self, part, error) -> None:
+            super().__init__()
+            self.part, self.error = part, error
+
+        def __call__(self, request, timeout=0):
+            if self.part in request.full_url:
+                raise self.error
+            return super().__call__(request, timeout)
+
+    def window(error, part="/actions/runs/104") -> _Refuses:
+        gh = _Refuses(part, error)
+        gh.add(
+            _sdk_record("4.4.0", "v1.0.4", run=104),
+            run=104,
+            created="2026-11-04T00:00:00Z",
+        )
+        gh.add(
+            _sdk_record("4.3.0", "v1.0.1", run=101),
+            run=101,
+            created="2026-11-01T00:00:00Z",
+        )
+        return gh
+
+    for unread in (_http(403), _http(429), _http(502), urllib.error.URLError("reset")):
+        with pytest.raises(RuntimeError, match="post-tag-v1.0.4 is unread"):
+            _verified(window(unread), wanted={"4.3.0"})
+    with pytest.raises(RuntimeError, match="the artifact listing is unread"):
+        _verified(window(_http(403), part="/actions/artifacts?"), wanted={"4.3.0"})
+    assert _verified(window(_http(404)), wanted={"4.3.0"}) == {"4.3.0"}
+
+
 def test_verified_sdk_scan_stops_when_each_wanted_version_is_verified() -> None:
     full = _sdk_window()
     assert _verified(full) == {"4.4.0", "4.3.0"}

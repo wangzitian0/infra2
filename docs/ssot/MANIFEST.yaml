@@ -251,6 +251,7 @@ entries:
       - common/tests/test_ci_tree_reuse.py
       - common/tests/test_stage_records.py
       - common/tests/test_delivery_board.py
+      - common/tests/test_app_pin_check.py
       - common/tests/test_compose_compile.py
       - common/tests/test_compose_validate.py
       - common/tests/test_ghcr_retention.py

@@ -17,7 +17,8 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    `out_of_band_watchdog.py`
    / `watchdog_issue_trail.py` / `watchdog_weekly_digest.py` (scheduled
    watchdogs), `delivery_board.py` (the daily delivery board: one Lark card and one SigNoz
-   record, #1644), `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
+   record, #1644), `app_pin_check.py` (the train `pre` pin checks on a pull request,
+   #1644), `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
    session merge authority as a check: checks, threads, settling, protected and
    deploy-triggering paths, plus GitHub's own `mergeable`/`mergeStateStatus`
    and a stale-green guard -- green proves the tree the checks ran on, so a

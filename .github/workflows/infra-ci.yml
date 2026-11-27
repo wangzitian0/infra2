@@ -245,10 +245,18 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # read the stage record artifacts for the App pin check
+      actions: read
     steps:
+      # Depth 2: on a pull request HEAD is the merge commit, and HEAD^1 is the base that
+      # the App pin check compares with.
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -273,6 +281,18 @@ jobs:
       # is expected-absent here, not a real gap (#506).
       - name: Run harness check
         run: python3 -m tools.harness check --no-submodules-expected
+
+      # The `pre` phase of a Staging train refuses an App pin that is off the App main, or
+      # that locks an infra2-sdk version with no Canary pass in Staging. This step runs the
+      # same two checks when the pull request moves the pin (#1644 Q2). A pull request that
+      # moves no pin ends in one second. An unreadable source prints SKIPPED and passes.
+      - name: Check the App pins that this pull request moves
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/app_pin_check.py --base HEAD^1
 
   # Parallel shards (the matrix below is the only place that states the count) run the traced unit tests (#1499).
   # Each test file belongs to one shard. common/ci_plugins/pytest_shard.py assigns the files by their

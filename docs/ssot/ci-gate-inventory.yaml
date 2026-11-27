@@ -79,7 +79,7 @@ gates:
     workflow: .github/workflows/infra-ci.yml
     job: harness-check
     blocks_merge: true
-    failure_semantics: harness/repos.yaml is internally inconsistent (schema, governance/role mismatch, missing authority file, or an unexpected non-optional uninitialized checkout).
+    failure_semantics: harness/repos.yaml is internally inconsistent (schema, governance/role mismatch, missing authority file, or an unexpected non-optional uninitialized checkout). On a pull request, also an App pin that the Staging train `pre` phase refuses (tools/app_pin_check.py, #1644).
   - id: infra_ci.detect_changes
     stage: github_ci.merge_authority
     task_category: change_detection
