@@ -249,8 +249,8 @@ def _checked_records(
             checked = _check_artifact(artifact, repo, token, opener)
         except Exception as exc:  # noqa: BLE001 - one bad artifact never hides the others
             if _unread(exc):
-                # An unread record is not an absent record: release v3.2.60 was refused
-                # with an empty verified list while GitHub refused each read (#1644).
+                # An unread record is not an absent record. A skipped newer red Canary
+                # record lets an older pass count; a skipped pass refuses a good pin (#1644).
                 raise RuntimeError(
                     f"stage_records: {name} is unread ({type(exc).__name__}: {exc})"
                 ) from exc

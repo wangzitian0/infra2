@@ -1090,7 +1090,7 @@ def test_the_reminder_prints_a_warning_and_passes_when_the_records_are_unread(
 def test_an_unread_record_stops_the_sdk_scan_and_a_404_skips_one_record(
     monkeypatch,
 ) -> None:
-    """Release v3.2.60: GitHub refused each run read and the scan returned an empty set."""
+    """A read that GitHub does not answer is not an absent record: the scan stops with an error."""
     from common.deploy import github_api
 
     monkeypatch.setattr(github_api, "_sleep", lambda _seconds: None)
