@@ -895,8 +895,7 @@ curl -fsS https://iac.{domain}/health
 # 1. 合并变更到 main：什么都不部署
 
 # 2. 从 main 打 release tag → 自动晋升 staging
-git checkout main && git pull
-git tag vX.Y.Z && git push origin vX.Y.Z
+uv run python tools/release_tag.py --push -m "<message>"   # tags the head of origin/main as vX.Y.Z
 
 # 3. 看 reconcile 运行：fan-out 到哪些服务、每个服务的 sync 终态
 gh run list --workflow reconcile-iac-inputs.yml --branch vX.Y.Z --limit 1

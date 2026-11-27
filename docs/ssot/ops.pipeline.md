@@ -91,7 +91,7 @@ Budgets come from the SDK `stages.yaml` (`src/infra2_sdk/data/stages.yaml`, `bud
 2. Each phase writes one record with at least one check. An empty check list is invalid.
 3. Pre of stage N+1 reads the post record of stage N for the same subject. A missing record, an old record, a record of another subject, or a record from a pull-request run refuses the stage.
 4. A stage that passes pre and operation lets the chain go on. Its post runs on its own and can run again with no deploy. Preview is the one exception: it is torn down at once, so its post runs before the teardown and holds the merge.
-5. Proof isolation grows with the blast radius: App < Infra < SDK < Harness. A harness or release-code change rides its own release tag. An SDK version goes to the Canary first. An infra change deploys from zero in a Preview slot. App and infra changes may share a release tag (at most 4 PRs).
+5. Proof isolation grows with the blast radius: App < Infra < SDK < Harness. A harness or release-code change rides its own release tag: the session holds other merges until `tools/release_tag.py` cuts that tag, because the tool tags each merge since the last tag. An SDK version goes to the Canary first. An infra change deploys from zero in a Preview slot. App and infra changes may share a release tag.
 6. A kind with no environment of its own uses its consumers in a fixed order. SDK: Canary, then the apps. Harness: replay, then its own tag, then every later run. No step skips the order.
 6a. infra2 accepts ranges, not one SDK version (#1823). An app SDK version must lie in `APP_SDK_RANGE` of `common/deploy/canary_pin.py` and in the Canary-verified set (`verified_sdk_versions`). The hook manifest schema range is `ACCEPTED_HOOK_SCHEMA_VERSIONS` of `common/deploy/app_contract.py`: schema 3 only, since SDK 4.0.0 refuses schema 2. The infra2 own SDK pin (`uv.lock`) is a library pin of its tools; it does not choose the Canary SDK. The `sdk:X` unit of a staging train record is the Canary image pin.
 7. One train reaches Staging and Prod: the infra2 release tag. Each kind enters it through one door. A bot opens each pin PR and each render PR. The bot closes a PR that a newer PR replaces. A green PR merges through the merge gate.
@@ -112,11 +112,11 @@ Owner direction of 2026-11-27: thin gates; make each dependency explicit early a
 
 `GOALS` in `common/observability/delivery_board.py` holds the goal of each number. The card prints each goal next to its number. Section 4.2 describes the daily card and the SigNoz record.
 
-Rules 10 to 13 are the frame of that direction. They are targets. Slices Q2 to Q4 of #1644 make them true.
+Rules 10 to 13 are the frame of that direction. Rules 10, 11 and 13 are targets; slices Q2 to Q4 of #1644 make them true. Rule 12 states the present behaviour.
 
 10. Each stage asks one question, one time. PR: is the change consistent, and is each dependency ready? Train: does each changed unit start and serve (`smoke`)? Post: is the App good? Prod: the owner approves, and `smoke` runs.
-11. One train runs at a time. A bot cuts the tag. The tag carries each merge and each pin move since the last tag. Today each session cuts a tag (rule 5).
-12. A red post check stops only the promotion of its own App.
+11. One train runs at a time. The tag carries each merge and each pin move since the last tag. Since #1644 Q3 a session cuts the tag with `tools/release_tag.py`: at most one tag in 30 minutes. A bot that cuts the tag is the target.
+12. A red post check stops the promotion of its release tag. This text replaces the first target of 2026-11-27 ("a red post check stops only the promotion of its own App"). One release tag holds the pin of each App, and each App gate is also the bench of the infra change of that tag. A split of the promotion by App does not fit this release model (measured 2026-11-27, #1644).
 13. A test stays only when it protects a cross-repository contract or the production reservation. The board proves a deletion.
 
 **Hook grid: 16 cells, two owners, one policy table**
@@ -480,6 +480,7 @@ production promotion does not upload its `post` record (#2123). A record is a
   a release tag has a passing staging `post` record and no production `post` record or marker. The card names the tag, the
   record and the promote command. It dispatches nothing. The job `digest` runs it because that job already holds the Feishu
   secrets and is classified in `common/gate/production_contract.py`.
+- **Release tag tool (#1644 Q3).** `tools/release_tag.py --push` is the way to cut a release tag. It tags the head of `origin/main` with the next patch version. It cuts no tag in two cases: the newest release tag is the head of `origin/main`; the newest release tag was made less than 30 minutes ago. Without `--push` it prints the decision (`cut`, `wait` or `none`) and changes nothing. It reads git only (`git ls-remote` and the tagger time of the tag object) and lists no workflow run: a run listing is eventually consistent (`test_guard_lists_no_runs`, #970). The longest tag train of 2026-11-27 took 26 minutes (v3.2.62); a train that takes more than 30 minutes makes the next tag wait behind it in the concurrency group. The tool does not see a dispatch replay; the concurrency group of the train workflow puts a tag behind that run. Measured cause: 23 release tags in 9.5 hours on 2026-11-27, one tag after each fix; v3.2.60 was made 4 minutes after v3.2.59 and got the verdict of that train. The tool does not stop a `git push` of a tag; the `release-train` skill names the tool as the one way. A hotfix for a production outage is the one case for a tag by hand (section 7).
 - **App pin check of a pull request (#1644 Q2).** The `app_pins` check of `pre` has an early copy. The job `harness-check` of `infra-ci.yml` runs `tools/app_pin_check.py --base HEAD^1` on each pull request; `HEAD` is the merge commit of the default checkout. For each App pin that the pull request moves in `harness/repos.yaml`, it calls the two functions that `pre` calls: the release tag is on the App `main`, and its locked infra2-sdk version has a Canary pass in Staging. A refused pin fails the job. A source that is not readable prints `SKIPPED` and passes; `pre` stays the gate. A pull request that moves no pin ends in 1 second. Measured cause: `pre` refused 4 of the 23 tag trains of 2026-11-27 with `app_pins`. In 3 the locked infra2-sdk version had no Canary pass (v3.2.48, v3.2.49, v3.2.64). In 1 the Canary check of the train before was red and revoked the version (v3.2.60, queued behind the red v3.2.59; the scan stops at the revoked version and prints `verified=[]`).
 - **Unread records in a scan (#1644 Q2).** `stage_record_reader` stops `list` and the SDK scan with `RuntimeError` when GitHub does not answer a read: HTTP 403, 429 or 5xx, or a network error, after the bounded repeats. Before, the scan skipped each such record: a skipped newer red Canary record let an older pass count, and a skipped pass refused a good pin. No measured train shows this case. The train refuses on an unread scan and the refusal names the cause. The `sync-inputs` job fails on an unread scan and the next schedule run reads again. The promotion reminder prints a warning and passes.
 - **Delivery board (#1644 Q1).** In the same job (`digest` of `watchdog.yml`) and at the same time, `tools/delivery_board.py` runs before the reminder.
@@ -697,7 +698,9 @@ git checkout v1.3.0 && git checkout -b hotfix/critical-fix
 git commit -am "fix: critical issue"
 gh pr create --base main --fill          # fast-track review → 合并回 main(on-main 不变式)
 # 合并后,从 main 打 patch tag → 自动晋升 staging:
-git checkout main && git pull && git tag v1.3.1 && git push origin v1.3.1
+uv run python tools/release_tag.py --push -m "hotfix: critical issue"   # prints the tag, e.g. v1.3.1
+# `wait` (the newest tag is less than 30 minutes old) while production is down:
+# git fetch origin main && git tag -a v1.3.1 -m "hotfix: critical issue" FETCH_HEAD && git push origin v1.3.1
 # staging soak 后,显式 promote 平台服务到 prod
 # (紧接着前,`uv run --locked python -m tools.harness prod-queue` 必须退出 0):
 gh workflow run reconcile-iac-inputs.yml -f after=v1.3.1 -f promote_prod=true
