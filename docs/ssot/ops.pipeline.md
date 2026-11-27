@@ -180,7 +180,7 @@ State: a manifest lists the checks of each slot, so a check that runs in two slo
 - A change to the file is a change of kind SDK: the Canary first, then the Apps.
 - Target: each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
 
-State: the file exists: `src/infra2_sdk/data/stages.yaml` in infra2-sdk (`policy_version`, 16 cells including `scheduled_audit`). `infra2_sdk.delivery` (`load_stages`) loads it and `common.deploy.stage_hooks` derives `STAGE_HOOK_PLANS` from it.
+State: the file exists: `src/infra2_sdk/data/stages.yaml` in infra2-sdk (`policy_version`, 16 cells including `scheduled_audit`). `infra2_sdk.delivery` (`CELL_POLICIES`) loads it and `common.deploy.stage_hooks` derives `STAGE_HOOK_PLANS` from it.
 
 **Scale ladder (target)**
 

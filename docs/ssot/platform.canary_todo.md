@@ -13,7 +13,7 @@
 | Feature | Location | Role |
 |---|---|---|
 | Slot manifest | `platform/30.todo/slots.yaml` | Active SDK minor-series Canary slots (`v4-11`, `v4-13`), primary flag, isolated DB/role/prefix metadata |
-| Service code, probes and UI | infra2-sdk `canary/todo/app.py`, `canary/todo/ui.py`, `worker.py`, `canary_schema.py` | Probes, status document, startup `validate_startup_environment`, background worker (`init_worker`), schema enum (`canary_todo_capability`), custom OTel metrics, telemetry bootstrap, HTML UI. Their tests are in infra2-sdk `canary/todo/tests/` (infra2-sdk#247). |
+| Service code, probes and UI | infra2-sdk `canary/todo/app.py`, `canary/todo/ui.py`, `worker.py`, `canary_schema.py` | Probes, status document, startup `validate_startup_environment`, background worker (`worker_run`), schema enum (`canary_todo_capability`), custom OTel metrics, telemetry bootstrap, HTML UI. Their tests are in infra2-sdk `canary/todo/tests/` (infra2-sdk#247). |
 | Container topology | `platform/30.todo/compose.yaml` | `x-infra2` source (#1822 Slice 2): one `128m` `vault-agent` sidecar shared across `256m` slot containers (`todo-v4-11`, `todo-v4-13`) with `x-vault`, `x-routes` (`todo-<slot>.zitian.party` plus primary `todo.zitian.party`), and all four `x-capabilities` (`s3`, `otel`, `openpanel`, `browser_otel`). `preview.compose.yaml` validates single-slot throwaway previews. |
 | Image | `ghcr.io/wangzitian0/infra2-canary-todo:vX.Y.Z@sha256:...` | infra2-sdk `release.yml` builds it from `canary/todo` at tag `vX.Y.Z`. `common/deploy/canary_pin.py` (`load_canary_slots`, `can_retire_canary_slot`) is the single reader of `slots.yaml` and `compose.yaml` pins. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role |
@@ -111,7 +111,7 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 
 The policy lets the canary read only `platform/<env>/todo` and `platform/<env>/redis`. It cannot read the Postgres or S3 root credentials.
 
-**Postgres role and schema.** `TodoDeployer.apply_secret_supply` runs on every sync. After the supply succeeds, it runs idempotent SQL as `postgres` over SSH. The SQL goes through stdin, so the password never appears in an argument list. The session first sets `log_min_error_statement = 'panic'`, `log_statement = 'none'` and `log_min_duration_statement = -1`. Without them, the server logs a failed `ALTER ROLE` with its password. The deployer also removes the password from any psql error it prints. The one role is `todo_app`. It has `LOGIN`, no superuser, no create rights and `CONNECTION LIMIT 20`. The same SQL creates the `todos` table, grants `SELECT`, `INSERT`, `UPDATE` and `DELETE` on it, grants `USAGE` and `SELECT` on its sequence, and ensures Postgres native enum `canary_todo_capability` matches `canary_schema:METADATA` (`schema_check` verified). The Postgres check logs in with this role: its temporary-table write needs the `TEMP` privilege on the database, which `PUBLIC` holds. A rotated Vault password takes effect on the next sync.
+**Postgres role and schema.** `TodoDeployer.apply_secret_supply` runs on every sync. After the supply succeeds, it runs idempotent SQL as `postgres` over SSH. The SQL goes through stdin, so the password never appears in an argument list. The session first sets `log_min_error_statement = 'panic'`, `log_statement = 'none'` and `log_min_duration_statement = -1`. Without them, the server logs a failed `ALTER ROLE` with its password. The deployer also removes the password from any psql error it prints. The one role is `todo_app`. It has `LOGIN`, no superuser, no create rights and `CONNECTION LIMIT 20`. The same SQL creates the `todos` table, grants `SELECT`, `INSERT`, `UPDATE` and `DELETE` on it, grants `USAGE` and `SELECT` on its sequence, and ensures Postgres native enum `canary_todo_capability` matches `canary_schema:METADATA` (`python -m infra2_sdk.storage check-schema` verified). The Postgres check logs in with this role: its temporary-table write needs the `TEMP` privilege on the database, which `PUBLIC` holds. A rotated Vault password takes effect on the next sync.
 
 **First deploy.** The secret supply restarts the vault-agent and the app container after a value changes. On the first deploy neither exists. `Deployer.apply_secret_supply` restarts only the consumers that exist, so the sync reaches the role creation. If the host cannot list its containers, the supply fails.
 
@@ -161,9 +161,9 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 ### Do
 - Add internal infrastructure checks to `app.py` (`GET /api/canary/status`). Prove a real write or login, not liveness.
 - Put metered external capabilities on dedicated SSO-protected endpoints exercised at low frequency by `tools/canary_verify.py` (never inside the 60 s probe loop).
-- Bound LLM summary runs with `UsageLimits`, single-layer `RetryOnModelErrors` (vendor `max_retries=0`), and `redact_llm_error`.
+- Bound LLM summary runs with `UsageLimits`, `create_llm_agent` default retry wiring (vendor `max_retries=0`), and `redact_llm_error`.
 - Keep the probe target, the compose container name, and the app route equal. `test_probe_target_matches_the_compose_container_port_and_app_route` guards this.
-- Keep the Dockerfile installing `infra2-sdk` and its canary dependency group (`uv sync --locked --group canary`, covering `fastapi`, `postgres`, `s3`, `http`, `llm`) from `uv.lock`.
+- Keep the Dockerfile installing `infra2-sdk` with explicit capability extras (`--extra fastapi --extra postgres --extra s3 --extra llm`) from `uv.lock`.
 
 ### Do not
 - Do not route `/api/canary/status` without SSO. `test_only_the_health_path_is_served_without_sso` evaluates the real Traefik rules.
