@@ -39,7 +39,7 @@ DEPLOY_TRIGGERING_GLOBS = (
     ".github/workflows/deploy.yml",
 )
 
-NON_PROD_DEPLOY_WORKFLOWS = frozenset({"ops-checks.yml"})
+NON_PROD_DEPLOY_WORKFLOWS = frozenset({"ops-checks.yml", "watchdog.yml"})
 
 DEPLOY_MARKERS = (
     "deploy_v2",

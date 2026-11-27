@@ -1,0 +1,30 @@
+name: Watchdog
+
+# Out-of-band Watchdog and scheduled digest/reminder workflows (split from ops-checks.yml).
+# Live scheduled jobs move here in follow-up cutover PR after contract registration lands on main.
+
+"on":
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run checks without sending Feishu notifications"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  watchdog:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
+
+  digest:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"

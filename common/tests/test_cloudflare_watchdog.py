@@ -133,12 +133,41 @@ def test_every_run_with_all_entrypoints_down_stays_within_ten_subrequests(
 
 
 @needs_node
-def test_default_targets_and_heartbeats_equal_the_deployed_config(world) -> None:
-    """#901 M2: the full-dependency route lived only in DEFAULT_TARGETS and was never
-    probed. The defaults and wrangler.toml must describe the same checks."""
+def test_worker_fails_closed_when_config_vars_are_absent(world) -> None:
+    """Missing WATCHDOG_TARGETS_JSON / WATCHDOG_HEARTBEATS_JSON fails closed via config-preflight."""
     defaults = world["defaults"]
-    assert defaults["defaultFetched"] == defaults["configuredFetched"]
-    assert defaults["defaultHeartbeats"] == defaults["configuredHeartbeats"]
+    assert defaults["defaultHeartbeats"] == []
+    assert defaults["defaultLastRun"]["ok"] is False
+    assert defaults["defaultLastRun"]["routeTargetCount"] == 0
+    assert defaults["defaultLastRun"]["heartbeatTargetCount"] == 0
+    assert len(defaults["defaultMessages"]) == 1
+    assert "cloudflare-watchdog-config-preflight" in defaults["defaultMessages"][0]
+    for target_url in _entrypoint_urls():
+        assert target_url not in defaults["defaultFetched"]
+    assert defaults["configuredHeartbeats"] != []
+
+
+def test_watchdog_wrangler_sync_matches_ssot_and_detects_drift(tmp_path) -> None:
+    """wrangler.toml is generated deterministically from watchdog-signals.yaml and detects drift."""
+    import shutil
+    from common.observability.watchdog_wrangler_sync import (
+        check_or_write_wrangler,
+        render_wrangler_text,
+    )
+
+    assert check_or_write_wrangler(write=False) is True
+    wrangler_copy = tmp_path / "wrangler.toml"
+    shutil.copy2(WRANGLER, wrangler_copy)
+    wrangler_copy.write_text(
+        wrangler_copy.read_text(encoding="utf-8").replace(
+            "https://cloud.zitian.party", "https://drifted.example.invalid"
+        ),
+        encoding="utf-8",
+    )
+    assert check_or_write_wrangler(write=False, wrangler_path=wrangler_copy) is False
+    synced = render_wrangler_text(wrangler_copy.read_text(encoding="utf-8"))
+    assert "https://cloud.zitian.party" in synced
+    assert "https://drifted.example.invalid" not in synced
 
 
 def test_the_worker_targets_are_exactly_the_registry_entrypoints() -> None:

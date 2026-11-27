@@ -229,7 +229,7 @@ const results = {};
   results.quiet = await world.cron(START);
 }
 
-// The effective config is the built-in default: no drift between the two (#901 M2).
+// Missing WATCHDOG_TARGETS_JSON / WATCHDOG_HEARTBEATS_JSON must fail closed via config-preflight.
 {
   const configured = new World();
   freshHeartbeats(configured, START);
@@ -241,6 +241,10 @@ const results = {};
   results.defaults = {
     configuredFetched: a.fetched,
     defaultFetched: b.fetched,
+    defaultMessages: b.messages,
+    defaultError: b.error,
+    defaultActiveAlerts: status.body.activeAlerts || [],
+    defaultLastRun: status.body.lastRun,
     defaultHeartbeats: status.body.heartbeats.map((h) => `${h.environment}:${h.name}`),
     configuredHeartbeats: JSON.parse(vars.WATCHDOG_HEARTBEATS_JSON).map((h) => `${h.environment}:${h.name}`),
   };
