@@ -1,4 +1,4 @@
-"""tools/pr_merge_gate: the session-scoped merge authority as a check."""
+"""tools/pr_merge_gate: the standing merge authority as a check."""
 
 from __future__ import annotations
 
@@ -2532,7 +2532,7 @@ def test_a_release_code_pr_reports_a_verified_lock(capsys):
     assert waiting.endswith(f"{LOCK_VERIFIED_LINE} | lock_state=verified"), waiting
     assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 0
     ready = _printed(capsys)
-    assert "mergeable under session authority" in ready
+    assert "mergeable under standing authority" in ready
     assert (
         f"no path that needs the owner; {LOCK_VERIFIED_LINE} | lock_state=verified"
         in ready

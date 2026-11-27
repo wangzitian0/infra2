@@ -1,6 +1,6 @@
-"""The session-scoped merge authority of AGENTS.md, as a check instead of a habit.
+"""The standing merge authority of AGENTS.md, as a check instead of a habit.
 
-An agent merging under session authority must see, for one head, that every blocking
+An agent merging under standing authority must see, for one head, that every blocking
 check is green, every review thread is resolved, the head has been quiet for twelve
 minutes since its last push, and that the change touches no protected file. A protected
 file needs the owner's approval of that exact head. A deploy on merge needs it too, but
@@ -18,11 +18,10 @@ Exit codes (#740), so a caller never reads the prose to decide:
 
     0  ready (or merged with --merge)
     1  wait: time alone fixes it (check pending, no check yet, head still settling)
-    2  needs the owner (unproven self-governing change, a workflow that defines a
-       required check, base is not main, or a deploy-triggering path while the
-       production lock is not verified)
+    2  needs the owner (production-reservation change)
     3  action required: waiting will not fix it (red check, open thread, conflict,
-       draft, PR not open, base changed under green checks)
+       draft, PR not open, base is not main, base changed under green checks, or
+       review_required for an unreviewed self-governing/workflow-check edit)
     4  could not evaluate: not a verdict on the PR. This checkout's merge rules are
        not main's (#873; pull main), or gh failed or returned data the gate cannot
        read. Fix the cause and re-run.
@@ -32,10 +31,10 @@ Two policies for the settling condition:
 - ``clock`` (default, AGENTS.md as written): twelve minutes since the last push.
 - ``event``: an automated review has been submitted on the *current* head and sixty
   seconds have passed since that review — the thing the clock was waiting for, measured.
-  Copilot does not review a PR that an app or bot account opened (#1075). For such a PR
-  the review signal is a PR comment with the heading
-  ``### Independent verification of head <sha7>`` for the current head and at least one
-  named test (``test_...`` or ``path::name``); its time is when its text was written.
+  On any PR without a Copilot review (#1075), the review signal is a PR comment with
+  the heading ``### Independent verification of head <sha7>`` for the current head and
+  at least one named test (``test_...`` or ``path::name``); its time is when its text
+  was written.
 - ``either``: whichever of the two is satisfied first — the review lets a head go early,
   the clock stays the upper bound when no automated review ever arrives.
 """
@@ -94,7 +93,6 @@ from common.gate import (
     _gh,
     _inventory_only_gained_authority,
     _is_local_root_repo,
-    _mutation_evidence_listed,
     _owner_instruction_quoted,
     _production_lock_failures,
     _proven_tighter,
@@ -163,7 +161,6 @@ __all__ = [
     "_gh",
     "_inventory_only_gained_authority",
     "_is_local_root_repo",
-    "_mutation_evidence_listed",
     "_owner_instruction_quoted",
     "_production_lock_failures",
     "_proven_tighter",
@@ -224,8 +221,8 @@ def main(
         choices=("clock", "event", "either"),
         default="clock",
         help=f"settling rule: {QUIET_MINUTES} min after the push (clock), "
-        f"{SETTLE_SECONDS} s after an automated review of the head or, for a "
-        "bot-opened PR, its independent verification comment (event), or "
+        f"{SETTLE_SECONDS} s after an automated review of the head or "
+        "its independent verification comment (event), or "
         "whichever comes first (either)",
     )
     parser.add_argument(

@@ -379,7 +379,7 @@ jobs:
               done
               if [[ "$healthy" != "true" ]]; then
                 rm -f "$body"
-                echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
+                echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, Vault AppRole (VAULT_ROLE_ID/VAULT_SECRET_ID), and iac-runner container health."
                 exit 1
               fi
             fi

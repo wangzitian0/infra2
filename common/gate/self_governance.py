@@ -25,8 +25,6 @@ _OWNER_INSTRUCTION_HEADER_RE = re.compile(
     r"(?im)^(##+\s*)?(owner instruction|owner 指示)\b.*$"
 )
 _QUOTE_LINE_RE = re.compile(r"^>.*[^\W_]|「[^」]*[^\W_][^」]*」")
-_MUTATION_EVIDENCE_HEADER_RE = re.compile(r"(?im)^##+\s*mutation evidence\b.*$")
-_MUTATION_TEST_NAME_RE = re.compile(r"\btest_\w+|[\w./-]+::\w+")
 _APPROVED_SHA_RE = re.compile(
     r"(?i)(?:approved(?:\s+head)?|owner\s+approved(?:\s+head)?)\s*[:=]?\s*`?([0-9a-f]{7,40})`?"
 )
@@ -45,21 +43,6 @@ def _owner_instruction_quoted(body: str) -> bool:
             if _QUOTE_LINE_RE.search(stripped):
                 return True
             break
-    return False
-
-
-def _mutation_evidence_listed(body: str) -> bool:
-    """True when the PR body contains a Mutation evidence section naming at least one test (#1040)."""
-    lines = (body or "").splitlines()
-    for i, line in enumerate(lines):
-        if not _MUTATION_EVIDENCE_HEADER_RE.match(line):
-            continue
-        for later in lines[i + 1 :]:
-            stripped = later.strip()
-            if stripped.startswith("#"):
-                break
-            if _MUTATION_TEST_NAME_RE.search(stripped):
-                return True
     return False
 
 
