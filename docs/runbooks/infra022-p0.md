@@ -60,23 +60,23 @@ Use this page for the five failure classes named by [#723](https://github.com/wa
 
 **Rollback target older than finance_report v0.2.92:** these images have no `infra2_sdk.storage` `check-schema`. The gate always stops them with `NOT EVALUATED` (exit 3). This is intended; there is no fallback to an infra2 copy of the check. Recover in this order:
 
-1. Roll forward to v0.2.92 or v0.2.93. Run `deploy.yml` with `service=finance_report/app`, `type=prod`, `version_ref=<tag>`, `bootstrap=true`, `staging_validated=true` and `code_reviewed=true`. The owner approves the run in the `production` environment.
+1. Roll forward to v0.2.92 or v0.2.93 (or newer verified release). Promote through `reconcile-iac-inputs.yml` with `after=<tag>`, `promote_prod=true` (with owner approval in `production`).
 2. Only when no v0.2.92 or newer release is safe: run deploy_v2 locally, with the owner present:
    `python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref <tag> --bootstrap --code-reviewed --force-promote`.
    It needs `DOKPLOY_API_KEY`, `GITHUB_TOKEN`, `INFRA2_WATCHDOG_SSH_HOST`, `INFRA2_WATCHDOG_SSH_USER`, `INFRA2_WATCHDOG_SSH_KEY_PATH` (a file with the `INFRA2_WATCHDOG_SSH_PRIVATE_KEY` key) and `INFRA2_WATCHDOG_SSH_PORT` when it is not 22.
    `--force-promote` also skips the staging-first order and the post-swap public `/api/health` version check. Its only audit record is the `[AUDIT]` lines on stderr; keep that output with the incident.
    No workflow has a `force_promote` input, on purpose.
 
-The automatic rollback (`_handle_post_deploy_failure` in `common/deploy/promote.py`) never runs the gate, so this does not change it. The gap closes when the production release before the current one is v0.2.92 or newer, that is, after the next finance_report production release.
+The automatic rollback (`rollback_release` in `common/deploy/steps/app_rollout.py`) never runs the gate, so this does not change it. The gap closes when the production release before the current one is v0.2.92 or newer, that is, after the next finance_report production release.
 
 ## Watchdog silent
 
 **Symptom:** Host heartbeat missed, Cloudflare Worker dead-man check missed, or the in-band probe heartbeat goes stale.
 
-**30 seconds:** Inspect the external Healthchecks.io receipt time and the Worker `/status` result using its authenticated status token. Compare with the latest `.github/workflows/ops-checks.yml` run. A green in-band SigNoz dashboard cannot prove the host is alive.
+**30 seconds:** Inspect the external Healthchecks.io receipt time and the Worker `/status` result using its authenticated status token. Compare with the latest `.github/workflows/watchdog.yml` run. A green in-band SigNoz dashboard cannot prove the host is alive.
 
 1. If the VPS is unreachable, use the provider console and [recovery SOP](../ssot/ops.recovery.md) to establish host, Docker, disk and network state; keep the external P0 open until an independent route is healthy.
 2. If the VPS is healthy but the Worker check is stale, inspect Cloudflare cron/logs and its deployment SHA. If only the host timer is stale, inspect `systemctl status infra2-host-heartbeat.timer --no-pager` and `journalctl -u infra2-host-heartbeat.service -n 80 --no-pager` without exposing the ping URL.
 3. Restore the failed scheduler or network path under the approved exact head, then prove both a fresh external ping and a real notification drill. Confirm the Worker and VPS checks remain separate.
 
-**Brake / recovery:** Inspect `.github/workflows/deploy-cloudflare-watchdog.yml` at the exact commit before acting. While it has a `push` trigger for `cloudflare/infra-watchdog/**`, merging Worker code deploys Production and requires owner approval of that PR head. If the workflow is manual-only with an `approved_sha` input, obtain owner approval of the current `main` SHA, then dispatch with `gh workflow run deploy-cloudflare-watchdog.yml --repo wangzitian0/infra2 --ref main -f approved_sha=<sha>`. Do not substitute an old SHA or suppress the external check to clear a page.
+**Brake / recovery:** Inspect `.github/workflows/deploy-cloudflare-watchdog.yml` at the exact commit before acting. It is `workflow_dispatch`-only with an `approved_sha` input (`push` trigger retired): obtain owner approval of the current `main` SHA, then dispatch with `gh workflow run deploy-cloudflare-watchdog.yml --repo wangzitian0/infra2 --ref main -f approved_sha=<sha>`. Do not substitute an old SHA or suppress the external check to clear a page.

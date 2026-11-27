@@ -110,7 +110,7 @@ wrangler secret put WATCHDOG_DEADMAN_PING_URL
 
 `HEARTBEAT_TOKEN` must match `INFRA_PROBE_HEARTBEAT_TOKEN` in the platform
 alerting deployment and `INFRA2_WATCHDOG_HEARTBEAT_TOKEN` in GitHub Actions
-secrets (`ops-checks.yml` `watchdog` job). `WATCHDOG_STATUS_TOKEN` is required for
+secrets (`watchdog.yml` `watchdog` job). `WATCHDOG_STATUS_TOKEN` is required for
 authenticated GitHub audit checks of `/status`.
 `WATCHDOG_DEADMAN_PING_URL` is a separate Healthchecks.io check URL, stored only
 as a Worker secret. Configure its period for 30 minutes and choose a grace and

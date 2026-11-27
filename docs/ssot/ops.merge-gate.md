@@ -34,7 +34,7 @@
 - **First class: the target environment decides. Staging is the agent's; production is the owner's** (owner approval, 2026-09-21).
   The agent merges a change that starts a staging deploy or the `report-branch-main` preview. These merges need no approval.
   These production jobs need the owner: prod apply, prod promote, L1 bootstrap self-update, and the observability apply.
-  The runner rebuild also needs the owner, wherever it runs: the `bootstrap` job of `deploy.yml` (whatever its `type` input) and the health-gated in-train runner update in `reconcile-iac-inputs.yml`. The in-train update runs only when `promote_prod=true`, after the owner approves that run (owner decision 2026-11-11, #1486). A staging soak whose release changes the runner files prints a `::notice::` and defers the update; the production run is cumulative from the production marker, so it applies the deferred change.
+  The runner rebuild runs on Wave 0 (`runner_input_sha256` AST + Dockerfile closure) in `reconcile-iac-inputs.yml` — independently updating `iac-runner-staging` during staging tag trains and `iac-runner` when `promote_prod=true` (after owner approval in `production`) — plus manually via the `bootstrap` job of `deploy.yml` (owner-approved).
   When the production lock holds, a merge that starts one of these jobs only creates a run.
   That run waits until the owner approves it in the `production` environment. The merge itself needs no approval.
   When the lock does not hold or cannot be read, the merge needs the owner's approval of the current head SHA.

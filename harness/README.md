@@ -55,7 +55,7 @@ the requirement. Neither App imports SDK source from the workspace checkout.
 | Environment tiers, runtime identity, dependency validation, HTTP/S3/Postgres/OTel adapters | Install a released `infra2-sdk` artifact; start from its standalone readiness example |
 | Business dependency names, required tiers, domain rules, routes and models | Define them in the app's own contracts and tests |
 | Infrastructure provisioning, secret delivery, deployment and promotion | Use infra2's published deployment interfaces and onboarding paths |
-| Coding-agent rules, Skills and MCP specs | Edit the `dev_env` source; `ws-apply` and `ws-publish` render it into each host and checkout |
+| Coding-agent rules and Skills | Edit host/workspace rules and common skills in `dev_env`; edit repository `AGENTS.md` and `.agents/skills/` (mirrored to `.claude/skills/`) directly in each repository |
 
 Reuse a released contract where it removes duplicate semantics. Keep compatibility
 wrappers when an app's public API differs, and prove their behavior before replacement.
@@ -78,21 +78,9 @@ These guides are defaults for root workspace work. Inside a nested repository, i
 `AGENTS.md`, architecture documents, and contributor guides take precedence. Adoption by
 an autonomous App is an App decision, not a harness synchronization task.
 
-## Rendered Skills (`skills/`)
+## Repository Skills (`.agents/skills/` & `.claude/skills/`)
 
-`skills/` is a **rendered artifact, not a source**. Each `skills/<name>/SKILL.md` is
-copied byte-for-byte from the workspace source of truth (`dev_env/skills/common/<name>/`)
-by `ws-publish`, which also runs `--check-files` to prove the copy is identical by SHA-256.
-Editing a file under `skills/` here does not reach the source: the next sync overwrites
-it, and until then every other repository disagrees with this one. Fix the source, then
-re-sync every repository.
-
-Only the shippable half is vendored. Each skill upstream is split in two so that "1:1"
-is a hash comparison rather than a human reading of derived text:
-
-| Upstream file | Vendored here | Why |
-|---|---|---|
-| `SKILL.md` | yes | Carries no identity and no environment coupling; safe in a public repository |
+Repo-owned operational skills live in `.agents/skills/<name>/SKILL.md` with byte-identical copies in `.claude/skills/<name>/SKILL.md` (enforced by `common/tests/test_skills_mirror_parity.py`) so both Codex/Antigravity and Claude Code load them identically. Cross-repo shared methodology skills live in `dev_env/plugins/dev-env-flow/skills/`.
 | `local.md` | no | Holds vault names, absolute home paths, and workspace-only tooling |
 
 The split is enforced upstream by a guard over both failure modes: identity leak (a vault

@@ -13,7 +13,7 @@
 | Infra2 架构与运维规则 | [`docs/ssot/core.md`](./core.md) 与相关 SSOT |
 | SDK 公共契约 | 已发布的 `infra2-sdk` SemVer artifact |
 | App 开发与领域规则 | 各 App 自己的 `AGENTS.md`、架构文档、代码和 CI |
-| Agent 规则内容（Root / Workspace 层）、skill、MCP spec 与其渲染函数 | `dev_env/workspace-iac`（git 单源；投影由 `ws-apply` / `ws-publish` 单向生成） |
+| Agent 规则与通用 skill 真源 | Root / Workspace 层规则与通用 skill 归 `dev_env/workspace-iac` + `dev_env/plugins/dev-env-flow`（经 `ws-apply` 渲染到宿主配置）；各仓库自身的 `AGENTS.md` 与 `.agents/skills/`（镜像至 `.claude/skills/`）由各自仓库直接持有 |
 
 ## 2. Goal And Non-Goals
 
@@ -22,10 +22,7 @@ App 的集成状态。它统一 workspace 视角，不统一产品仓库的迭�
 
 明确不做：
 
-- 不从 harness 向 App 分发或同步 policy：App 的规则由它自己的 `AGENTS.md` 决定。
-  **skill 不在此列**（2026-09-23 owner 指示「各个 repo 将 skill 真入库。必须是 1:1 的」）：
-  它从 `dev_env` 单向渲染进每个 repo 并入库，见 §5.1。两者的区别是谁能改——
-  policy 由 repo 自己写，skill 只能改单源。
+- 不从 harness 向 App 分发或同步 policy：App 的规则由它自己的 `AGENTS.md` 决定，仓内 `.agents/skills/`（及镜像 `.claude/skills/`）亦由各仓自行维护（见 §5.1）。
 - 不把 App submodule 变成 package、runtime、deployment 或 config-hash 依赖。
 - 不替 App 决定领域架构、CI gate 实例、版本节奏或发布审批。
 - 不把人类工作流偏好放进 `infra2-sdk` 的运行时 wire contract。
@@ -65,33 +62,18 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 - Infra2 和 App 各自拥有 CI gate 实例、部署编排、适配器调用时机与人类治理规则。
 - 跨仓库视图优先在读取时 join 已发布证据，不复制第二份可漂移的事实。
 - 新抽象只有在语义稳定且至少有清晰的多消费者契约时才进入 SDK。
-- Coding-agent 规则、skill 与 MCP spec 属于 `dev_env`（§5.1）；它不承载 App 部署、
-  通用任务调度或领域命令。App 的 policy 由 App 持有。
+- Coding-agent 的 Root/Workspace 规则与通用流程 skill 属于 `dev_env`（§5.1）；各仓自有的 `AGENTS.md`、仓级 skill（`.agents/skills/` 与 `.claude/skills/`）、CI gate 实例、部署编排与业务规则由各自仓库持有。
 
-### 5.1 Harness 边界（2026-09-23 owner 裁定）
+### 5.1 Harness 边界
 
-一条判据：**需要 review 才能改的是内容，归 `dev_env`；checkout 只持有自己那一层，
-并在固定位置接收产物。** 一件东西只落一格。
+一条判据：**跨仓复用且与具体仓库无关的宿主规则与流程 skill 归 `dev_env`；各仓库自有的 `AGENTS.md`、仓级 skill 与契约只留在对应仓库内。**
 
 | 方 | 持有 | 绝不做 |
 |---|---|---|
-| `dev_env`（单源） | Root / Workspace 规则真源、skill / command / MCP spec / secrets 模板、纯函数工具（`ws-publish`、`ws-check-drift`、`ws-agents-lint`、`ws-doctor`、`ws-mem-distill`），全部 `--json`，CI | 常驻进程、机器状态、UI |
-| checkout（消费者） | 自己的 `AGENTS.md`（Repo 层，入库）；`.agents/skills/`（从 `dev_env` 同步，入库） | 跟踪文件里出现 Root / Workspace 内容；**手写或就地修改**渲染产物 |
+| `dev_env` | Root / Workspace 规则真源、通用 workflow skill、MCP spec、纯函数边界工具（`ws-apply`、`ws-agents-lint`、`ws-doctor`、`ws-worktree-gc`、`ws-host-probe`） | 常驻进程、机器状态、UI；向各业务仓强推跨仓规则投影或 `.ws-publish/manifest.json` |
+| checkout（消费者） | 自己的 `AGENTS.md` 与仓级 `.agents/skills/`（在 Claude Code 生效的仓库镜像至 `.claude/skills/`） | 跟踪文件里手工拷贝或维护 Root 通用规则副本 |
 
-渲染产物入库不违反单向流动：**入库的是副本，不是真源**。判据是可计算的——
-`ws-publish --check-files` 按 `sha256` 比对每个 `skills/<name>/SKILL.md` 与 `dev_env`
-的对应文件，不等即 drift。就地改一个 repo 的副本不会传播，只会让它与其余 repo 不一致，
-而下一次同步把它覆盖掉——所以「改副本」是静默失败，不是局部定制。
-只有 `SKILL.md` 随渲染出仓；`local.md` 留在 `dev_env`，承载 vault 名、绝对家目录路径
-与只此一机存在的命令。这些 repo 都是 public，泄露不可撤销。
-
-不变量：内容单向流动（dev_env → render → checkout / 宿主配置），无反向写路径；
-渲染件零字面量凭据；Root 常驻块（`scope: host`）严格 $\le 2,000$ 字符；
-Workspace 块不进任何机器全局文件。物证、投递表与归档记录见
-[infra2#820](https://github.com/wangzitian0/infra2/issues/820) 与已归档
-[`Infra-019`](../project/archive/README.md#infra-019)。宿主发现规则
-（Codex / Gemini CLI 不越过 `.git`，Claude / Pi 无界向上）以
-`dev_env` `test_discovery_matrix_b_layer_sentinel.py` 回归护栏为准。
+仅宿主全局策略经 `ws-apply` 渲染到本机 `~/.claude/`、`~/.gemini/`、`~/zitian/AGENTS.md` 等运行期位置（不入仓）；各仓库的 `AGENTS.md` 与仓级 skill 在自身仓库通过常规 PR 演进与校验（含 `ws-agents-lint` 与仓内镜像一致性测试），不再通过 `ws-publish --check-files` 或跨仓投影维持一致。宿主发现规则（Codex / Gemini CLI 不越过 `.git`，Claude / Pi 无界向上）以 `dev_env` `docs/harness-loading-matrix.md` 与 `ws-host-probe` 回归护栏为准。
 
 这一边界延续 [`core.md` §3.1](./core.md#31-repository-dependency-boundary) 与已归档
 [`Infra-018`](../project/archive/README.md#infra-018) 的源码解耦结论。

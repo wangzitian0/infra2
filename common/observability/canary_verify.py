@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canary Todo 4-Pillar Touch Reality Physical Verification Tool.
+"""Canary Todo Multi-Pillar Touch Reality Physical Verification Tool.
 
 Verifies the physical execution state of Canary Todo (platform/30.todo) across:
   1. Public & Internal Endpoints: /api/health and /api/canary/status
@@ -8,6 +8,7 @@ Verifies the physical execution state of Canary Todo (platform/30.todo) across:
   4. Logs: SigNoz ClickHouse structured logs, scoped to the environment
   5. Monitoring: VPS availability ledger (availability-ledger.json)
   6. Alert Bridge: platform-alerting health status
+  7. Live Worker & LLM Check: worker tick and /api/todos/summary (plus app peer checks)
 
 Usage:
   python -m tools.canary_verify [--env production|staging] [--json]

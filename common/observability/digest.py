@@ -108,7 +108,7 @@ def fetch_recent_runs(
     window_days: int = DIGEST_WINDOW_DAYS,
     opener=None,
 ) -> list[dict[str, Any]]:
-    """Fetch recent ops-checks runs that actually include the watchdog job."""
+    """Fetch recent watchdog.yml runs that actually include the watchdog job."""
     active_opener = opener or urlopen
     owner, repo = repository.split("/", 1)
     current = now or datetime.now(UTC)

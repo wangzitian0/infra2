@@ -7,13 +7,12 @@
 # Scope is COMPUTED, not listed: a workflow's jobs must all be registered here exactly when
 # that workflow runs on a pull request (`pull_request` / `pull_request_target`), because that
 # is precisely when a job can appear on a PR without anyone deciding whether it gates merge.
-# Today that is infra-ci.yml and docs.yml; the other workflows (including ops-checks.yml)
-# never run on a PR, so they are `out_of_scope_workflows` in the audit's JSON -- not backlog,
-# just unable to gate. Add `pull_request:` to a workflow and it becomes covered automatically;
-# its jobs then have to be registered or infra-ci.yml's `--enforce` step fails.
+# Today `infra-ci.yml`, `docs.yml`, and `platform-images.yml` run on pull requests; workflows without a PR trigger never run on PRs
+# and are `out_of_scope_workflows` in the audit's JSON -- not backlog, just unable to gate. Add `pull_request:` to a
+# workflow and it becomes covered automatically; its jobs must be registered here or infra-ci.yml's `--enforce` fails.
 #
-# Non-PR scheduled operational jobs live in `.github/workflows/ops-checks.yml` and are not
-# listed here; only pull-request workflows belong in this merge-gate inventory.
+# Non-PR scheduled operational jobs live across `.github/workflows/ops-checks.yml`, `watchdog.yml`, `ghcr-retention.yml`,
+# and `warm-app-caches.yml` and are not listed here; only pull-request workflows belong in this merge-gate inventory.
 # Every non-ruleset gate below is `blocks_merge: false`: the set of `blocks_merge: true`
 # gates equals, exactly, the 7 required status checks in the live branch ruleset. Promoting
 # any gate to `blocks_merge: true` must add the ruleset context alongside it.

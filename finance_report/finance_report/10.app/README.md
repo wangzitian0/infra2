@@ -68,9 +68,9 @@ is hand-set per env — it is injected as config-as-code at deploy time. The sha
 image stays environment-agnostic (promote-not-rebuild): FE OTLP and OpenPanel values
 are runtime env, not build-time baked.
 
-### Backend OTEL_* — injected by `promote.py` / `compose.yaml` (`10.app/` and `preview/`)
+### Backend OTEL_* — injected by `compose_compile` / `deploy_v2` (`10.app/` and `preview/`)
 
-Templated deterministically from the deploy context (`promote.py` + `compose.yaml`, never Vault):
+Templated deterministically from the deploy context (deploy front door `deploy_v2` + `compose.yaml`, never Vault):
 
 | Var | Rendered default |
 |-----|------------------|

@@ -202,6 +202,7 @@
   "common/tests/test_service_version_env.py": 0.34,
   "common/tests/test_signoz_api_key_environment.py": 0.02,
   "common/tests/test_signoz_config_delivery.py": 0.22,
+  "common/tests/test_skills_mirror_parity.py": 0.05,
   "common/tests/test_sshd_fail2ban_config.py": 0.09,
   "common/tests/test_stability_report.py": 3.95,
   "common/tests/test_stack_presets.py": 0.34,

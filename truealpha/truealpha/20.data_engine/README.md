@@ -19,13 +19,11 @@ Production graduation remains gated by owner approval.
 
 ## Network Boundary
 
-OpenD listens only on host `127.0.0.1:11111`. All three Dagster roles therefore use
+OpenD listens only on host `127.0.0.1:11111`. Both deployed Dagster roles therefore use
 host networking; no OpenD proxy is created. `dagster-code-server` communicates with
-the other two only over the unix socket on the shared data volume, so it needs no
-published port. The Dagster UI also binds only to host
-loopback (`13001` in Staging, `13002` in Production), has no Traefik route, and is
-reached through an SSH tunnel when needed. Postgres uses its existing loopback ports
-(`15432` Staging, `15433` Production).
+`dagster-daemon` only over the unix socket on the shared data volume (`/var/lib/dagster/code-server.sock`),
+so it needs no published port and `dagster-webserver` is retired from runtime deployment.
+Postgres uses its existing loopback ports (`15432` Staging, `15433` Production).
 
 ## Boot Validation
 
@@ -54,9 +52,9 @@ DEPLOY_ENV=staging invoke vault.setup-approle --project=truealpha --service=data
 python -m tools.deploy_v2 \
   --service truealpha/data_engine \
   --type staging \
-  --iac-ref "$(git rev-parse HEAD)" \
-  --domain zitian.party \
-  --code-reviewed
+  --version-ref vX.Y.Z \
+  --iac-ref vX.Y.Z \
+  --domain zitian.party
 DEPLOY_ENV=staging invoke ta-data_engine.shared.status
 ```
 
@@ -65,11 +63,9 @@ DEPLOY_ENV=staging invoke ta-data_engine.shared.status
 ```bash
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-code-server-staging
-docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check
-docker exec truealpha-dagster-code-server-staging dagster api grpc-health-check --socket /var/lib/dagster/code-server.sock
 ```
 
-Both image references must be byte-identical and digest-pinned. A missing digest,
+Both image references must be byte-identical and digest-pinned (`dagster-daemon liveness-check` and `dagster api grpc-health-check` are intentionally omitted due to heavy CLI cold-start cost; compose healthchecks use lightweight `psycopg` and unix-socket probes). A missing digest,
 release manifest, approval, source credential, daemon heartbeat, code-server health, or
 runtime image match blocks deployment.
 

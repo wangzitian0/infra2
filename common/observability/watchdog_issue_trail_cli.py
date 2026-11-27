@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Record the ops-checks watchdog's verdicts as GitHub issues (truealpha#876 W4).
+"""Record the watchdog.yml watchdog's verdicts as GitHub issues (truealpha#876 W4).
 
-The last step of the ops-checks ``watchdog`` job. It reads the verdict file the
+The last step of the watchdog.yml ``watchdog`` job. It reads the verdict file the
 earlier steps appended to (``INFRA2_WATCHDOG_VERDICTS_PATH``) and, per
 ``common/observability/issue_trail.py``, opens or comments on one issue per red paging
 check and closes the issues of checks that are green again. Report-only checks

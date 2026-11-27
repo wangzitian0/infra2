@@ -1,34 +1,8 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=200dd029233241055798f85fbc54f1ef7bedca05e31d7756020487b5b4f66120 -->
-<!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
+# Infra2 Harness and Infrastructure AI Agent Rules
 
-## Engineering discipline
+> **Authority boundary:** This repository owns its own `AGENTS.md` directly. The agent may merge a PR when every merge gate passes (standing authority is a Workspace-tier fact; this repository's criteria are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)). If any required state fails, is missing, or cannot be verified, fail closed and do not merge.
 
-- **Measure the physical system first.** Inspect the system with read-only probes (`time cmd`, process chains, file locks) before proposing architecture. Never combine validation and mutation in one command. Measure, read the result, then decide.
-- **Green does not prove truth.** The tested system writes its own unit tests, CI, and issue states. Cross-check critical conclusions against two external sources not written by this repository.
-- **Classify checks (`Gate -> Dependency -> Fact -> None`).** Keep falsifiable tests for security or release gates; report drift and metrics on the Fact Board. Never hide assertions inside `if` branches, match prose with `indexOf`, or shadow test names.
-- **Falsifiable documentation and assertions:** State test requirements, error messages, and specifications in concrete ASD-STE100 terms without vague qualifiers.
-- **One source of truth:** Keep one authoritative definition per core fact. Repeated hardcoding and scattered configuration invite drift.
-- **Clean up during migration:** After the new mechanism is live and equivalence is proved, remove its predecessor, obsolete files, and dead code in the same change. Define contracts first and derive CI from them.
-- **Deletion can leave guards green and empty:** A guard for an old structure can stop checking anything after deletion. Check each guard and remove it or redirect it to the new structure; green tests alone do not prove safe deletion.
-- **Fix an owner hold by deletion:** Delete the rule or gate branch that holds non-production work. Do not add logic that reads a command to permit it. Such logic lets unsafe commands through.
-- **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
-- **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
-- **Local and remote test segregation:** Before a PR, run only the focused tests of the change in one process (`pytest <file>::<test> -x`). The full suite, parallel runs and coverage run on remote CI only.
-- **Bounded file reads:** Pass `StartLine` and `EndLine` (`<= 800` lines per call) when reading existing files with `read_file` or `view_file`.
-
-## Delivery and merge
-
-- **ASD-STE100 specification for all artifacts:** Write committed artifacts, rules, code, comments, commits, and docs in ASD-STE100 English. Keep instructions `<= 20` words and descriptions `<= 25` words in active voice without vague qualifiers. Operational skills (`skills/**/SKILL.md`) follow the target repository's language policy.
-- **Deliverable format:** Deliver a mergeable PR or a traceable issue, rather than a process-only report. Use issues and PRs as the collaboration bus. Search for an existing similar issue before creating one; update it if it exists. Write a new issue to the issue form of its type in `.github/ISSUE_TEMPLATE/` of the repository, else of its owner's `.github` repository.
-- **Fail fast left to right:** Put the cheapest and likeliest failure checks first.
-- **Review standing authorization:** Resolve a review thread after verifying in source code (not redacted diffs) that it is fixed or obsolete. Never resolve actionable or unverified feedback. Turn false reports into falsifiable invariant tests.
-- **Weighted review gates:** Each repository defines its own severity weights and blocking thresholds. Read literal `severity: <level>` tags; do not infer severity from prose.
-- **Merge when ready:** Once all merge conditions pass, merge and continue from the latest main rather than piling up divergent branches.
-- **Conflict-free merge window:** Merge conflict-free PRs (`mergeable=MERGEABLE`) within 24 hours of `main` without rebasing; post-merge CI validates `main`. Rebase on conflicts or after 24 hours.
-- **Delivery state invariant:** Never declare complete, done, or finished before merge to main and a verified Business Reality Probe (`ws-delivery-status`). State labels are `'Draft'`, `'Local verified'`, `'In review'`, `'Stage 1 Landed'`, and `'VERIFIED_COMPLETE'`.
-- **Anti-exclusion and reality invariant:** Exclusion is not resolution. Never exclude failing entities or add exemptions to manufacture green checks. A task is complete only when a physical reality probe confirms non-empty execution.
-- **Three-stage deployment prerequisite:** Stage 1 (merge to main) is a non-bypassable physical prerequisite for Stage 2 (staging) and Stage 3 (production). If HEAD is not on main, fail closed and refuse any deployment request.
-- **Deploy provenance invariant:** Before dispatching any deploy workflow, physically verify that the target ref or tag contains current branch commits (`git merge-base --is-ancestor HEAD <target>`). Never deploy an older tag as completion evidence for current work.
+> **Keep only decision invariants here.** Load procedures on demand through the links below. Long always-loaded instructions dilute hard boundaries.
 
 ## Production reservation
 
@@ -40,30 +14,16 @@ The single definition of the production reservation. Other tiers, skills and gat
 - **Everything else is the agent's:** in any repository the owner owns, every non-production change (including `dev_env` outside the self-guard), staging and canary deploy, release tag, rule text, skill, gate/release code, and required-check edit. Before merging gate or release code, an independent read-only reviewer inspects the head SHA and states whether the gate gets stricter, equal or looser. A looser edit in the self-guard follows the self-guard.
 - **Every other hold is a defect:** a rule, skill, label or gate holding non-production work for the owner is a defect. Do the work, then fix the hold. `ws_owner_scope` fails on it.
 
-## Runtime safety
-
-- **Reason from the worst case.** For environment changes, wrappers, redirection, or interception rules, check for no-TTY deadlock in CI or child processes, concurrent shared-file truncation/races, and network or cold-start failure cascades. Reject a proposal whose lack of backlash cannot be established.
-- **Treat three hidden green failures as defects:** WRONG FORMULA (an incorrect formula passes assertions), GREEN-WHILE-EMPTY (filtering removes all output but reports success), and STALE-REPORTED-AS-FRESH (old data is labeled fresh). Implausible output is evidence of a defect.
-- **Protect ambient services.** Default unit tests and subagent tasks must not destructively act on host ports, shared background processes, or development databases (`DROP`, `TRUNCATE`, `--clear`, forced restart). Resets require an isolated sandbox/worktree with a dedicated random port, or an explicit `CI=true` or `ALLOW_CLEAR_TEST=1` guard; otherwise skip safely with a warning.
-- **Two triggers:** Every background job or batch process needs both scheduled execution and manual replay.
-- **Do not steal CD locks:** A trigger is instant but publication is delayed. Do not interrupt a running deployment; the next run must coalesce commits accumulated while it was busy.
-
-# Infra2 Harness and Infrastructure AI Agent Rules
-
-> **Authority boundary:** An AI agent changes this file through its dev_env source and the dev_env rule-text checklist. The agent may merge a PR when every merge gate passes (standing authority is a Workspace-tier fact; this repository's criteria are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)). If any required state fails, is missing, or cannot be verified, fail closed and do not merge.
-
-> **Keep only decision invariants here.** Load procedures on demand through the links below. Long always-loaded instructions dilute hard boundaries.
-
 ## Harness scope and precedence
 
 This repository is both the implementation/deployment control plane for `infra2` and a multi-repository development workspace. The machine inventory is [`harness/repos.yaml`](harness/repos.yaml); architecture boundaries are in [`docs/ssot/core.harness.md`](docs/ssot/core.harness.md).
 
 1. **Harness focus:** This file directly governs `infra2` work at the root. Workspace emphasis covers `infra2`, `infra2-sdk`, and general collaboration preferences.
-2. **App autonomy:** `repos/finance_report` and `repos/truealpha` are workspace checkouts. On entering an App, read its own `AGENTS.md` and architecture documents; the App's local rules take precedence. Each App's Repo tier is projected from its own dev_env source; the harness does not define or overwrite App policy. **Merge authority is not App policy:** it is a standing owner grant across their repositories and does not need to be requested again on changing repositories.
+2. **App autonomy:** `repos/finance_report` and `repos/truealpha` are workspace checkouts. On entering an App, read its own `AGENTS.md` and architecture documents; the App's local rules take precedence. Each App owns its own `AGENTS.md`; the harness does not define or overwrite App policy. **Merge authority is not App policy:** it is a standing owner grant across their repositories and does not need to be requested again on changing repositories.
 3. **Preferences are not cross-repository commands:** Default GitHub, collaboration, and design preferences live in [`harness/workspace/`](harness/workspace/). More specific rules in the target repository prevail.
 4. **Dependency boundary:** A submodule is a development snapshot, not a package, runtime, deployment, or configuration-hash dependency. Stable cross-repository code contracts travel only through a published `infra2-sdk` version.
 5. **Submodule development boundary:** Submodule checkouts in `repos/` must remain detached or on tracked commits matching parent pins. Develop submodule changes in independent checkouts or worktrees outside the harness working tree.
-6. **Canary role:** This repository is the first consumer and Canary proving ground for released `infra2-sdk` versions before downstream adoption. The Canary is the Canary Todo service (`platform/30.todo`). Its SSOT is [`docs/ssot/platform.canary_todo.md`](docs/ssot/platform.canary_todo.md). A probe reads `/api/canary/status` every 60 s. The probe proves the Redis write, the Postgres login and the S3 write.
+6. **Canary role:** This repository is the first consumer and Canary proving ground for released `infra2-sdk` versions before downstream adoption. The Canary is the multi-slot Canary Todo service (`platform/30.todo`, `slots.yaml` — `v4-11`, `v4-13`, `v4-14`). Its SSOT is [`docs/ssot/platform.canary_todo.md`](docs/ssot/platform.canary_todo.md). Probes read each slot's `/api/canary/status` every 60 s to prove Redis writes, Postgres logins, and S3 writes.
 
 ## Core mandatory principles (SSOT first)
 
@@ -87,8 +47,8 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
    **Three-stage lifecycle -- merge != deploy (owner instruction, 2026-09-25):**
    - **Stage 1 -- Code Merge:** `git merge` lands commits on `main` (zero service impact).
    - **Stage 2 -- Staging Deploy:** Triggered by pushing tag `vX.Y.Z` (auto-deploys staging soak only).
-   - **Stage 3 -- Production Deploy:** Requires explicit dispatch (`deploy.yml type=prod` or `reconcile-iac-inputs.yml promote_prod=true`) after [`deploy-evidence`](.agents/skills/deploy-evidence/SKILL.md) and the `close` skill.
-6. **Review set and production paths** (owner instructions, 2026-09-22, 2026-10-06, 2026-10-08 and 2026-10-20). The gate verifies the GitHub `production` environment lock and `common/gate/production_contract.py` on every open PR, printing `production lock verified` (`lock_state=verified`) when satisfied (`ops.merge-gate.md`). The review set is the closure of rule 5, the contract tables, and the release code; edits in the review set are the agent's after an independent review of the head SHA (clearing exit 3 `review_required`), `### Mutation evidence` naming tests, and a clean main gate checkout. These edits are production changes in this repository, whatever the exit code. First, an edit to the settings of the `production` environment. Second, an edit to the jobs `host-hygiene-schedule` or `facet-reconcile` of `ops-checks.yml`, or to `tools/host_hygiene_schedule.py` or `tools/facet_reconcile.py`. Third, an edit to a workflow or to the release code when the verdict does not print `production lock verified`. Without the lock, such an edit can reach production with no reviewer. An edit that makes the contract or the lock facts gate fewer production jobs follows the Root self-guard. `common/gate/self_governance.py` owns `_direction_proof_for()`; do not copy its list.
+   - **Stage 3 -- Production Deploy:** Requires explicit dispatch (`reconcile-iac-inputs.yml promote_prod=true`) after [`deploy-evidence`](.agents/skills/deploy-evidence/SKILL.md) and the `close` skill.
+6. **Review set and production paths** (owner instructions, 2026-09-22, 2026-10-06, 2026-10-08 and 2026-10-20). The gate verifies the GitHub `production` environment lock and `common/gate/production_contract.py` on every open PR, printing `production lock verified` (`lock_state=verified`) when satisfied (`ops.merge-gate.md`). The review set is the closure of rule 5 and the contract tables; edits in the review set are the agent's after an independent review of the head SHA (clearing exit 3 `review_required`) and a clean main gate checkout. These edits are production changes in this repository, whatever the exit code. First, an edit to the settings of the `production` environment. Second, an edit to the jobs `host-hygiene-schedule` or `facet-reconcile` of `ops-checks.yml`, or to `tools/host_hygiene_schedule.py` or `tools/facet_reconcile.py`. Third, an edit to a workflow or to the release code when the verdict does not print `production lock verified`. Without the lock, such an edit can reach production with no reviewer. An edit that makes the contract or the lock facts gate fewer production jobs follows the Root self-guard. `common/gate/self_governance.py` owns `_direction_proof_for()`; do not copy its list.
 
 ## Security and hard boundaries
 
@@ -112,4 +72,3 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
 | Find the current task | [`docs/project/README.md`](docs/project/README.md) |
 | Integrate an App or onboard | [`docs/onboarding/README.md`](docs/onboarding/README.md) |
 | Change an infrastructure layer | Its README: [bootstrap](bootstrap/README.md), [platform](platform/README.md), [tools](tools/README.md), or [common](common/README.md) |
-<!-- WS_STATIC_END -->

@@ -2,8 +2,7 @@
 
 > **SSOT Key**: `bootstrap.iac_runner`
 > **核心定义**: 平台服务（`iac_pinned`）的**部署控制面**。GitHub Actions 以 **release tag** 为坐标、经 `deploy_v2`
-> 调用其签名 `/deploy`，Runner 检出该 tag 对应的精确 SHA 并对选定服务执行 `invoke {service}.sync`。
-> GitHub push webhook（`/webhook`）只验签、**不部署**——合并不是发布。「什么触发什么」的唯一权威是
+> 调用其签名 `/deploy`，Runner 检出该 tag 对应的精确 SHA 并对选定服务执行 `invoke {service}.sync`（`/webhook` 已退役移除，合并不是发布）。「什么触发什么」的唯一权威是
 > [ops.pipeline.md](./ops.pipeline.md) §2–3；本文只讲 Runner 自身。
 
 ---
@@ -29,7 +28,7 @@ IaC Runner 是 **L1 Bootstrap 层**组件，负责部署 **L2 Platform 层**服�
 **核心职责**:
 - 接收 GitHub Actions 的签名 `/deploy` 请求（坐标：`env` + 精确 40 位 commit SHA + 服务集合，可选 `version_ref` / `action`，§3.1），检出该 SHA 并执行 `invoke {service}.sync`
 - 以 `deployment_id` 回答 `/deploy/status`，让 workflow 拿到真实的 per-service 终态（不是「请求已受理」）
-- 接收 GitHub push webhook（`/webhook`）：验签后回 `{"status":"ignored"}`，**不部署**（§3.2）
+- `/webhook` 端点已移除（#1477）：合并不是发布，Runner 仅暴露 `/health`、`POST /deploy`、`GET /deploy/status/{deployment_id}` 与 `POST /deploy/status`
 - 由 Deployer config-hash gate 决定 no-op 还是真实重启（§3.3）
 
 **它不做什么**：不监听 `main`、不自增版本、不自己决定部署哪些服务。触发模型由
@@ -75,7 +74,6 @@ flowchart TB
     GitHub -->|push tag vX.Y.Z| Reconcile
     Maintainer -->|workflow_dispatch promote_prod=true| Reconcile
     Reconcile -->|signed /deploy + /deploy/status| IaCRunner
-    GitHub -.->|push main → /webhook: ignored, deploys nothing| IaCRunner
 
     VaultAgent -->|fetch secrets| Vault
     VaultAgent -->|inject via tmpfs| IaCRunner
@@ -152,16 +150,9 @@ path. Services that do not consume a runtime Vault template must explicitly set
 an empty `secret_key` so full platform sync does not fail on an unused
 `secret/data/{project}/{env}/{service}` path.
 
-### 3.2 GitHub push webhook（`/webhook`）：验签、不部署
+### 3.2 `/webhook` 已退役并从服务路由移除
 
-GitHub 仍配置了 push webhook（[README §3](../../bootstrap/06.iac_runner/README.md)），Runner 也仍验签——
-一个 401 的 webhook 本身就是坏掉的东西，且 `/deploy` 由同一进程提供。但对 `main` 的 push **不触发任何部署**，
-响应是 `{"status":"ignored","reason":"a push to main is not a deploy trigger; staging follows a release tag","commit":"<sha8>"}`；
-非 `push` 事件与非 `main` 分支同样 `ignored`（§4.3）。
-
-此前该端点会解析 changed files 并用**未打 tag 的 main HEAD** 部署 staging（对每个声明了 `common/**`/`tools/**`
-依赖的服务等于「合并即部署」）。该路径已移除（#585）：它与上面的三条路全部矛盾，且从 2026-07-20 到
-2026-09-09 静默失效期间没有任何服务可见地过期——这是「没有东西需要它」最有力的证据。
+`webhook_server.py` 仅保留 `/health`、`POST /deploy`、`GET /deploy/status/{deployment_id}` 与 `POST /deploy/status`；历史上的 GitHub push `/webhook` 端点已彻底移除（合并 `main` 从不触发部署：staging 跟随 release tag，prod 由 `reconcile-iac-inputs.yml promote_prod=true` 显式晋升）。
 
 ### 3.3 配置哈希幂等性
 
@@ -202,8 +193,7 @@ loader never raises: a file that is not UTF-8, is nested past the recursion limi
 Two risks follow from a restart. (1) A runner killed after it wrote the new config hash leaves the hash, the checkout and
 the old containers matching while Dokploy's deploy still runs or has failed; a retry would skip and turn green. The skip
 guard (`Deployer._verify_newest_deployment_done`) now lets the hash skip apply only when the newest Dokploy deployment
-record is `done`; no record, or an unreadable list, keeps the skip. (2) Still open (#1472): after a gunicorn
-worker-only restart an orphaned `invoke` child may still run while a retry starts.
+record is `done`; no record, or an unreadable list, keeps the skip. (2) 容器以 `uvicorn ... --workers 1` 单进程运行；#1472 记录的重启窗口孤儿子进程风险仍适用。
 
 ---
 
@@ -214,9 +204,9 @@ worker-only restart an orphaned `invoke` child may still run while a retry start
 | Endpoint | Method | Description | 触发方式 |
 |----------|--------|-------------|---------|
 | `/health` | GET | 健康检查 | 手动 / 监控 |
-| `/webhook` | POST | GitHub push 接收器；验签后**不部署任何东西**（合并不是发布，staging 跟 release tag） | GitHub 自动触发 |
 | `/deploy` | POST | 版本部署（GitOps）| GitHub Actions |
-| `/deploy/status` | POST | 按 deployment_id 轮询该次部署的终态 | `deploy_v2` |
+| `/deploy/status/{deployment_id}` | GET | 按 deployment_id 轮询该次部署的终态 | `deploy_v2` |
+| `/deploy/status` | POST | 按请求体 deployment_id 轮询该次部署的终态 | `deploy_v2` |
 
 ### 4.2 `/health` - 健康检查
 
@@ -256,39 +246,9 @@ curl https://iac.{domain}/health
 - A failed sync fails the deploy with `ref venv (uv sync --locked) failed: ...`. No task falls back to the image SDK.
 - The runner process itself still imports the checkout `common/` with the image SDK (task discovery and fan-out).
 
-### 4.3 `/webhook` - GitHub Webhook（验签后 `ignored`）
+### 4.3 已退役路由：`/webhook`
 
-**请求示例**（GitHub 自动发送）:
-```json
-POST /webhook HTTP/1.1
-Host: iac.{domain}
-X-GitHub-Event: push
-X-Hub-Signature-256: sha256=...
-Content-Type: application/json
-
-{
-  "ref": "refs/heads/main",
-  "after": "0123456789abcdef0123456789abcdef01234567",
-  "commits": [ ... ]
-}
-```
-
-**处理逻辑**:
-1. 验证 HMAC 签名（`X-Hub-Signature-256`）；失败 → `401 {"error":"Invalid signature"}`
-2. 非 `push` 事件 → `{"status":"ignored","event":"<event>"}`
-3. 非 `refs/heads/main` → `{"status":"ignored","reason":"Not main branch"}`
-4. `main` push → **不解析 changed files、不执行任何 sync**，直接返回 `ignored`
-
-**响应**:
-```json
-{
-  "status": "ignored",
-  "reason": "a push to main is not a deploy trigger; staging follows a release tag",
-  "commit": "01234567"
-}
-```
-
-合并不是发布：staging 跟 release tag（§3.1），prod 由显式 promote 放行。没有 `synced_services`——这个端点不 sync。
+`/webhook` 已从 `bootstrap/06.iac_runner/webhook_server.py` 移除，不再注册。所有部署触发统一经 `POST /deploy` 与 `/deploy/status`。
 
 ### 4.4 `/deploy` - 版本部署
 
@@ -354,9 +314,12 @@ changed files 换算成 `services` 传给 `/deploy`。要点：
 - IaC Runner must not restart itself from inside its own `/deploy` request,
   because that can kill the request handler before GitHub Actions receives a
   terminal deployment result.
-- `deploy.yml` detects `bootstrap/06.iac_runner/**` changes on
-  `main` from the GitHub compare/commit API file list, SSHes to the VPS with
-  the out-of-band watchdog key, updates only the runner source path in the
+- `reconcile-iac-inputs.yml` Wave 0 evaluates `runner_input_sha256` (AST +
+  Dockerfile closure) to independently update `iac-runner-staging` during
+  staging tag trains and `iac-runner` during `promote_prod=true` (after owner
+  approval in `production`); `deploy.yml` (`bootstrap` job) is a manual
+  `workflow_dispatch` fallback only (no `on.push` trigger). It SSHes to the VPS
+  with the out-of-band watchdog key, updates only the runner source path in the
   Dokploy compose checkout, persists the target `GIT_SHA` and
   `autoDeploy=false` through the internal Dokploy API, rebuilds the compose
   project, and waits for container health before calling `/deploy`.
@@ -385,10 +348,10 @@ changed files 换算成 `services` 传给 `/deploy`。要点：
 **设置命令**:
 ```bash
 invoke env.set WEBHOOK_SECRET=$(openssl rand -hex 32) \
-  --project=bootstrap --service=iac_runner
+  --project=bootstrap --service=iac_runner --type=bootstrap
 
 invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
-  --project=bootstrap --service=iac_runner
+  --project=bootstrap --service=iac_runner --type=bootstrap
 ```
 
 ### 6.2 Vault 凭证（AppRole）
@@ -459,15 +422,17 @@ IaC Runner 复用平台服务的标准 AppRole 模式——`DEPLOY_ENV=productio
 # 跨服务 secret 同步——runner 职责是给平台与应用服务同步运行时 secret
 path "secret/data/platform/+/*"        { capabilities = ["create","read","update"] }   # 无 delete
 path "secret/data/finance_report/+/*"  { capabilities = ["create","read","update"] }
+path "secret/data/truealpha/+/*"       { capabilities = ["create","read","update"] }
 path "secret/metadata/platform/+/*"        { capabilities = ["read","list"] }
 path "secret/metadata/finance_report/+/*"  { capabilities = ["read","list"] }
+path "secret/metadata/truealpha/+/*"       { capabilities = ["read","list"] }
 path "secret/data/bootstrap/+/iac_runner"  { capabilities = ["read"] }                  # 自身配置
 path "auth/token/lookup-self"          { capabilities = ["read"] }
 ```
 
 #### 6.4.3 P0 反环不变量（红线，由 `common/tests/test_vault_approle_invariants.py` 锁定）
 
-1. **断环**：IaC Runner **不部署/不轮换它自己、不部署 Vault/1Password**。`bootstrap/06.iac_runner/**` 变更由 `deploy.yml` 走外部 SSH 脚本（`scripts/deploy_iac_runner_bootstrap.sh`）带外重建。
+1. **断环**：IaC Runner **不部署/不轮换它自己、不部署 Vault/1Password**。runner 变更由 `reconcile-iac-inputs.yml` Wave 0（以及 `deploy.yml` `bootstrap` job 手动 `workflow_dispatch`）走外部 SSH 脚本（`scripts/deploy_iac_runner_bootstrap.sh`）带外重建。
 2. **不自指轮换**：IaC Runner 的 `role_id`/`secret_id` 绝不纳入 `.sync` 轮换（避免凭证失效时需靠自身刷新导致死锁）。
 3. **带外扎根**：AppRole 的 `role_id`/`secret_id` 由操作员持 1Password 中的 Vault root token 运行 `setup-approle` 生成并注入 Dokploy compose env（`secret_id_ttl=0 secret_id_num_uses=0`），跨重部署由 `RUNTIME_ENV_KEYS_TO_PRESERVE` 保留。严禁将 deployer 登录材料存入 1Password 或在运行时 `op read` root token。
 4. **无 delete / 无 root**：deployer token 仅具备业务 KV 的 `create/read/update`，不得拥有 `delete` 或修改 bootstrap root 凭证的权限。
@@ -487,10 +452,10 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 ```bash
 # 1. 配置密钥
 invoke env.set WEBHOOK_SECRET=$(openssl rand -hex 32) \
-  --project=bootstrap --service=iac_runner
+  --project=bootstrap --service=iac_runner --type=bootstrap
 
 invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
-  --project=bootstrap --service=iac_runner
+  --project=bootstrap --service=iac_runner --type=bootstrap
 
 # 2. 生成并注入 AppRole 凭证（role_id/secret_id → Dokploy env）
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
@@ -502,12 +467,6 @@ invoke iac-runner.setup
 # 4. 验证部署
 docker ps --filter name=iac-runner
 curl https://iac.{domain}/health
-
-# 5. 配置 GitHub webhook
-# 在仓库设置中添加 webhook:
-# - URL: https://iac.{domain}/webhook
-# - Secret: (Vault 中的 WEBHOOK_SECRET)
-# - Events: push
 ```
 
 ### 7.2 健康检查
@@ -619,7 +578,7 @@ fails when the Dockerfile and that line disagree), rebuilds the compose project 
 `GIT_SHA=<short_sha>`, recreates the runner with the confirmed Dokploy compose
 env instead of the previous container env, and waits for Docker health.
 
-The staging soak of a release does not rebuild the runner (the runner serves staging and production, so a rebuild is a production change; owner decision 2026-11-11). A release whose staging soak needs the new runner therefore cannot go green first. The way out is the owner-approved `bootstrap` job of `deploy.yml` (service `bootstrap/iac-runner`), then a re-run of the soak.
+Wave 0 of `reconcile-iac-inputs.yml` independently rebuilds `iac-runner-staging` during staging tag trains and `iac-runner` when `promote_prod=true` (after owner approval in `production`), based on `runner_input_sha256` (AST + Dockerfile closure). The `bootstrap` job of `deploy.yml` remains as a manual `workflow_dispatch` fallback (service `bootstrap/iac-runner`).
 
 Generic deployer config hashes include compose text, deploy env values, local
 bind-mounted files referenced by compose, Dockerfiles, and Dockerfile
@@ -654,9 +613,9 @@ curl https://iac.{domain}/health
 |------|------|---------|
 | **Runtime Vault service secrets** | Read + create/update only | Bounded AppRole login (`vault.setup-approle`) |
 | **Bootstrap/root credentials** | Read-only for iac_runner config | Bounded AppRole token; root credentials are operator-only |
-| **Docker Socket** | 只读 | `ro` mount（`/var/run/docker.sock:/var/run/docker.sock:ro`）|
+| **Docker Socket** | 无挂载 | 容器内不挂载 `docker.sock`；需要容器/镜像检查的门禁由宿主机/外部 SSH 侧执行 |
 | **Host 文件系统** | 无写入权限 | 仅 workspace 目录可写 |
-| **Bootstrap 服务** | 不在 tag reconcile 范围内 | 首装/灾备依赖，保持手动（§5.2） |
+| **Bootstrap 服务** | 不在 tag reconcile 范围内 | 除 `iac-runner` Wave 0 外，其余首装/灾备依赖保持手动（§5.2） |
 
 ### 8.2 HMAC 签名验证
 
@@ -678,11 +637,11 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 # 1. 生成新密钥
 new_secret=$(openssl rand -hex 32)
 
-# 2. 更新 Vault
+# 2. 更新 Vault（--break-glass）并同步 GitHub Actions secret INFRA_IAC / IAC_WEBHOOK_SECRET
 invoke env.set WEBHOOK_SECRET=$new_secret \
-  --project=bootstrap --service=iac_runner
+  --project=bootstrap --service=iac_runner --type=app_vars --break-glass
 
-# 3. 更新 GitHub webhook 配置
+# 3. 更新 GitHub webhook 配置（若仍保留，建议清理）
 
 # 4. 重启 IaC Runner
 docker restart iac-runner
@@ -888,11 +847,12 @@ invoke postgres.sync
 
 ### 12.2 已知限制
 
-1. **Bootstrap recovery boundary**: IaC Runner source is externally rebuilt by
-   `deploy.yml` when `bootstrap/06.iac_runner/**` lands on `main` (the one
-   merge-triggered path: L1 self-update), but first install and broken-SSH
-   recovery remain manual bootstrap operations.
-2. **单点故障**: 只有一个 IaC Runner 实例（未来可考虑主备模式）
+1. **Bootstrap recovery boundary**: IaC Runner source is rebuilt by Wave 0 in
+   `reconcile-iac-inputs.yml` (`iac-runner-staging` during staging tag trains,
+   `iac-runner` on owner-approved `promote_prod=true`, plus manual
+   `workflow_dispatch` via `deploy.yml` `bootstrap` job), while first install
+   and broken-SSH recovery remain manual bootstrap operations.
+2. **环境隔离实例**: 按环境拆分为 `iac-runner-staging`（staging）与 `iac-runner`（production），各自独立重启与健康检查。
 3. **缺乏审计日志**: 当前日志未持久化（可接入 SigNoz 改进）
 
 ---
@@ -920,29 +880,19 @@ docker exec iac-runner which op
 # 预期输出: /usr/local/bin/op
 ```
 
-### 13.2 功能验证
+### 13.2 `/deploy` 与 `/health` 功能验证
 
 ```bash
-# 测试 webhook 端点（手动触发）：验签通过即 ignored，不部署
-PAYLOAD='{"ref":"refs/heads/main","after":"0123456789abcdef0123456789abcdef01234567","commits":[]}'
-SECRET=$(invoke env.get WEBHOOK_SECRET --project=bootstrap --service=iac_runner)
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
-
-curl -X POST https://iac.{domain}/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: push" \
-  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
-  -d "$PAYLOAD"
-
-# 预期输出: {"status":"ignored","reason":"a push to main is not a deploy trigger; staging follows a release tag","commit":"01234567"}
-# 错误签名 → 401 {"error":"Invalid signature"}
+# 验证未授权 /deploy 被拒绝（预期 401）与 /health 就绪
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://iac.{domain}/deploy -d '{}'
+# 预期输出: 401
+curl -fsS https://iac.{domain}/health
 ```
 
 ### 13.3 发布链路验证（release tag → staging）
 
 ```bash
 # 1. 合并变更到 main：什么都不部署
-#    Settings → Webhooks → Recent Deliveries 应显示 200 + {"status":"ignored",...}
 
 # 2. 从 main 打 release tag → 自动晋升 staging
 git checkout main && git pull
@@ -954,7 +904,7 @@ gh run watch <run-id>
 # 预期: 绿；summary 列出 changed files → selected services；输入未变的服务是 config-hash no-op
 
 # 4. 检查 IaC Runner 日志
-docker logs iac-runner --tail 50
+docker logs iac-runner-staging --tail 50
 # 预期: 该 deployment_id 下每个服务的 sync 结果（succeeded / skipped），无 failed
 
 # 5. PR 阶段就能预演：PR CI 的「Gate reconcile plan builds」跑 --dry-run，列出这次发布将重部署哪些服务
@@ -978,8 +928,8 @@ docker logs iac-runner --tail 50
 
 ### 14.3 GitHub Workflows
 
-- [reconcile-iac-inputs.yml](../../.github/workflows/reconcile-iac-inputs.yml) - release tag → staging（自动）；`promote_prod=true` → prod（显式）
-- [deploy.yml](../../.github/workflows/deploy.yml) - `deploy_v2` 手动入口 + `bootstrap/06.iac_runner/**` 合并后的 runner 带外自更新
+- [reconcile-iac-inputs.yml](../../.github/workflows/reconcile-iac-inputs.yml) - release tag → staging（自动）；`promote_prod=true` → prod（显式），含 Wave 0 runner 自更新
+- [deploy.yml](../../.github/workflows/deploy.yml) - `deploy_v2` 手动 `workflow_dispatch` 入口（含 `bootstrap` runner 手动重建；无 `on.push` 触发；`type=prod` 已退役）
 
 ---
 

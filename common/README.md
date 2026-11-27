@@ -8,7 +8,7 @@
 
 ## 🏛️ Architecture & Domain Packages (SSOT)
 
-Infrastructure capabilities are organized into 6 cohesive domain packages. Each package is self-contained with its own localized `README.md`, domain entities, invariants, and tests:
+Infrastructure capabilities are organized into 7 cohesive domain packages. Each package is self-contained with its own localized `README.md`, domain entities, invariants, and tests:
 
 | Domain Package | SSOT Role | Local Documentation | Key Capabilities & APIs |
 |----------------|-----------|---------------------|--------------------------|
@@ -18,6 +18,7 @@ Infrastructure capabilities are organized into 6 cohesive domain packages. Each 
 | [`observability/`](./observability/README.md) | **Probes, Triage & Watchdogs** | [observability/README.md](./observability/README.md) | In-band health probes (`ProbeSpec`, `run_probes`), container breakdown log analysis (`analyze_container_logs`), watchdog issue trail reconciliation, alerting sidecar resident watchers |
 | [`deploy/`](./deploy/README.md) | **Deployment Engine & Promotion** | [deploy/README.md](./deploy/README.md) | Unified `Deployer` base class, fixed-environment promotion (`deploy()`), dynamic preview stack lifecycle (`up()`, `down()`), pre-deploy schema gate (`schema_gate`) |
 | [`alerting/`](./alerting/README.md) | **SigNoz Alerting & Feishu Delivery** | [alerting/README.md](./alerting/README.md) | SigNoz/Alertmanager payload parsing (`PagerMessage`), Feishu card rendering (`build_feishu_card_payload`), rule builders (`build_log_alert_rule`), and webhook/app delivery |
+| [`gate/`](./gate/README.md) | **PR Merge Gate & Lock Audit** | [gate/README.md](./gate/README.md) | PR merge-gate evaluator (`tools.pr_merge_gate`), production lock & workflow contract verification (`production_contract.py`), review-set closure & direction replay |
 
 ---
 
@@ -28,7 +29,7 @@ Modules in `common/` that provide direct integrations or operational clients:
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
 | [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper | `DokployClient`, `get_dokploy()` |
-| [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
+| [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader (deployed via manual `apply-observability.yml` dispatch) | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`signoz_alert_rule_probe.py`](./signoz_alert_rule_probe.py) | Disabled SigNoz alert-rule canary (entry: `tools/signoz_alert_rule_probe.py`). It is a flat module because it imports `observability_dashboards.py`, and a domain package must not import a flat module. | `main()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`common.py`](./common.py) | Operator SSH health check helper | `check_service()` |
@@ -54,8 +55,8 @@ No frozen compatibility shims remain in `common/`.
   over SSH and prints through `common.console`.
   `test_no_libs_common_env_reexports.py` fails on any other use of `common.common`.
 - `common/console.py` holds its own implementation. `tools/pr_merge_gate.py` imports it, so
-  it is in the merge gate's self-governing closure; moving it is a separate,
-  owner-approved change. `common.console` is a pure leaf module with zero internal repo
+  it is in the merge gate's self-governing (`review_required`) closure; editing or moving
+  it clears after an independent review of the head SHA when the production lock holds. `common.console` is a pure leaf module with zero internal repo
   imports, enforced by `test_leaf_flat_modules_have_no_repo_imports` in
   `common/tests/test_import_boundaries.py`.
 
