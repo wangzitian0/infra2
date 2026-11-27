@@ -21,7 +21,8 @@ _IAC_RUNNER_IDLE_CONTAINER="iac-runner"
 
 # Print the runner's in-flight deploy count, or print nothing when it is unknown.
 _iac_runner_in_flight_count() {
-  docker exec -i "$_IAC_RUNNER_IDLE_CONTAINER" python - <<'PY'
+  local container="${IAC_RUNNER_CONTAINER:-$_IAC_RUNNER_IDLE_CONTAINER}"
+  docker exec -i "$container" python - <<'PY'
 import json
 import os
 import urllib.error
@@ -48,6 +49,7 @@ PY
 }
 
 wait_for_runner_idle() {
+  local container="${IAC_RUNNER_CONTAINER:-$_IAC_RUNNER_IDLE_CONTAINER}"
   local limit="${IAC_RUNNER_IDLE_WAIT_SECONDS:-900}"
   local interval="${IAC_RUNNER_IDLE_POLL_SECONDS:-10}"
   local whole_number='^[0-9]+$'
@@ -64,11 +66,11 @@ wait_for_runner_idle() {
   fi
 
   running="$(
-    docker inspect --format '{{.State.Running}}' "$_IAC_RUNNER_IDLE_CONTAINER" \
+    docker inspect --format '{{.State.Running}}' "$container" \
       </dev/null 2>/dev/null
   )" || running=""
   if [ "$running" != "true" ]; then
-    echo "IaC Runner idle wait: container $_IAC_RUNNER_IDLE_CONTAINER is not running; no in-flight deploy to wait for"
+    echo "IaC Runner idle wait: container $container is not running; no in-flight deploy to wait for"
     return 0
   fi
 

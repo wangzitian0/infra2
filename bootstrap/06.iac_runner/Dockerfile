@@ -1,8 +1,11 @@
 FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 ARG GIT_SHA=unknown
+ARG RUNNER_INPUT_SHA256=""
 LABEL git.sha="${GIT_SHA}"
+LABEL runner.input.sha256="${RUNNER_INPUT_SHA256}"
 ENV GIT_SHA="${GIT_SHA}"
+ENV RUNNER_INPUT_SHA256="${RUNNER_INPUT_SHA256}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \

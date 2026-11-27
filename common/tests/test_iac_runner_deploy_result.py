@@ -353,8 +353,8 @@ def test_iac_runner_policy_can_repair_service_runtime_secrets() -> None:
     policy = IAC_RUNNER_VAULT_POLICY.read_text(encoding="utf-8")
 
     for path in (
-        'path "secret/data/platform/+/*"',
-        'path "secret/data/finance_report/+/*"',
+        'path "secret/data/platform/{{env}}/*"',
+        'path "secret/data/finance_report/{{env}}/*"',
     ):
         block = policy.split(path, 1)[1].split("}", 1)[0]
         assert '"create"' in block

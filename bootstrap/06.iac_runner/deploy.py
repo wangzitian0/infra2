@@ -59,12 +59,11 @@ class IaCRunnerDeployer(Deployer):
     # AST reader. AppRole auth (#369, completing #257/#259): vault-agent uses
     # VAULT_ROLE_ID + VAULT_SECRET_ID (Dokploy-injected, NOT 1Password); P0
     # anti-cycle invariants preserved — see docs/ssot/bootstrap.iac_runner.md
-    # §6.4. Bootstrap-plane containers carry no ${ENV_SUFFIX} (single shared
-    # instance).
+    # §6.4. Parameterized via ${ENV_SUFFIX} for isolated staging/prod runners.
     secrets = (
         SecretsFacet(
-            vault_agent_container="iac-runner-vault-agent",
-            app_containers=("iac-runner",),
+            vault_agent_container="iac-runner-vault-agent${ENV_SUFFIX}",
+            app_containers=("iac-runner${ENV_SUFFIX}",),
             auth_method="approle",
         ),
     )

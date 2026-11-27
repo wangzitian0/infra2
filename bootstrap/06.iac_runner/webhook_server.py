@@ -732,6 +732,15 @@ class RunnerHealthResponse(BaseModel):
     git_sha: str
     sdk_version: str
     task_sdk: str
+    runner_input_sha256: str = ""
+
+
+def _allowed_deploy_envs() -> frozenset[str] | None:
+    raw = os.environ.get("IAC_RUNNER_ALLOWED_ENVS", "").strip()
+    if not raw:
+        return None
+    allowed = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    return allowed or None
 
 
 class DeployRequest(BaseModel):
@@ -916,6 +925,7 @@ def health() -> JSONResponse:
             # A deploy task imports the SDK that the uv.lock of its ref locks, not
             # sdk_version above (sync_runner.prepare_ref_env, #1822).
             "task_sdk": TASK_SDK_SOURCE,
+            "runner_input_sha256": os.environ.get("RUNNER_INPUT_SHA256", ""),
         },
         status_code=status_code,
     )
@@ -989,6 +999,11 @@ def _process_deploy_request(
 
     if env not in ("staging", "production"):
         return {"error": "Invalid env (must be staging or production)"}, 400
+    allowed_envs = _allowed_deploy_envs()
+    if allowed_envs is not None and env not in allowed_envs:
+        return {
+            "error": f"Runner does not accept env {env!r} (allowed={sorted(allowed_envs)})"
+        }, 403
 
     services = payload.get("services")
     if env == "production":
@@ -1210,6 +1225,11 @@ def _process_status_request(
         return {"error": "Ref must be an exact 40-character commit SHA"}, 400
     if env not in ("staging", "production"):
         return {"error": "Invalid env (must be staging or production)"}, 400
+    allowed_envs = _allowed_deploy_envs()
+    if allowed_envs is not None and env not in allowed_envs:
+        return {
+            "error": f"Runner does not accept env {env!r} (allowed={sorted(allowed_envs)})"
+        }, 403
 
     services = payload.get("services")
     if services is not None:

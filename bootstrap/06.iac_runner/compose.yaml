@@ -3,7 +3,7 @@ services:
     mem_limit: 128m
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
-    container_name: iac-runner-vault-agent
+    container_name: iac-runner-vault-agent${ENV_SUFFIX}
     restart: always
     logging:
       driver: json-file
@@ -69,11 +69,12 @@ services:
       dockerfile: bootstrap/06.iac_runner/Dockerfile
       args:
         - GIT_SHA=${GIT_SHA:-}
+        - RUNNER_INPUT_SHA256=${RUNNER_INPUT_SHA256:-}
     # Always rebuild from source when deploying (no image caching)
     # This ensures webhook_server.py and other source files are always up-to-date
     pull_policy: build
     image: bootstrap-iac_runner-bkewyn-iac-runner:${GIT_SHA:-}
-    container_name: iac-runner
+    container_name: iac-runner${ENV_SUFFIX}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -158,9 +159,11 @@ services:
       - DEPLOY_TIMEOUT=${DEPLOY_TIMEOUT:-900}
       - ALLOW_SHARED_DATA_PATH=${ALLOW_SHARED_DATA_PATH:-0}
       - OP_SERVICE_ACCOUNT_TOKEN=${OP_SERVICE_ACCOUNT_TOKEN:-}
+      - RUNNER_INPUT_SHA256=${RUNNER_INPUT_SHA256:-}
+      - IAC_RUNNER_ALLOWED_ENVS=${IAC_RUNNER_ALLOWED_ENVS:-}
     volumes:
       - secrets:/secrets:ro
-      - ${DATA_PATH:-/data/bootstrap/iac-runner}/workspace:/workspace
+      - ${DATA_PATH:-/data/bootstrap/iac-runner${ENV_SUFFIX}}/workspace:/workspace
       - ${SSH_DIR_PATH:-/root/.ssh}:/host_ssh:ro
       - /etc/dokploy/logs:/etc/dokploy/logs:ro
     networks:

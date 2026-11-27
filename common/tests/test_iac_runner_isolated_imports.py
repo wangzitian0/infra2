@@ -100,3 +100,49 @@ def test_webhook_server_classify_ref_matches_git_refs(
             module.classify_ref(raw_ref)
     else:
         assert module.classify_ref(raw_ref) == expected
+
+
+def test_iac_runner_input_hash_and_allowed_envs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Wave 0 input hash reacts only to runner inputs; IAC_RUNNER_ALLOWED_ENVS gates /deploy."""
+    import importlib.util
+    from starlette.testclient import TestClient
+    from common.deploy.config_hash import iac_runner_input_hash
+    from common.deploy.iac_runner_client import _sign
+
+    h_worktree = iac_runner_input_hash(ROOT)
+    assert len(h_worktree) == 64
+
+    # Allowed envs + /health runner_input_sha256 check
+    monkeypatch.setenv("GIT_REPO_URL", "https://github.com/wangzitian0/infra2")
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3cr3t")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "dk")
+    monkeypatch.setenv("RUNNER_INPUT_SHA256", h_worktree)
+    monkeypatch.setenv("IAC_RUNNER_ALLOWED_ENVS", "staging")
+    _copy_dockerfile_app_layout(tmp_path)
+    spec = importlib.util.spec_from_file_location(
+        "isolated_webhook_server_gate", tmp_path / "webhook_server.py"
+    )
+    assert spec and spec.loader
+    ws = importlib.util.module_from_spec(spec)
+    sys.modules["isolated_webhook_server_gate"] = ws
+    spec.loader.exec_module(ws)
+
+    client = TestClient(ws.app)
+    health_resp = client.get("/health")
+    assert health_resp.json()["runner_input_sha256"] == h_worktree
+
+    payload = (
+        b'{"env":"production","ref":"' + b"a" * 40 + b'","services":["platform/redis"]}'
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "X-IAC-Timestamp": "9999999999",
+        "X-IAC-Nonce": "nonce-12345678",
+        "X-Hub-Signature-256": _sign("s3cr3t", "9999999999", "nonce-12345678", payload),
+    }
+    monkeypatch.setattr(ws, "verify_iac_request", lambda raw, hdrs: True)
+    resp = client.post("/deploy", content=payload, headers=headers)
+    assert resp.status_code == 403
+    assert "does not accept env" in resp.json()["error"]

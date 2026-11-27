@@ -1290,16 +1290,74 @@ def _run_runner_block(
 _RUNNER_CHANGE = "bootstrap/06.iac_runner/Dockerfile\ndocs/README.md"
 
 
-def test_runner_bootstrap_update_waits_for_the_production_run(tmp_path) -> None:
-    """#1486, owner decision 2026-11-11: the shared iac-runner is production. A staging soak
-    whose release changes the runner files must not rebuild it; it says why and goes on."""
+def test_runner_bootstrap_update_updates_staging_runner_on_staging_run(
+    tmp_path,
+) -> None:
+    """Wave 0: staging soak updates iac-runner-staging when runner inputs changed."""
     result, ssh_calls = _run_runner_block(
         tmp_path, promote_prod=False, changed_files=_RUNNER_CHANGE
     )
     assert result.returncode == 0, result.stderr
-    assert ssh_calls == []
-    assert "::notice::The IaC Runner bootstrap changed in this release" in result.stdout
-    assert "Deploy IaC Runner bootstrap changes" not in result.stdout
+    assert len(ssh_calls) == 1
+    assert "IAC_RUNNER_TARGET_ENV='staging'" in ssh_calls[0]
+    assert "Deploy IaC Runner bootstrap changes (staging)" in result.stdout
+
+
+def test_runner_bootstrap_update_skips_ssh_when_wave0_hash_matches(tmp_path) -> None:
+    """Wave 0: matching live /health runner_input_sha256 skips SSH rebuild."""
+    import os
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh_log = tmp_path / "ssh.log"
+    (bin_dir / "ssh").write_text(
+        f'#!/bin/sh\necho "$*" >> "{ssh_log}"\n', encoding="utf-8"
+    )
+    (bin_dir / "curl").write_text(
+        '#!/bin/sh\nprintf \'{"status":"healthy","runner_input_sha256":"deadbeef"}\'\n',
+        encoding="utf-8",
+    )
+    (bin_dir / "python").write_text(
+        '#!/bin/sh\nif [ "$1" = "-m" ] && [ "$2" = "tools.reconcile_iac_inputs" ]; then echo deadbeef; exit 0; fi\n'
+        'exec python3 "$@"\n',
+        encoding="utf-8",
+    )
+    for name in ("ssh", "curl", "python"):
+        (bin_dir / name).chmod(0o755)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "f.txt").write_text("x")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-q", "-m", "one")
+    _git(repo, "tag", "v9.9.9")
+    home = tmp_path / "home"
+    home.mkdir()
+    header = (
+        'dry_run="false"\n'
+        'promote_prod="false"\n'
+        'after="v9.9.9"\n'
+        f"changed_files={_RUNNER_CHANGE!r}\n"
+        'IAC_RUNNER_URL="https://iac-staging.example"\n'
+    )
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "HOME": str(home),
+        "INFRA2_WATCHDOG_SSH_PRIVATE_KEY": "key",
+        "INFRA2_WATCHDOG_SSH_HOST": "host.example",
+        "INFRA2_WATCHDOG_SSH_USER": "root",
+    }
+    res = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", header + _runner_bootstrap_block()],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    assert not ssh_log.exists()
+    assert "skipping rebuild" in res.stdout
 
 
 def test_runner_bootstrap_update_runs_in_the_production_run(tmp_path) -> None:

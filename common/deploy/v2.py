@@ -37,6 +37,7 @@ from common.deploy.iac_runner_client import (
     STATUS_POLL_MAX_SECONDS,
     RunnerLostDeploymentError,
     poll_platform_deploy_status,
+    resolve_iac_runner_url,
     status_poll_attempts,
     trigger_platform_deploy,
 )
@@ -335,7 +336,7 @@ def _deploy_platform(
     # We always FIRE the trigger with wait=False (the signed POST returns promptly, no 60s
     # timeout on a slow rollout); when the caller wants to wait we poll /deploy/status until
     # it settles — terminal success is "completed", failure is "failed" (verified live).
-    url = dep.iac_runner_url or os.getenv("IAC_RUNNER_URL", "")
+    url = resolve_iac_runner_url(env, dep.iac_runner_url)
     sec = dep.iac_webhook_secret or os.getenv("IAC_WEBHOOK_SECRET", "")
     # Only services whose artifact comes from an App repo (e.g. truealpha/data_engine)
     # forward DEPLOY_VERSION_REF to pin an app image release. Pure infra2 services never do.
@@ -514,7 +515,7 @@ def _supply_app_secrets(
     value (#649). Without runner credentials (a caller outside deploy.yml) the step is
     skipped and says so; the daily reconcile still reports the drift.
     """
-    url = runner_url or os.getenv("IAC_RUNNER_URL", "")
+    url = resolve_iac_runner_url(env, runner_url)
     sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
     if not url or not sec:
         return {
@@ -610,7 +611,7 @@ def _deploy_platform_batch(
             )
 
     env = "production" if type_spec.env == "prod" else "staging"
-    url = dep.iac_runner_url or os.getenv("IAC_RUNNER_URL", "")
+    url = resolve_iac_runner_url(env, dep.iac_runner_url)
     sec = dep.iac_webhook_secret or os.getenv("IAC_WEBHOOK_SECRET", "")
     started = time.monotonic()
     response, final = _trigger_and_poll(
@@ -1179,7 +1180,7 @@ def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -
             image_poll_seconds=args.image_poll_seconds,
         ),
         deps=DeployDeps(
-            iac_runner_url=os.getenv("IAC_RUNNER_URL", ""),
+            iac_runner_url=resolve_iac_runner_url(args.deploy_type),
             iac_webhook_secret=os.getenv("IAC_WEBHOOK_SECRET", ""),
         ),
     )

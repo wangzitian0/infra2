@@ -37,7 +37,7 @@ def _installed_sdk_secrets_source() -> str:
 def test_every_written_secret_path_admits_patch_as_well_as_create_and_update() -> None:
     capabilities = _capabilities(POLICY.read_text())
     for project in WRITTEN_PREFIXES:
-        path = f"secret/data/{project}/+/*"
+        path = f"secret/data/{project}/{{{{env}}}}/*"
         assert path in capabilities, f"{path} is not in the runner policy"
         granted = set(capabilities[path])
         assert {"create", "read", "update", "patch", "list"} <= granted, (
