@@ -11,7 +11,7 @@ from common.security.backends import SecretsError, vault_path
 from common.security.registry import SERVICES, Service, store_keys
 from common.security.supply import vault_backend
 
-# infra2_sdk.runtime.config_schema.reconcile ignores these; so must the prune.
+# infra2_sdk.config.EnvironmentManifest excludes reserved keys; so must the prune.
 RESERVED_PREFIXES = ("_",)
 
 

@@ -113,7 +113,7 @@ def test_canary_slots_and_retirement_guard() -> None:
 
     slots = load_canary_slots(REPO_ROOT)
     assert [s.slot for s in slots] == ["v4-11", "v4-13"]
-    assert [s.version for s in slots] == ["4.11.2", "4.13.0"]
+    assert [s.version for s in slots] == ["4.11.2", "4.13.2"]
     assert [s.primary for s in slots] == [False, True]
 
     pkg = "infra2" + "-sdk"
@@ -147,10 +147,10 @@ def test_load_canary_slots_rejects_service_version_drift(tmp_path) -> None:
         shutil.copy2(REPO_ROOT / "platform/30.todo" / fname, todo_dir / fname)
     compose = (todo_dir / "compose.yaml").read_text(encoding="utf-8")
     (todo_dir / "compose.yaml").write_text(
-        compose.replace('SERVICE_VERSION="v4.13.0"', 'SERVICE_VERSION="v4.12.9"'),
+        compose.replace('SERVICE_VERSION="v4.13.2"', 'SERVICE_VERSION="v4.12.9"'),
         encoding="utf-8",
     )
-    with pytest.raises(CanaryPinError, match='SERVICE_VERSION="v4.13.0"'):
+    with pytest.raises(CanaryPinError, match='SERVICE_VERSION="v4.13.2"'):
         load_canary_slots(tmp_path)
 
 
@@ -168,15 +168,15 @@ def test_sync_canary_pin_files_patch_and_minor_bump(tmp_path) -> None:
         shutil.copy2(REPO_ROOT / "platform/30.todo" / fname, todo_dir / fname)
 
     patch_digest = "sha256:" + "b" * 64
-    updated_patch = sync_canary_pin_files(tmp_path, "4.13.1", patch_digest)
+    updated_patch = sync_canary_pin_files(tmp_path, "4.13.3", patch_digest)
     assert set(updated_patch) == {
         "platform/30.todo/slots.yaml",
         "platform/30.todo/compose.yaml",
         "platform/30.todo/preview.compose.yaml",
     }
-    assert primary_canary_slot(tmp_path).version == "4.13.1"
+    assert primary_canary_slot(tmp_path).version == "4.13.3"
     assert primary_canary_slot(tmp_path).digest == patch_digest
-    assert 'SERVICE_VERSION="v4.13.1"' in (todo_dir / "compose.yaml").read_text(
+    assert 'SERVICE_VERSION="v4.13.3"' in (todo_dir / "compose.yaml").read_text(
         encoding="utf-8"
     )
 
@@ -273,8 +273,8 @@ def test_probe_health_reads_the_pin_format_that_canary_pin_owns() -> None:
         "platform/30.todo/probe_health.py", "probe_health_pin_format"
     )
     real = (REPO_ROOT / "platform/30.todo/compose.yaml").read_text(encoding="utf-8")
-    assert set(probe.CANARY_PIN_RE.findall(real)) == {"4.11.2", "4.13.0"}
-    assert canary_image_from_compose_text(real)[1] == canary_sdk_version() == "4.13.0"
+    assert set(probe.CANARY_PIN_RE.findall(real)) == {"4.11.2", "4.13.2"}
+    assert canary_image_from_compose_text(real)[1] == canary_sdk_version() == "4.13.2"
     for bad in (
         f"{CANARY_IMAGE_REPOSITORY}:v3.35.0",
         f"{CANARY_IMAGE_REPOSITORY}@{DIGEST}",

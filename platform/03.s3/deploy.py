@@ -59,7 +59,7 @@ class S3Deployer(Deployer):
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
     # The http probe proves the S3 process answers its liveness endpoint.
-    # kind="s3" (infra2_sdk.runtime.s3, via common/observability/probes.py) does a real `head_bucket`
+    # kind="s3" (infra2_sdk.storage, via common/observability/probes.py) does a real `head_bucket`
     # through a dedicated, minimal-privilege monitoring key against one small
     # healthcheck bucket — proves the S3 API path actually works.
     probes = (

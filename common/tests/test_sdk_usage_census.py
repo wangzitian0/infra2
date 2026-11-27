@@ -47,37 +47,23 @@ def _make_uv_lock(version: str) -> str:
     )
 
 
-def _make_runtime_env_py(extra_key: str = "", extra_spec: str = "") -> str:
-    key_line = f"    {extra_key}\n" if extra_key else ""
-    spec_line = f"    {extra_spec}\n" if extra_spec else ""
-    return (
-        "from dataclasses import dataclass\n"
-        "from enum import StrEnum\n\n"
-        '__all__ = ["runtime_env_contract"]\n\n'
-        "class RuntimeEnvKey(StrEnum):\n"
-        '    ENVIRONMENT = "ENVIRONMENT"\n'
-        '    SERVICE_NAME = "OTEL_SERVICE_NAME"\n'
-        '    SERVICE_VERSION = "SERVICE_VERSION"\n'
-        f"{key_line}\n"
-        "@dataclass(frozen=True)\n"
-        "class RuntimeEnvSpec:\n"
-        "    key: RuntimeEnvKey\n"
-        "    aliases: tuple[str, ...] = ()\n\n"
-        "RUNTIME_ENV_SPECS = (\n"
-        '    RuntimeEnvSpec(RuntimeEnvKey.ENVIRONMENT, ("ENV", "APP_ENV")),\n'
-        "    RuntimeEnvSpec(RuntimeEnvKey.SERVICE_NAME),\n"
-        '    RuntimeEnvSpec(RuntimeEnvKey.SERVICE_VERSION, ("IMAGE_TAG",)),\n'
-        f"{spec_line}"
-        ")\n\n"
-        "def runtime_env_contract() -> dict[str, object]:\n"
-        "    return {\n"
-        '        "contract_version": 2,\n'
-        '        "variables": [\n'
-        '            {"name": s.key.value, "aliases": list(s.aliases), "sensitive": False}\n'
-        "            for s in RUNTIME_ENV_SPECS\n"
-        "        ],\n"
-        "    }\n"
-    )
+def _make_shared_env_yaml(*extra_entries: tuple[str, tuple[str, ...]]) -> str:
+    lines = [
+        "schema_version: 2",
+        "groups:",
+        "  runtime:",
+        "    - name: ENVIRONMENT",
+        '      aliases: ["ENV", "APP_ENV"]',
+        "    - name: OTEL_SERVICE_NAME",
+        "    - name: SERVICE_VERSION",
+        '      aliases: ["IMAGE_TAG"]',
+    ]
+    for name, aliases in extra_entries:
+        lines.append(f"    - name: {name}")
+        if aliases:
+            rendered = ", ".join(f'"{a}"' for a in aliases)
+            lines.append(f"      aliases: [{rendered}]")
+    return "\n".join(lines) + "\n"
 
 
 @pytest.fixture()
@@ -96,7 +82,11 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
     _write_files(
         pkg_root,
         {
-            "__init__.py": f'from {PKG_UNDER}.alpha import used_in_prod, ProdService\n\n__all__ = ["used_in_prod", "ProdService"]\n',
+            "__init__.py": (
+                f"from {PKG_UNDER}.alpha import used_in_prod, ProdService\n"
+                f"from {PKG_UNDER}.config import runtime_env_contract\n\n"
+                '__all__ = ["used_in_prod", "ProdService", "runtime_env_contract"]\n'
+            ),
             "alpha.py": (
                 '_INTERNAL_CONST = "ok"\n\n'
                 "def _internal_helper() -> str:\n"
@@ -107,8 +97,8 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
                 "    def ping(self) -> str:\n"
                 '        return "pong"\n'
             ),
-            "runtime/__init__.py": f'from {PKG_UNDER}.runtime.environment import runtime_env_contract\n\n__all__ = ["runtime_env_contract"]\n',
-            "runtime/environment.py": _make_runtime_env_py(),
+            "config.py": '__all__ = ["runtime_env_contract"]\n\ndef runtime_env_contract() -> dict[str, object]:\n    return {}\n',
+            "data/shared_env.yaml": _make_shared_env_yaml(),
         },
     )
 
@@ -120,7 +110,7 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
             "app/service.py": (
                 "import os\n"
                 f"from {PKG_UNDER}.alpha import ProdService, used_in_prod\n"
-                f"from {PKG_UNDER}.runtime.environment import runtime_env_contract\n\n"
+                f"from {PKG_UNDER}.config import runtime_env_contract\n\n"
                 "def run() -> str:\n"
                 '    env = os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or os.environ.get("APP_ENV", "staging")\n'
                 '    svc = os.environ.get("OTEL_SERVICE_NAME", "svc-a")\n'
@@ -645,10 +635,7 @@ def test_m1_and_m2_check_fails_when_non_prod_symbols_or_keys_exist(
         {
             "extra.py": 'def unreferenced_public_fn() -> str:\n    return "dead"\n',
             "__init__.py": f'from {PKG_UNDER}.alpha import used_in_prod, ProdService\nfrom {PKG_UNDER}.extra import unreferenced_public_fn\n\n__all__ = ["used_in_prod", "ProdService", "unreferenced_public_fn"]\n',
-            "runtime/environment.py": _make_runtime_env_py(
-                'DEAD_KEY = "OTEL_TRACES_SAMPLER"',
-                "RuntimeEnvSpec(RuntimeEnvKey.DEAD_KEY),",
-            ),
+            "data/shared_env.yaml": _make_shared_env_yaml(("OTEL_TRACES_SAMPLER", ())),
         },
     )
     _, failures = _run_and_eval(synthetic_workspace)
@@ -824,8 +811,6 @@ def test_m1_verifies_surface_json_consumer_claims_and_honors_documented_and_held
             "ProdService": "consumer: consumer_a, consumer_b",
             "doc_entrypoint": "documented: README section Core",
             "HELD_CONST": "held: decision 7",
-        },
-        f"{PKG_UNDER}.runtime": {
             "runtime_env_contract": "consumer: consumer_a",
         },
     }
@@ -833,7 +818,7 @@ def test_m1_verifies_surface_json_consumer_claims_and_honors_documented_and_held
         pkg_root,
         {
             "alpha.py": 'def used_in_prod() -> str:\n    return "ok"\n\nclass ProdService:\n    def ping(self) -> str:\n        return "pong"\n\ndef doc_entrypoint() -> str:\n    return "doc"\n\nHELD_CONST = 1\n',
-            "__init__.py": f'from {PKG_UNDER}.alpha import HELD_CONST, ProdService, doc_entrypoint, used_in_prod\n\n__all__ = ["used_in_prod", "ProdService", "doc_entrypoint", "HELD_CONST"]\n',
+            "__init__.py": f'from {PKG_UNDER}.alpha import HELD_CONST, ProdService, doc_entrypoint, used_in_prod\nfrom {PKG_UNDER}.config import runtime_env_contract\n\n__all__ = ["used_in_prod", "ProdService", "doc_entrypoint", "HELD_CONST", "runtime_env_contract"]\n',
         },
     )
     _write(sdk_root, "tests/surface.json", json.dumps(surface_data))

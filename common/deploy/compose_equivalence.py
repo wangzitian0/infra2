@@ -177,8 +177,8 @@ def _normalize_sidecar(pair: _Pair, base_files: dict[str, str | None]) -> None:
     for key in _SIDECAR_ENV_DROPPED:
         env.pop(key, None)
     # An app sidecar takes the release template from the deploy as base64 (#1822 Slice 3).
-    # The compiled sidecar embeds the template, proven equal above; the promote path
-    # stops when the release template differs (common.deploy.promote).
+    # The compiled sidecar embeds the template, proven equal above; rollout
+    # stops when the release template differs (deploy_v2).
     hand_env = hand.get("environment")
     if (
         isinstance(hand_env, dict)

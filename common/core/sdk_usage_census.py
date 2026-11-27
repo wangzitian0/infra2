@@ -352,7 +352,7 @@ def load_surface_justifications(
 def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
     """Collect package-contract public symbols from package `__init__.py` `__all__` (#1410)."""
     package_exports: list[tuple[str, str, Path, int]] = []
-    contract_inits = [pkg_root / "__init__.py", pkg_root / "runtime" / "__init__.py"]
+    contract_inits = [pkg_root / "__init__.py"]
     for init_path in contract_inits:
         if not init_path.is_file():
             continue
@@ -1112,7 +1112,7 @@ def compute_m1(
 def sdk_env_vocabulary(
     pkg_root: Path,
 ) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
-    """Return (contract_vocab, full_vocab) parsed from data/shared_env.yaml or legacy environment.py."""
+    """Return (contract_vocab, full_vocab) parsed from data/shared_env.yaml."""
     contract_vocab: dict[str, dict[str, str]] = {}
     shared_yaml = pkg_root / "data" / "shared_env.yaml"
     if shared_yaml.is_file():
@@ -1135,52 +1135,6 @@ def sdk_env_vocabulary(
                 for alias in item.get("aliases") or ():
                     if isinstance(alias, str) and alias:
                         contract_vocab[alias] = {"kind": "alias", "canonical": canon}
-
-    env_py = pkg_root / "runtime" / "environment.py"
-    if not contract_vocab and env_py.is_file():
-        tree = ast.parse(env_py.read_text("utf-8", "replace"))
-        members: dict[str, str] = {}
-        specs: list[tuple[str, list[str]]] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name == "RuntimeEnvKey":
-                for stmt in node.body:
-                    if (
-                        isinstance(stmt, ast.Assign)
-                        and len(stmt.targets) == 1
-                        and isinstance(stmt.targets[0], ast.Name)
-                        and isinstance(stmt.value, ast.Constant)
-                        and isinstance(stmt.value.value, str)
-                    ):
-                        members[stmt.targets[0].id] = stmt.value.value
-            elif isinstance(node, ast.Assign) and any(
-                getattr(t, "id", "") == "RUNTIME_ENV_SPECS" for t in node.targets
-            ):
-                if isinstance(node.value, (ast.Tuple, ast.List)):
-                    for call in node.value.elts:
-                        if not isinstance(call, ast.Call) or not call.args:
-                            continue
-                        first = call.args[0]
-                        member = getattr(first, "attr", None)
-                        if not member:
-                            continue
-                        aliases: list[str] = []
-                        if len(call.args) > 1 and isinstance(
-                            call.args[1], (ast.Tuple, ast.List)
-                        ):
-                            aliases = [
-                                elt.value
-                                for elt in call.args[1].elts
-                                if isinstance(elt, ast.Constant)
-                                and isinstance(elt.value, str)
-                            ]
-                        specs.append((member, aliases))
-        for member, aliases in specs:
-            if member not in members:
-                continue
-            canon = members[member]
-            contract_vocab[canon] = {"kind": "canonical", "canonical": canon}
-            for alias in aliases:
-                contract_vocab[alias] = {"kind": "alias", "canonical": canon}
 
     if not contract_vocab:
         raise ValueError(

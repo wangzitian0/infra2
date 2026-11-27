@@ -311,7 +311,7 @@ class PreviewReadinessProbe:
 
 @dataclass(frozen=True)
 class PreviewServiceConfig:
-    """Per-service knobs the preview lifecycle (``common.deploy.preview``) needs.
+    """Per-service knobs the preview slot lifecycle needs.
 
     Generalizes what was, pre-#522, a set of module-level constants hardwired to
     finance_report/app — the ONLY previously-supported service. Each registered service
@@ -395,8 +395,8 @@ def preview_service_config(service: str) -> PreviewServiceConfig:
 
     Raises ``ValueError`` for a service with no registered preview config — the same
     fail-closed shape as ``app_compose_env_config`` for the fixed-env overlay. Callers
-    (``common.deploy.preview``) call it as the one capability check: a service is
-    Preview-capable if and only if it has an entry here.
+    use it as the one capability check: a service is Preview-capable if and only if it has
+    an entry here.
     """
     config = _PREVIEW_SERVICE_CONFIGS.get(service)
     if config is None:
@@ -432,7 +432,7 @@ class PreviewAlias:
         ``base_subdomain`` defaults to ``"report"`` (finance_report/app, the original
         preview-capable service) so every pre-#522 call site is unchanged; a caller
         deploying a different service passes its ``ServiceSpec.base_subdomain`` /
-        ``PreviewServiceConfig.base_subdomain`` explicitly (see ``common.deploy.preview``).
+        ``PreviewServiceConfig.base_subdomain`` explicitly.
         """
         return f"https://{base_subdomain}{self.env_suffix}.{domain}"
 

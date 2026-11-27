@@ -1,7 +1,7 @@
 # TrueAlpha Application (web + llm)
 #
-# v2 deploy model: fixed-compose promotion via deploy_v2(service="truealpha/app", ...)
-# -> common.deploy.promote. Images are built and pushed to GHCR by the truealpha app
+# v2 deploy model: fixed-compose promotion via deploy_v2(service="truealpha/app", ...).
+# Images are built and pushed to GHCR by the truealpha app
 # repo's CI; Dokploy compose pulls pinned ${IMAGE_TAG}. Fast-swap short promote enabled
 # on staging.
 #
@@ -14,7 +14,7 @@
 x-infra2:
   # One vault-agent sidecar, container truealpha-app-vault-agent${ENV_SUFFIX}. Its
   # template is rendered from env.manifest.json (common.security.secrets_render). The
-  # deploy stops when the release template differs (common.deploy.promote).
+  # deploy stops when the release template differs (deploy_v2).
   vault:
     name: truealpha-app
 

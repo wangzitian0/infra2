@@ -72,7 +72,7 @@ services:
 
   todo-v4-13:
     # Primary slot serving todo${ENV_DOMAIN_SUFFIX}.zitian.party and todo-v4-13${ENV_DOMAIN_SUFFIX}.zitian.party.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.0@sha256:ec62302213a62f521266089bfb6044a339fb03c6fd4958933c33d768899a63f1
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v4.13.2@sha256:6c7d0bf0d8bd4e49bc0b88ea5ecff4713532f23636d8997dc61aec9103178bb3
     container_name: platform-todo-v4-13${ENV_SUFFIX}
     user: "65532:65532"
     cap_drop:
@@ -85,7 +85,7 @@ services:
     command:
       - sh
       - -c
-      - export DATABASE_URL="$(printf '%s' "$$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_13_app:|; s|/postgres$|/todo_v4_13|')" && export SERVICE_VERSION="v4.13.0" && exec python /app/app.py
+      - export DATABASE_URL="$(printf '%s' "$$DATABASE_URL" | sed 's|://todo_app:|://todo_v4_13_app:|; s|/postgres$|/todo_v4_13|')" && export SERVICE_VERSION="v4.13.2" && exec python /app/app.py
     x-vault: {}
     x-capabilities:
       s3: {}
