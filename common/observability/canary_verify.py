@@ -127,6 +127,111 @@ def _parse_int_tuple(raw: str, expected_len: int) -> list[int]:
     return out
 
 
+def _parse_stream_summary(raw: str) -> dict[str, Any]:
+    """Parse ``POST /api/todos/summary`` stream output as JSON or SSE."""
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        return (
+            parsed
+            if isinstance(parsed, dict)
+            else {"raw": text, "error": "non-object JSON"}
+        )
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    current_event = ""
+    data_lines: list[str] = []
+
+    def _flush() -> dict[str, Any] | None:
+        nonlocal current_event, data_lines
+        if not current_event and not data_lines:
+            return None
+        payload_text = "\n".join(data_lines).strip()
+        if payload_text:
+            try:
+                payload = json.loads(payload_text)
+            except ValueError:
+                return {
+                    "status": "error",
+                    "format": "sse",
+                    "error": "invalid SSE data JSON",
+                    "raw": text,
+                }
+            if not isinstance(payload, dict):
+                return {
+                    "status": "error",
+                    "format": "sse",
+                    "error": "invalid SSE data JSON",
+                    "raw": text,
+                }
+        else:
+            payload = {}
+        events.append((current_event or "message", payload))
+        current_event = ""
+        data_lines = []
+        return None
+
+    for line in text.splitlines():
+        if not line.strip():
+            if (err := _flush()) is not None:
+                return err
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            if (err := _flush()) is not None:
+                return err
+            current_event = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].strip())
+    if (err := _flush()) is not None:
+        return err
+
+    if not events:
+        return {"raw": text, "error": "invalid JSON"}
+
+    error_events = [data for name, data in events if name == "error"]
+    if error_events:
+        return {
+            "status": "error",
+            "format": "sse",
+            "error": error_events[0],
+            "raw": text,
+        }
+
+    meta_events = [data for name, data in events if name == "meta"]
+    delta_texts = [
+        str(data.get("text", ""))
+        for name, data in events
+        if name == "delta" and str(data.get("text", ""))
+    ]
+    done_events = [data for name, data in events if name == "done"]
+    if not meta_events or not delta_texts or not done_events:
+        return {
+            "status": "incomplete",
+            "format": "sse",
+            "events": [name for name, _ in events],
+            "delta_count": len(delta_texts),
+            "raw": text,
+        }
+
+    done_data = done_events[-1]
+    return {
+        "status": "pass",
+        "format": "sse",
+        "meta": meta_events[0],
+        "delta_count": len(delta_texts),
+        "text_length": sum(len(chunk) for chunk in delta_texts),
+        "input_tokens": int(done_data.get("input_tokens", 0) or 0),
+        "output_tokens": int(done_data.get("output_tokens", 0) or 0),
+    }
+
+
 def _evaluate_llm_pillar(
     *,
     sections: dict[str, str],
@@ -156,7 +261,7 @@ def _evaluate_llm_pillar(
         )
 
     non_stream = _load_json("LLM_SUMMARY")
-    stream_data = _load_json("LLM_SUMMARY_STREAM")
+    stream_data = _parse_stream_summary(sections.get("LLM_SUMMARY_STREAM", ""))
     invoke_cnt, chat_cnt, aligned_cnt, leak_cnt, cost_cnt = _parse_int_tuple(
         sections.get("GEN_AI_SPANS", ""), 5
     )
